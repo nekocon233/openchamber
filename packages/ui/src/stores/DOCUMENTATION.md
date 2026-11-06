@@ -79,6 +79,14 @@ owner cannot replace the catalog or finish the current owner's loading state.
 
 #### Provider quota visibility
 
+Magpie automatic batches read only its gateway cache. A live Magpie request is
+an explicit refresh and uses POST; it supersedes a pending automatic read, and
+later automatic reads join it. Whole-gateway failure retains prior accounts
+with the error, while successful empty data replaces them. Runtime reset drops
+accounts and rejects old completions. Magpie does not add a timer: it shares
+the three-minute visible-readout interval. Settings demands all providers;
+compact readouts demand only the selected providers.
+
 `useQuotaAutoRefresh(visible, allProviders)` registers demand only for a mounted,
 shown quota readout. A header button, cached results, and a closed popover do not
 create demand. Work status passes its panel visibility through the section list,

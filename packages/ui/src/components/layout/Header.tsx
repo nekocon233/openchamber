@@ -217,7 +217,7 @@ export const Header: React.FC = () => {
     setWorkStatusOverlayOpen(!workStatusOverlayOpen);
   }, [setWorkStatusOverlayOpen, workStatusOverlayOpen]);
 
-  useQuotaAutoRefresh();
+  useQuotaAutoRefresh(workStatusOverlayOpen);
 
   React.useEffect(() => {
     void loadQuotaSettings();

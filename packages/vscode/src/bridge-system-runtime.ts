@@ -9,6 +9,7 @@ import { OpenCode } from '@opencode/client';
 import { asSessionId, asSessionIdList, asSessionMetadata, asTimestamp, parseJson, type JsonValue, type SessionArchiveOnOpenCode, type SessionMetadataOnOpenCode, type SessionStateStore } from './openchamberSessionState';
 import type { OpenCodeManager } from './opencode';
 import { activateQuotaGiftReset, fetchQuotaForProvider, listConfiguredQuotaProviders, readCachedClaudeQuota, type QuotaGiftResetType } from './quotaProviders';
+import { fetchMagpieQuota } from '../../web/server/lib/quota/providers/magpie.js';
 import { credentialStatus, deleteCredential, importCursorCredential, normalizeCredential, readCredential, validateCredential, writeCredential, type ManagedProvider } from './quotaCredentials';
 import { getSessionActivitySnapshot } from './sessionActivityWatcher';
 import { sessionNotificationSchema } from './sessionNotifications';
@@ -616,7 +617,7 @@ export async function handleSystemBridgeMessage(
     }
 
     case 'api:quota:get': {
-      const { providerId } = (payload || {}) as { providerId?: string };
+      const { providerId, refresh } = (payload || {}) as { providerId?: string; refresh?: boolean };
       if (!providerId) {
         return { id, type, success: false, error: 'Provider ID is required' };
       }
@@ -637,6 +638,9 @@ export async function handleSystemBridgeMessage(
         };
       }
       try {
+        if (providerId === 'magpie') {
+          return { id, type, success: true, data: await fetchMagpieQuota({ refresh: refresh === true }) };
+        }
         const result = await fetchQuotaForProvider(providerId);
         return { id, type, success: true, data: result };
       } catch (error) {

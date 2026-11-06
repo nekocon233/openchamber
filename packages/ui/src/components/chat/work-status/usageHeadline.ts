@@ -60,6 +60,9 @@ export const pickUsageHeadline = (
 ): { group: UsageProviderGroup; row: UsageLimitRow } | null => {
   const quotaProviderId = resolveQuotaProviderId(modelProviderId, modelId);
   if (!quotaProviderId) return null;
+  // Magpie chooses its upstream account at request time; its account list
+  // cannot identify the account that will handle the composer's next turn.
+  if (quotaProviderId === 'magpie') return null;
 
   const group = groups.find((candidate) => normalize(candidate.providerId) === quotaProviderId);
   if (!group || group.rows.length === 0) return null;

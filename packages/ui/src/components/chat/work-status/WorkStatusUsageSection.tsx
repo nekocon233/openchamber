@@ -9,6 +9,7 @@ import { formatQuotaResetLabel, formatQuotaValueLabel } from '@/lib/quota';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useUsageProviderGroups } from '@/components/usage/usageGroups';
+import { MagpieUsage } from '@/components/usage/MagpieUsage';
 import { UsageGiftResetButton } from '@/components/usage/UsageGiftResetButton';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { pickUsageHeadline } from './usageHeadline';
@@ -36,7 +37,7 @@ const windowTone = (window: UsageWindow): 'default' | 'warning' | 'error' => {
   return 'default';
 };
 
-export const WorkStatusUsageSection: React.FC = () => {
+export const WorkStatusUsageSection = ({ visible = true }: { visible?: boolean }) => {
   const { t } = useI18n();
   const groups = useUsageProviderGroups();
   const displayMode = useQuotaStore((state) => state.displayMode);
@@ -49,7 +50,7 @@ export const WorkStatusUsageSection: React.FC = () => {
   const currentModelId = useConfigStore((state) => state.currentModelId);
 
   // Keeps the periodic refresh running while the panel is mounted.
-  useQuotaAutoRefresh();
+  useQuotaAutoRefresh(visible);
 
   // `useQuotaAutoRefresh` only schedules an interval — it never performs the
   // first fetch. That was owned by the header dropdown's open handler, so the
@@ -57,9 +58,9 @@ export const WorkStatusUsageSection: React.FC = () => {
   // the once-per-instance load and its readiness rule; asking again is a no-op,
   // so this is safe to run on every connection change.
   React.useEffect(() => {
-    if (!isInitialized) return;
+    if (!visible || !isInitialized) return;
     void runBackgroundNetworkTask(() => ensureQuotasLoadedForRuntime());
-  }, [ensureQuotasLoadedForRuntime, isInitialized]);
+  }, [ensureQuotasLoadedForRuntime, isInitialized, visible]);
 
   React.useEffect(() => {
     if (groups.length === 0) return;
@@ -70,7 +71,7 @@ export const WorkStatusUsageSection: React.FC = () => {
 
   if (groups.length === 0) return null;
 
-  const modeLabel = displayMode === 'remaining'
+  const modeLabel = displayMode === 'remaining' || currentProviderId === 'magpie' || groups.every(group => group.providerId === 'magpie')
     ? t('header.services.remaining')
     : t('header.services.used');
 
@@ -120,8 +121,10 @@ export const WorkStatusUsageSection: React.FC = () => {
           <WorkStatusRow
             leading={<ProviderLogo providerId={group.providerId} className="size-4 shrink-0" />}
             label={<span className="font-semibold text-foreground">{group.providerName}</span>}
+            value={group.providerId === 'magpie' ? <span className="typography-micro text-muted-foreground">{t('header.services.remaining')}</span> : undefined}
           />
           {group.status && <p className="px-2 pb-1 typography-micro text-muted-foreground break-words">{group.status}</p>}
+          {group.accounts && <MagpieUsage accounts={group.accounts} compact />}
           {group.rows.map((row) => {
             const displayPercent = displayMode === 'remaining'
               ? row.window.remainingPercent

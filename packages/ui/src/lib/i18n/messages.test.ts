@@ -35,6 +35,17 @@ const localeDictionaries = {
 } as const;
 
 describe('i18n dictionaries', () => {
+  test('Magpie quota messages are translated with matching placeholders', () => {
+    const messages = Object.entries(enDict).filter(([key]) => key.startsWith('quota.magpie.'));
+    for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
+      const translated = new Map(Object.entries(dictionary));
+      for (const [key, english] of messages) {
+        expect(translated.get(key)).toBeTruthy();
+        if (locale !== 'en') expect(translated.get(key)).not.toBe(english);
+      }
+      expect(dictionary['quota.magpie.sharedBalance']).toContain('{account}');
+    }
+  });
   test('Zen labels are translated and preserve their value placeholders in every locale', () => {
     for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
       expect(dictionary['quota.value.requests']).toContain('{count}');

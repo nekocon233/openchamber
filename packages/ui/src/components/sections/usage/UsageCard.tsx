@@ -15,6 +15,7 @@ interface UsageCardProps {
   toggleEnabled?: boolean;
   onToggle?: (enabled: boolean) => void;
   providerId?: QuotaProviderId;
+  displayMode?: 'usage' | 'remaining';
 }
 
 export const UsageCard: React.FC<UsageCardProps> = ({
@@ -25,9 +26,11 @@ export const UsageCard: React.FC<UsageCardProps> = ({
   toggleEnabled = false,
   onToggle,
   providerId,
+  displayMode: displayModeOverride,
 }) => {
   const { t } = useI18n();
-  const displayMode = useQuotaStore((state) => state.displayMode);
+  const storedDisplayMode = useQuotaStore((state) => state.displayMode);
+  const displayMode = displayModeOverride ?? storedDisplayMode;
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const displayPercent = displayMode === 'remaining' ? window.remainingPercent : window.usedPercent;
   // A balance-only window (DeepSeek's credits balance) carries a value label
@@ -55,7 +58,7 @@ export const UsageCard: React.FC<UsageCardProps> = ({
             />
           )}
           <div className="min-w-0 flex flex-col">
-            <span className="typography-ui-label text-foreground truncate">{windowLabel}</span>
+            <span dir="auto" className="typography-ui-label text-foreground truncate oc-ui-start-align">{windowLabel}</span>
             {subtitle && (
               <span className="typography-meta text-muted-foreground truncate">{subtitle}</span>
             )}
@@ -63,7 +66,7 @@ export const UsageCard: React.FC<UsageCardProps> = ({
         </div>
         <div className="flex items-center justify-end gap-1">
           {providerId && <UsageGiftResetButton window={window} providerId={providerId} />}
-          <div className="typography-ui-label text-foreground tabular-nums">
+          <div dir="auto" className="typography-ui-label text-foreground tabular-nums">
             {percentLabel === '-' ? '' : percentLabel}
           </div>
         </div>

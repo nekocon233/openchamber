@@ -1,4 +1,6 @@
 import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
+import { MagpieUsage } from '@/components/usage/MagpieUsage';
+import type { QuotaAccount } from '@/types/quota';
 import React from 'react';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { SessionSidebar } from '@/components/session/SessionSidebar';
@@ -724,6 +726,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       providerId: string;
       providerName: string;
       entries: Array<[string, UsageWindow]>;
+      accounts?: QuotaAccount[];
       error?: string;
       status: string | null;
     }> = [];
@@ -737,8 +740,9 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       const entries = Object.entries(windows);
       const error = (result && !result.ok && result.configured) ? result.error : undefined;
       const status = formatQuotaRefreshStatus(result, t);
-      if (entries.length > 0 || error || status) {
-        groups.push({ providerId: provider.id, providerName: provider.name, entries, error, status });
+      const accounts = result?.usage?.accounts;
+      if (entries.length > 0 || error || accounts || (status && result?.configured)) {
+        groups.push({ providerId: provider.id, providerName: provider.name, entries, accounts, error, status });
       }
     }
 
@@ -887,8 +891,12 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                 <DropdownMenuLabel className="flex items-center gap-2 bg-[var(--surface-elevated)] typography-ui-label text-foreground">
                   <ProviderLogo providerId={group.providerId} className="h-4 w-4" />
                   {group.providerName}
+                  {group.providerId === 'magpie' && <span className="ms-auto typography-meta text-muted-foreground">{t('header.services.remaining')}</span>}
                 </DropdownMenuLabel>
-                {group.entries.length === 0 ? (
+                {group.accounts ? <>
+                  {group.status && <p className="px-2 typography-meta text-muted-foreground">{group.status}</p>}
+                  <MagpieUsage accounts={group.accounts} compact />
+                </> : group.entries.length === 0 ? (
                   <DropdownMenuItem
                     key={`${group.providerId}-empty`}
                     className="cursor-default"

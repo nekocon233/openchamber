@@ -22,13 +22,13 @@ export const WorkStatusSectionList: React.FC<{
   repositoryEnabled: boolean;
   layout: WorkStatusSectionLayout;
   visible?: boolean;
-}> = ({ sessionId, directory, repositoryEnabled, layout }) => {
+}> = ({ sessionId, directory, repositoryEnabled, layout, visible = true }) => {
   const { extensionSections, sectionOrder, hiddenSections } = layout;
   const sectionVisible = (id: Parameters<typeof isWorkStatusSectionVisible>[1]) => isWorkStatusSectionVisible(hiddenSections, id);
   const nativeBackend = nativeBackendOfSessionId(sessionId ?? '');
 
   const secondarySections = {
-    usage: <WorkStatusUsageSection />,
+    usage: <WorkStatusUsageSection visible={visible} />,
     telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
     subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
     taskChecklist: nativeBackend === 'codex'

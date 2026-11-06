@@ -3,8 +3,10 @@ import { useI18n } from '@/lib/i18n';
 import { formatWindowLabel, getQuotaProviderList } from '@/lib/quota';
 import { getDisplayModelName } from '@/lib/quota/model-families';
 import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
+import { formatMagpieError } from '@/lib/quota/magpie';
 import { useQuotaStore } from '@/stores/useQuotaStore';
 import type { QuotaProviderId, UsageWindow } from '@/types';
+import type { QuotaAccount } from '@/types/quota';
 
 export type UsageLimitRow = {
   key: string;
@@ -18,6 +20,7 @@ export type UsageProviderGroup = {
   providerName: string;
   planLabel?: string | null;
   rows: UsageLimitRow[];
+  accounts?: QuotaAccount[];
   /** Provider-level message: a fetch error, or "nothing reported". */
   status: string | null;
 };
@@ -77,13 +80,15 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
         const refreshError = refreshErrors[providerMeta.id];
         let status = formatQuotaRefreshStatus(result, t, refreshError);
         if (!status) {
-          if (refreshError) {
+          if (refreshError && providerMeta.id === 'magpie') {
+            status = formatMagpieError(refreshError, t);
+          } else if (refreshError) {
             status = result?.usage
               ? t('header.services.usageRefreshFailedStale', { error: refreshError })
               : refreshError;
           } else if (!result?.ok && result?.error) {
             status = result.error;
-          } else if (rows.length === 0 && providerMeta.id !== 'claude') {
+          } else if (rows.length === 0 && providerMeta.id !== 'claude' && providerMeta.id !== 'magpie') {
             status = t('header.services.noRateLimitsReported');
           }
         }
@@ -93,6 +98,7 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
           providerName: providerMeta.name,
           planLabel: result?.planLabel,
           rows,
+          accounts: result?.usage?.accounts,
           status,
         };
       });

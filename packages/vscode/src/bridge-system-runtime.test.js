@@ -6,6 +6,7 @@ const getProviderAuth = mock();
 const removeProviderAuth = mock();
 const removeProviderConfig = mock();
 const fetchQuotaForProvider = mock();
+const fetchMagpieQuota = mock();
 const readCachedClaudeQuota = mock(async () => null);
 const listConfiguredQuotaProviders = mock();
 const updateWorkspaceFolders = mock(async (start, deleteCount, ...foldersToAdd) => {
@@ -64,6 +65,7 @@ mock.module('./quotaProviders', () => ({
   readCachedClaudeQuota,
   listConfiguredQuotaProviders,
 }));
+mock.module('../../web/server/lib/quota/providers/magpie.js', () => ({ fetchMagpieQuota }));
 mock.module('./opencodeGoQuota', () => ({ fetchOpenCodeGoUsage: mock() }));
 mock.module('./quotaCredentials', () => ({
   credentialStatus: mock(),
@@ -291,6 +293,7 @@ describe('VS Code system bridge provider status', () => {
   });
 
   test('does not load local quota credentials for an external runtime', async () => {
+    fetchMagpieQuota.mockClear();
     const externalContext = { manager: { getDebugInfo: () => ({ mode: 'external' }) } };
 
     const providersResponse = await handleSystemBridgeMessage({
@@ -310,6 +313,11 @@ describe('VS Code system bridge provider status', () => {
     expect(quotaResponse.data).toMatchObject({ providerId: 'claude', availability: 'unsupported' });
     expect(listConfiguredQuotaProviders).not.toHaveBeenCalled();
     expect(fetchQuotaForProvider).not.toHaveBeenCalled();
+    for (const refresh of [false, true]) {
+      const response = await handleSystemBridgeMessage({ id: 'external-magpie', type: 'api:quota:get', payload: { providerId: 'magpie', refresh } }, externalContext, deps);
+      expect(response.data).toMatchObject({ providerId: 'magpie', availability: 'unsupported' });
+    }
+    expect(fetchMagpieQuota).not.toHaveBeenCalled();
   });
 });
 
@@ -397,4 +405,16 @@ test('reads cached Claude usage through the host without invoking the provider d
   expect(response.data).toBeNull();
   expect(readCachedClaudeQuota).toHaveBeenCalledTimes(1);
   expect(fetchQuotaForProvider).not.toHaveBeenCalled();
+});
+
+test('Magpie host reads preserve account groups and forward explicit refresh intent', async () => {
+  const result = { providerId: 'magpie', ok: true, configured: true, usage: { windows: {}, accounts: [{ id: 'one', windows: {} }] }, fetchedAt: 1 };
+  fetchMagpieQuota.mockReset().mockResolvedValue(result);
+  const ctx = { manager: { getDebugInfo: () => ({ mode: 'managed' }) } };
+  for (const refresh of [false, true]) {
+    const response = await handleSystemBridgeMessage({ id: 'magpie-read', type: 'api:quota:get', payload: { providerId: 'magpie', refresh } }, ctx, deps);
+    expect(response.success).toBe(true);
+    expect(response.data).toBe(result);
+  }
+  expect(fetchMagpieQuota.mock.calls).toEqual([[{ refresh: false }], [{ refresh: true }]]);
 });

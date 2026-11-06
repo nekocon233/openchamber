@@ -1355,11 +1355,17 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     }
   }
 
-  const quotaMatch = pathname.match(/^\/api\/quota\/([^/]+)$/);
-  if (quotaMatch && method === 'GET') {
+  const quotaMatch = pathname.match(/^\/api\/quota\/([^/]+)(\/refresh)?$/);
+  if (quotaMatch && (method === 'GET' && !quotaMatch[2] || method === 'POST' && quotaMatch[1] === 'magpie' && quotaMatch[2])) {
     const providerId = decodeURIComponent(quotaMatch[1]);
     try {
-      const data = await sendBridgeMessage('api:quota:get', { providerId });
+      const payload = { providerId, refresh: Boolean(quotaMatch[2]) };
+      const data = providerId === 'magpie'
+        ? await sendBridgeMessageWithOptions('api:quota:get', payload, {
+          timeoutMs: quotaMatch[2] ? 40_000 : 30_000,
+          signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
+        })
+        : await sendBridgeMessage('api:quota:get', { providerId });
       return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
