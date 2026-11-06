@@ -1287,6 +1287,10 @@ with a native branch (`sync/native-send.ts`):
   endpoint, not inferred from transcript text.
 
 Native plan forms advertise model selection through `canSelectExecutionModel`.
+Their approval field defaults to `build`; this seeds the visible choice only.
+Submitting the form remains the only approval action, and restored answer drafts
+take precedence over that initial choice. Ordinary native questions have no
+implicit selection.
 The dock receives the owning composer's live model and effort; inline cards read
 that session's saved selection. `usePlanExecutionModel` keeps explicit model
 choices as window-local drafts keyed by runtime, session and request, with the

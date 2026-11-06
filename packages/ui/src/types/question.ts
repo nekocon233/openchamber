@@ -11,6 +11,7 @@ export interface QuestionInfo {
   header: string;
   options: QuestionOption[];
   multiple?: boolean;
+  planApproval?: boolean;
 }
 
 export interface QuestionRequest {

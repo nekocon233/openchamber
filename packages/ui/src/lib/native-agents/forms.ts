@@ -25,7 +25,12 @@ const fieldForQuestion = (question: QuestionInfo, index: number): FormField => {
 
 /** Native questions use the shared form state, dock and reply lifecycle. */
 export const projectNativeQuestion = (question: QuestionRequest): FormRequest | null => {
-  const [first, ...rest] = question.questions.map(fieldForQuestion);
+  const [first, ...rest] = question.questions.map((info, index) => {
+    const field = fieldForQuestion(info, index);
+    const approval = question.kind && (info.planApproval ?? question.questions.length === 1);
+    if (approval && field.type === 'string' && field.options?.some((option) => option.value === 'build')) field.default = 'build';
+    return field;
+  });
   if (!first) return null;
   const form: FormRequest = {
     id: question.id,

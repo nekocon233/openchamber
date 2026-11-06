@@ -253,7 +253,7 @@ const server = http.createServer(async (req, res) => {
       break;
     case 'fixture/question':
       deliver('$events', { type: 'waterfall', event: 'user-questions/request', agentId: args.sessionId, eventId: 'question-1', request: {
-        questions: [{ id: 'choice-id', question: 'Choose', header: 'Choice', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }],
+        questions: args.questions ?? [{ id: 'choice-id', question: 'Choose', header: 'Choice', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }],
       } });
       respond(true);
       break;

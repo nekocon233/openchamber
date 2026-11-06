@@ -202,7 +202,7 @@ export const createDeepseekBackend = ({
       options: (item.options ?? []).map((option) => ({
         label: item.intent?.approve === option.label ? 'build' : option.label,
         description: option.description ?? '',
-      })), multiple: item.multiSelect ?? false,
+      })), multiple: item.multiSelect ?? false, planApproval: item.intent?.kind === 'plan-review',
     }));
     pending.set(identity, { controller, nativeId, plan });
     const input = { directory: summary.cwd, sessionID: id, questions: presented, signal: controller.signal };
