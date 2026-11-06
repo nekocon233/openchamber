@@ -633,7 +633,7 @@ export const ContextSurfacePanes: React.FC = () => {
               <ContextPanelHeaderSlotProvider value={editorLayout ? null : headerSlotFor(diffZone.zone, active)}>
                 <DiffView
                   visible={detailVisible}
-                  fileListHost={editorLayout ? { host: diffListHost, visible: diffZone.isOpen && active, onSelect: revealEditorDiff } : undefined}
+                  fileListHost={editorLayout ? { host: diffListHost, headerSlot: headerSlotFor(diffZone.zone, active), visible: diffZone.isOpen && active, onSelect: revealEditorDiff } : undefined}
                   hideStackedFileSidebar
                   stackedDefaultCollapsedAll
                   pinSelectedFileHeaderToTopOnNavigate

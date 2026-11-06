@@ -11,7 +11,7 @@ import { CommitComparisonSelector } from '@/components/views/git/CommitCompariso
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useNestedGitDirectory } from '@/hooks/useNestedGitDirectory';
 import { NestedRepoPicker } from '@/components/views/git/NestedRepoPicker';
-import { ContextPanelHeaderToolbar } from '@/components/layout/contextPanelHeaderSlot';
+import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from '@/components/layout/contextPanelHeaderSlot';
 import { useInContextPanelHeader } from '@/components/layout/contextPanelHeaderSlotContext';
 import { BranchComparisonSelector } from '@/components/views/git/BranchComparisonSelector';
 import { branchRefLabel } from '@/components/views/git/baseBranch';
@@ -1195,7 +1195,7 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
 interface DiffViewProps {
   directory?: string | null;
     /** In editor layout navigation remains in its tool zone while details occupy a document tab. */
-    fileListHost?: { host: HTMLElement | null; visible: boolean; onSelect: () => void };
+    fileListHost?: { host: HTMLElement | null; headerSlot?: HTMLElement | null; visible: boolean; onSelect: () => void };
     visible?: boolean;
     hideStackedFileSidebar?: boolean;
     stackedDefaultCollapsedAll?: boolean;
@@ -1226,6 +1226,9 @@ export const DiffView: React.FC<DiffViewProps> = ({
 }) => {
     const { t } = useI18n();
     const dataVisible = visible || Boolean(fileListHost?.visible);
+    const fileListHeaderSlot = fileListHost?.visible ? fileListHost.headerSlot ?? null : null;
+    const [prTitlebarHost, setPrTitlebarHost] = React.useState<HTMLDivElement | null>(null);
+    const [prInlineHost, setPrInlineHost] = React.useState<HTMLDivElement | null>(null);
     const inPanelHeader = useInContextPanelHeader();
     const toolbarRef = React.useRef<HTMLDivElement | null>(null);
     useDiffToolbarFit(toolbarRef);
@@ -2509,11 +2512,24 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
     return (
         <>
+        <MovablePane host={fileListHost?.visible ? prTitlebarHost : prInlineHost}>
+            {activeDiffScope === 'pr' && <>
+                    <PullRequestComparisonSelector key={JSON.stringify([runtimeKey, effectiveDirectory, currentBranch])} comparison={prComparison} />
+                    {selectedPr && <Button variant="ghost" size="sm" disabled={comparison.loading}
+                        aria-label={t('session.githubIssuePicker.actions.refresh')} title={t('session.githubIssuePicker.actions.refresh')}
+                        onClick={() => void comparison.refresh()}><Icon name="refresh" className="size-4" /></Button>}
+                </>}
+        </MovablePane>
         {fileListHost && <MovablePane host={fileListHost.host}>
             <section data-editor-diff-list="" className={cn('absolute inset-0 flex flex-col overflow-hidden bg-background', !fileListHost.visible && 'hidden')}>
-                {activeDiffScope === 'pr' && <div className="empty:hidden shrink-0 px-2 py-1">
-                    <PullRequestBackButton directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} />
-                </div>}
+                {activeDiffScope === 'pr' && <ContextPanelHeaderSlotProvider value={fileListHeaderSlot}>
+                    <ContextPanelHeaderToolbar preserveTitle>
+                        <div className={cn('flex min-w-0 items-center gap-1', fileListHeaderSlot ? 'py-1 pe-1' : 'px-2 py-1')}>
+                            <PullRequestBackButton compact directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} />
+                            <div ref={setPrTitlebarHost} className="flex min-w-0 items-center gap-1" />
+                        </div>
+                    </ContextPanelHeaderToolbar>
+                </ContextPanelHeaderSlotProvider>}
                 {renderContent(true)}
             </section>
         </MovablePane>}
@@ -2586,12 +2602,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
                         onRefresh={() => void commitComparison.refresh()}
                     />
                 )}
-                {activeDiffScope === 'pr' && <>
-                    <PullRequestComparisonSelector key={JSON.stringify([runtimeKey, effectiveDirectory, currentBranch])} comparison={prComparison} />
-                    {selectedPr && <Button variant="ghost" size="sm" disabled={comparison.loading}
-                        aria-label={t('session.githubIssuePicker.actions.refresh')} title={t('session.githubIssuePicker.actions.refresh')}
-                        onClick={() => void comparison.refresh()}><Icon name="refresh" className="size-4" /></Button>}
-                </>}
+                {activeDiffScope === 'pr' && !fileListHost?.visible && <div ref={setPrInlineHost} className="flex min-w-0 items-center gap-1" />}
                 {changedFiles.length > 0 && (
                     <Button
                         variant="ghost"
