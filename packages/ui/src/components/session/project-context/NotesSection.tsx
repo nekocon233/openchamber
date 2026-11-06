@@ -14,6 +14,12 @@ import { useI18n } from '@/lib/i18n';
 import { PROJECT_NOTE_BODY_MAX_LENGTH, type ProjectNote, type ProjectRef } from '@/lib/projectContextApi';
 import { openSessionLink } from '@/lib/router/openSessionFromRoute';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { WorkspaceViewScope, useWorkspaceChildKey } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { DraftRecoveryNotice } from '@/components/ui/draft-recovery-notice';
+import { useWorkspaceDraftStore } from '@/stores/useWorkspaceDraftStore';
+import { Textarea } from '@/components/ui/textarea';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 const NOTE_SAVE_DEBOUNCE_MS = 400;
 
@@ -136,16 +142,26 @@ const NoteCard: React.FC<{
 const NoteView: React.FC<{
   note: ProjectNote;
   pinned: boolean;
-  onSaveBody: (noteId: string, body: string) => void;
+  onSaveBody: (noteId: string, body: string) => Promise<boolean>;
   onTogglePinned: () => void;
   onDelete: () => void;
   onClose: () => void;
   showBack: boolean;
 }> = ({ note, pinned, onSaveBody, onTogglePinned, onDelete, onClose , showBack}) => {
   const { t } = useI18n();
-  const [draft, setDraft] = React.useState(note.body);
+  const input = useWorkspaceDraft(useWorkspaceChildKey('note', note.id), note.body);
+  const scrollKey = useWorkspaceChildKey('note-scroll', note.id);
+  const { value: draft, setValue: setDraft, canSave, acknowledge } = input;
   const lastSavedRef = React.useRef(note.body);
   const debounceRef = React.useRef<number | null>(null);
+  const savingRef = React.useRef<string | null>(null);
+  const save = React.useCallback((value: string) => {
+    if (!canSave || !value.trim() || savingRef.current === value) return;
+    savingRef.current = value;
+    void onSaveBody(note.id, value).then(ok => {
+      if (ok) { lastSavedRef.current = value; acknowledge(value); }
+    }).finally(() => { if (savingRef.current === value) savingRef.current = null; });
+  }, [acknowledge, canSave, note.id, onSaveBody]);
 
   const cancelDebounce = React.useCallback(() => {
     if (debounceRef.current !== null) {
@@ -155,18 +171,11 @@ const NoteView: React.FC<{
   }, []);
 
   React.useEffect(() => {
-    if (note.body === lastSavedRef.current) {
-      return;
-    }
-    if (draft !== lastSavedRef.current) {
-      return;
-    }
-    lastSavedRef.current = note.body;
-    setDraft(note.body);
-  }, [draft, note.body]);
+    if (!input.dirty) lastSavedRef.current = note.body;
+  }, [input.dirty, note.body]);
 
   React.useEffect(() => {
-    if (draft === lastSavedRef.current) {
+    if (!input.canSave || draft === lastSavedRef.current) {
       return;
     }
     debounceRef.current = window.setTimeout(() => {
@@ -176,19 +185,18 @@ const NoteView: React.FC<{
       if (!draft.trim()) {
         return;
       }
-      lastSavedRef.current = draft;
-      onSaveBody(note.id, draft);
+      save(draft);
     }, NOTE_SAVE_DEBOUNCE_MS);
 
     return cancelDebounce;
-  }, [cancelDebounce, draft, note.id, onSaveBody]);
+  }, [cancelDebounce, draft, input.canSave, save]);
 
   // Leaving the note (back, Escape, another section) must not drop the last
   // keystrokes still waiting for the debounce.
   const flushRef = React.useRef<() => void>(() => {});
   flushRef.current = () => {
     cancelDebounce();
-    if (draft === lastSavedRef.current) {
+    if (!input.canSave || draft === lastSavedRef.current) {
       return;
     }
     if (!draft.trim()) {
@@ -196,8 +204,7 @@ const NoteView: React.FC<{
       setDraft(lastSavedRef.current);
       return;
     }
-    lastSavedRef.current = draft;
-    onSaveBody(note.id, draft);
+    save(draft);
   };
   React.useEffect(() => () => flushRef.current(), []);
 
@@ -223,13 +230,17 @@ const NoteView: React.FC<{
       )}
     >
       <React.Suspense fallback={null}>
-        <NoteEditor
+        <div className="flex h-full min-h-0 flex-col gap-2">
+          <DraftRecoveryNotice conflict={input.conflict} onResume={input.resume} onUseLatest={input.useLatest} />
+          <div className="min-h-0 flex-1"><NoteEditor
+          scrollKey={scrollKey}
           value={draft}
           onChange={setDraft}
           onBlur={() => flushRef.current()}
           ariaLabel={t('rightSidebar.contextNotesTodo.notes.editorLabel')}
           maxLength={PROJECT_NOTE_BODY_MAX_LENGTH}
-        />
+        /></div>
+        </div>
       </React.Suspense>
     </KnowledgeEntryView>
   );
@@ -254,12 +265,17 @@ export const NotesSection: React.FC<{
   onOpenNote: (noteId: string | null) => void;
   /** Wide panel: the list and the open entry side by side. */
   split: boolean;
-}> = ({ projectRef, notes, disabled, query, pinnedNoteIds, onTogglePinned, openNoteId, onOpenNote, split }) => {
+  loaded: boolean;
+}> = ({ projectRef, notes, disabled, query, pinnedNoteIds, onTogglePinned, openNoteId, onOpenNote, split, loaded }) => {
   const { t } = useI18n();
+  const viewOwner = React.useContext(WorkspaceViewScope);
+  const runtimeKey = React.useRef(getRuntimeKey()).current;
   const createNote = useProjectContextStore((state) => state.createNote);
   const saveNoteBody = useProjectContextStore((state) => state.saveNoteBody);
   const deleteNote = useProjectContextStore((state) => state.deleteNote);
   const pendingDeletes = usePendingKnowledgeDeletes();
+  const orphanKey = useWorkspaceChildKey('note', openNoteId);
+  const orphan = useWorkspaceDraftStore(state => orphanKey ? state.drafts[orphanKey] : undefined);
 
   const visibleNotes = React.useMemo(
     () => notes.filter((note) => (
@@ -275,24 +291,25 @@ export const NotesSection: React.FC<{
 
   // A note deleted elsewhere (an agent, another window) closes if it was open.
   React.useEffect(() => {
-    if (openNoteId && !openNote) onOpenNote(null);
-  }, [onOpenNote, openNote, openNoteId]);
+    if (loaded && openNoteId && !openNote && !orphan) onOpenNote(null);
+  }, [loaded, onOpenNote, openNote, openNoteId, orphan]);
 
   // The store keeps the failure reason; without passing it through, every
   // failure looks identical to the user and tells them nothing about the cause.
   const reportFailure = React.useCallback((message: string) => {
+    if (runtimeKey !== getRuntimeKey()) return;
     const detail = useProjectContextStore.getState().getEntry(projectRef).error;
     toast.error(message, detail ? { description: detail } : undefined);
-  }, [projectRef]);
+  }, [projectRef, runtimeKey]);
 
   const handleAdd = React.useCallback(async (body: string) => {
-    const created = await createNote(projectRef, { body });
+    const created = await createNote(projectRef, { body }, runtimeKey);
     if (!created) {
       reportFailure(t('rightSidebar.contextNotesTodo.toast.createNoteFailed'));
       return false;
     }
     return true;
-  }, [createNote, projectRef, reportFailure, t]);
+  }, [createNote, projectRef, reportFailure, runtimeKey, t]);
 
   const handleDelete = React.useCallback((noteId: string) => {
     if (openNoteId === noteId) onOpenNote(null);
@@ -316,19 +333,20 @@ export const NotesSection: React.FC<{
   );
 
   const handleSaveBody = React.useCallback(
-    (noteId: string, body: string) => {
-      void saveNoteBody(projectRef, noteId, body).then((ok: boolean) => {
+    async (noteId: string, body: string) => {
+      return saveNoteBody(projectRef, noteId, body, runtimeKey).then((ok: boolean) => {
         if (!ok) {
           reportFailure(t('rightSidebar.contextNotesTodo.toast.saveNotesFailed'));
         }
+        return ok;
       });
     },
-    [projectRef, reportFailure, saveNoteBody, t]
+    [projectRef, reportFailure, runtimeKey, saveNoteBody, t]
   );
 
   const openView = openNote ? (
     <NoteView
-      key={openNote.id}
+      key={`${viewOwner}:${openNote.id}`}
       note={openNote}
       pinned={pinnedNoteIds.has(openNote.id)}
       onSaveBody={handleSaveBody}
@@ -337,11 +355,17 @@ export const NotesSection: React.FC<{
       showBack={!split}
       onClose={() => onOpenNote(null)}
     />
+  ) : orphan && loaded ? (
+    <KnowledgeEntryView showBack={!split} backLabel={t('rightSidebar.contextNotesTodo.notes.actions.back')}
+      meta={t('workspaceRestore.itemMissing')} onClose={() => onOpenNote(null)}>
+      <Textarea value={orphan.value} readOnly rows={12} className="h-full" aria-label={t('rightSidebar.contextNotesTodo.notes.editorLabel')} />
+    </KnowledgeEntryView>
   ) : null;
 
   const list = (
     <div className="space-y-2">
       <KnowledgeComposer
+        draftId="note"
         multiline
         placeholder={t('rightSidebar.contextNotesTodo.notes.placeholder')}
         addLabel={t('rightSidebar.contextNotesTodo.notes.addAria')}
@@ -377,7 +401,7 @@ export const NotesSection: React.FC<{
   );
 
   if (split) {
-    return <KnowledgeSplit list={list} detail={openView} emptyLabel={t('rightSidebar.contextNotesTodo.notes.selectHint')} />;
+    return <KnowledgeSplit section="notes" list={list} detail={openView} emptyLabel={t('rightSidebar.contextNotesTodo.notes.selectHint')} />;
   }
   return openView ?? list;
 };

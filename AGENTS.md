@@ -21,6 +21,14 @@ These steps are mandatory. Before editing, you **MUST**:
 If these sources materially conflict, stop and resolve the conflict instead of silently choosing one.
 Do not start editing before every matching skill and required reference is read.
 
+## Development Workflow
+
+Use this workflow for repository changes unless the user explicitly requests a different workflow.
+
+1. **Isolate.** Fetch the target remote's `main` and create a new worktree with a new task branch from it before editing. Keep task edits, validation, and commits in that worktree. Continue follow-up work for the same task there.
+2. **Open a PR.** After validation and the required second look, commit only the task's changes, push the task branch, and create a new PR targeting `main`. Follow *Pull Request Handoff*.
+3. **Merge.** Resolve required checks and review findings, then merge the PR into `main` under the repository's merge rules. Verify the merged state and report the PR link and merge commit. If blocked, report the specific blocker and current PR state.
+
 ## Working a Change
 
 Every fix and feature goes through these steps, in order. What counts as proof, and where to run each kind of change, is in `openchamber-change-discipline` (*Proof*, *Where to run it*).
@@ -29,7 +37,7 @@ Every fix and feature goes through these steps, in order. What counts as proof, 
 2. **Fix the cause.** The smallest change that removes it. A correctness problem you trip over in code you touch is fixed in the same change; one elsewhere goes to the report or its own pull request.
 3. **Prove it.** Run the same reproduction and watch it pass. Report what the proof covered and what it did not.
 4. **Second look.** The `review-changes` agent on the diff (`.opencode/agent/review-changes.md`), or a reviewer on another model where your tool has no such agent; one-line and text-only edits go without. Answer findings per `openchamber-change-discipline` (*Answering Review Findings*).
-5. **Hand off.** The working tree for the person you work with, or a pull request (*Pull Request Handoff*).
+5. **Hand off.** Complete *Development Workflow* and report the outcome.
 
 ## Runtime Boundaries
 
@@ -51,7 +59,7 @@ Every native agent must support unified conversations when it is integrated. Rea
 ## Always-On Constraints
 
 - Do not modify `../opencode`; it is a separate repository.
-- Do not run git or GitHub commands unless the user explicitly asks.
+- User-requested repository changes authorize the Git and GitHub operations required by *Development Workflow*. Other Git or GitHub operations require an explicit user request.
 - Do not add dependencies unless explicitly requested.
 - Never add or log secrets, bearer tokens, pairing credentials, or sensitive user data.
 - Launch Google Chrome for automation with `--disable-features=MacAppCodeSignClone` (`scripts/perf/cdp.mjs` does). Without it each launch on macOS copies the 1.4 GB app into `$TMPDIR`, and a killed browser leaves the copy.

@@ -20,7 +20,7 @@ describe('Antigravity model families', () => {
       { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'high'] },
       { id: 'gpt-oss-120b', name: 'GPT-OSS 120B', efforts: [], aliases: [{ id: 'gpt-oss-120b-medium', variant: 'medium' }] },
     ]);
-    expect(models.every((model) => model.contextWindow === null && !model.input.image && !model.input.pdf)).toBe(true);
+    expect(models.every((model) => model.contextWindow === 1_000_000 && model.outputLimit === null && !model.input.image && !model.input.pdf)).toBe(true);
   });
 
   it('offers xhigh and max only when the CLI lists matching variants', () => {

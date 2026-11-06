@@ -1,3 +1,4 @@
+import { getRuntimeKey } from '@/lib/runtime-switch';
 /**
  * Agent memory, as the panel and the send path see it.
  *
@@ -46,6 +47,8 @@ interface AgentMemoryState {
     scope: AgentMemoryScope,
     memoryId: string,
     patch: { title?: string; body?: string },
+    projectPath?: string | null,
+    expectedRuntimeKey?: string,
   ) => Promise<boolean>;
   /**
    * `projectPath` pins a project-scope delete to the project it was asked in;
@@ -169,17 +172,21 @@ export const useAgentMemoryStore = create<AgentMemoryState>((set, get) => ({
     await get().load(get().projectPath);
   },
 
-  saveEntry: async (scope, memoryId, patch) => enqueueWrite(async () => {
-    const previous = listFor(get(), scope);
+  saveEntry: (scope, memoryId, patch, projectPath = get().projectPath, expectedRuntimeKey = getRuntimeKey()) => {
+    const runtimeKey = expectedRuntimeKey;
+    return enqueueWrite(async () => {
+    if (runtimeKey !== getRuntimeKey()) return false;
+    const ownsList = () => runtimeKey === getRuntimeKey() && (scope === 'global' || get().projectPath === projectPath);
     try {
-      const saved = await updateAgentMemory(scope, get().projectPath, memoryId, patch);
-      set(withList(scope, listFor(get(), scope).map((entry) => (entry.id === memoryId ? saved : entry))));
+      const saved = await updateAgentMemory(scope, projectPath, memoryId, patch);
+      if (ownsList()) set(withList(scope, listFor(get(), scope).map((entry) => (entry.id === memoryId ? saved : entry))));
       return true;
     } catch (error) {
-      set({ ...withList(scope, previous), error: errorMessage(error, 'Failed to save memory') });
+      if (ownsList()) set({ error: errorMessage(error, 'Failed to save memory') });
       return false;
     }
-  }),
+  });
+  },
 
   deleteEntry: async (scope, memoryId, projectPath = get().projectPath) => enqueueWrite(async () => {
     const ownsList = () => scope === 'global' || get().projectPath === projectPath;

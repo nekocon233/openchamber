@@ -19,6 +19,49 @@ const text = (start: number): TextPart => ({ id: `text-${start}`, sessionID: use
 const turn = (info = assistant(), parts: Part[] = []) => [{ info: user, parts: [] }, { info, parts }];
 
 describe('turn telemetry', () => {
+  test('Codex throughput subtracts measured tool waits instead of background process lifetimes', () => {
+    const elapsed = [667710, 497827, 3842013];
+    const waits = [428604, 181431, 42515];
+    const tools = [428006, 181013, 3720339];
+    const generated = [9334, 12626, 154811];
+    const records = elapsed.flatMap((duration, index) => {
+      const start = index * 5_000_000;
+      return [
+        { info: { ...user, id: `u${index}`, time: { created: start } }, parts: [] },
+        { info: assistant({ id: `a${index}`, providerID: 'codex-native',
+          time: { created: start + 1, completed: start + duration },
+          tokens: { ...baseTokens(), output: generated[index] },
+          metadata: { openchamber: { telemetry: { toolWaitDurationMs: waits[index] } } },
+        }), parts: [tool(start + duration - tools[index], start + duration)] },
+      ];
+    });
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats?.totalToolDurationMs).toBe(3720339);
+    expect(stats?.totalLlmDurationMs).toBe(3799498);
+    expect(stats?.tokensPerSecond).toBeCloseTo(40.745119, 5);
+    expect(getCompletedTurnAverages(records)?.tokensPerSecond).toBeCloseTo(40.590356, 5);
+  });
+
+  test('unknown Codex wait timing hides only duration-dependent metrics and accepts a measured zero', () => {
+    for (const value of [null, -1, '10', Number.NaN, 6000]) {
+      const records = turn(assistant({ providerID: 'codex-native',
+        metadata: { openchamber: { telemetry: { toolWaitDurationMs: value } } },
+      }), [tool(2000, 4000)]);
+      const stats = getLatestCompletedTurnStats(records);
+      expect(stats?.totalToolDurationMs).toBe(2000);
+      expect(stats?.totalLlmDurationMs).toBeNull();
+      expect(stats?.tokensPerSecond).toBeNull();
+      expect(stats?.totalGeneratedTokens).toBe(100);
+      expect(getCompletedTurnAverages(records)?.tokensPerSecond).toBeNull();
+    }
+    expect(getLatestCompletedTurnStats(turn(assistant({ providerID: 'codex-native' })))?.tokensPerSecond).toBeNull();
+    const measured = turn(assistant({ providerID: 'codex-native',
+      metadata: { openchamber: { telemetry: { toolWaitDurationMs: 0 } } },
+    }), [tool(2000, 4000)]);
+    expect(getLatestCompletedTurnStats(measured)?.totalLlmDurationMs).toBe(5000);
+    expect(getCompletedTurnAverages(measured)?.tokensPerSecond).toBe(20);
+  });
+
   test('application approval cards do not suppress response speed or invalidate tool timing', () => {
     const approval: Part = {
       id: 'approval', sessionID: user.sessionID, messageID: 'a1', type: 'tool', tool: 'question', callID: 'app-question',
@@ -72,7 +115,7 @@ describe('turn telemetry', () => {
       tokens: { input: 1500, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
     }), parts: [text(21500)] });
     const stats = getLatestCompletedTurnStats(records);
-    expect(stats).toEqual({ stepsCount: 2, lastAssistantMessageId: 'a2', elapsedDurationMs: 24000, totalToolDurationMs: 3000,
+    expect(stats).toEqual({ stepsCount: 2, lastAssistantMessageId: 'a2', previousTurn: false, elapsedDurationMs: 24000, totalToolDurationMs: 3000,
       totalLlmDurationMs: 21000, outputTokens: 300, reasoningTokens: 300, totalGeneratedTokens: 600,
       inputTokens: 2500, cost: 0.015, tokensPerSecond: 600 / 21, responseTokensPerSecond: null, avgTtftMs: 1000, cacheHitPercent: 44 });
   });
@@ -481,7 +524,7 @@ describe('turn telemetry', () => {
     ]);
     const stats = getLatestCompletedTurnStats(reloaded);
     expect(stats?.responseTokensPerSecond).toBeNull();
-    expect(stats?.tokensPerSecond).toBe(65);
+    expect(stats?.tokensPerSecond).toBe(52);
   });
 
   test('response speed needs valid output usage and a successful final reply', () => {

@@ -17,6 +17,12 @@ import { classifyMemory, memoryViewKey, type MemoryBadge } from '@/lib/agentMemo
 import { cn } from '@/lib/utils';
 import { selectProjectMemoryForPath, useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
+import { WorkspaceViewScope, useWorkspaceChildKey, useWorkspaceScroll, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { DraftRecoveryNotice } from '@/components/ui/draft-recovery-notice';
+import { useWorkspaceDraftStore } from '@/stores/useWorkspaceDraftStore';
+import { Textarea } from '@/components/ui/textarea';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { startMemoryTidy } from './memoryTidy';
 
 /**
@@ -179,31 +185,25 @@ const MemoryView: React.FC<{
   entry: AgentMemoryEntry;
   badge: MemoryBadge;
   scopeLabel: string;
-  onSave: (patch: { title: string; body: string }) => void;
+  onSave: (patch: { title: string; body: string }) => Promise<boolean>;
   onDelete: () => void;
   onClose: () => void;
   showBack: boolean;
 }> = ({ entry, badge, scopeLabel, onSave, onDelete, onClose , showBack}) => {
   const { t } = useI18n();
-  const [titleDraft, setTitleDraft] = React.useState(entry.title);
-  const [bodyDraft, setBodyDraft] = React.useState(entry.body);
-  const seenRef = React.useRef({ title: entry.title, body: entry.body });
-
-  React.useEffect(() => {
-    const seen = seenRef.current;
-    if (entry.title === seen.title && entry.body === seen.body) return;
-    seenRef.current = { title: entry.title, body: entry.body };
-    if (titleDraft === seen.title && bodyDraft === seen.body) {
-      setTitleDraft(entry.title);
-      setBodyDraft(entry.body);
-    }
-  }, [bodyDraft, entry.body, entry.title, titleDraft]);
+  const titleInput = useWorkspaceDraft(useWorkspaceChildKey('memory', entry.id, 'title'), entry.title);
+  const bodyInput = useWorkspaceDraft(useWorkspaceChildKey('memory', entry.id, 'body'), entry.body);
+  const { value: titleDraft, setValue: setTitleDraft } = titleInput;
+  const { value: bodyDraft, setValue: setBodyDraft } = bodyInput;
 
   const bodyRef = React.useRef<HTMLTextAreaElement>(null);
   const [bodyScroller, setBodyScroller] = React.useState<HTMLTextAreaElement | null>(null);
+  const scrollRef = React.useRef<HTMLElement | null>(null);
+  scrollRef.current = bodyScroller;
+  useWorkspaceScroll(scrollRef, useWorkspaceChildKey('memory-scroll', entry.id), bodyScroller !== null);
   const emojiPicker = useEmojiPicker(bodyRef);
   const commitRef = React.useRef<() => void>(() => {});
-  commitRef.current = () => {
+  const save = () => {
     const title = titleDraft.trim();
     const body = bodyDraft.trim();
     // An emptied field is a rejected write, not a delete: restore it rather
@@ -216,8 +216,13 @@ const MemoryView: React.FC<{
     if (title === entry.title && body === entry.body) {
       return;
     }
-    seenRef.current = { title, body };
-    onSave({ title, body });
+    void onSave({ title, body }).then(ok => {
+      if (ok) { titleInput.acknowledge(titleDraft); bodyInput.acknowledge(bodyDraft); }
+    });
+  };
+  commitRef.current = () => {
+    if ((!titleInput.canSave && !bodyInput.canSave) || titleInput.conflict || bodyInput.conflict) return;
+    save();
   };
   React.useEffect(() => () => commitRef.current(), []);
 
@@ -245,6 +250,9 @@ const MemoryView: React.FC<{
       )}
     >
       <div className="flex h-full min-h-0 flex-col gap-2">
+        <DraftRecoveryNotice conflict={titleInput.conflict || bodyInput.conflict}
+          onResume={() => { titleInput.resume(); bodyInput.resume(); save(); }}
+          onUseLatest={() => { titleInput.useLatest(); bodyInput.useLatest(); }} />
         <input
           value={titleDraft}
           onChange={(event) => setTitleDraft(event.target.value.slice(0, AGENT_MEMORY_TITLE_MAX_LENGTH))}
@@ -291,19 +299,22 @@ export const MemorySection: React.FC<{
   split: boolean;
 }> = ({ projectPath, query, openMemoryId, onOpenMemory, split }) => {
   const { t } = useI18n();
-  const [scope, setScope] = React.useState<AgentMemoryScope>('project');
+  const owner = React.useContext(WorkspaceViewScope);
+  const runtimeKey = React.useRef(getRuntimeKey()).current;
+  const [scope, setScope] = useWorkspaceViewState('knowledge', owner, 'memoryScope');
+  const [scopePicked, setScopePicked] = useWorkspaceViewState('knowledge', owner, 'memoryScopePicked');
+  const [followedQuery, setFollowedQuery] = useWorkspaceViewState('knowledge', owner, 'memoryQuery');
 
   const globalEntries = useAgentMemoryStore((state) => state.global);
   const projectEntries = useAgentMemoryStore((state) => selectProjectMemoryForPath(state, projectPath));
   // Opens on the scope that has something to show. Starting on an empty
   // Project scope read as "no memory at all" while About you had entries.
   // Once the user picks a scope, it stays theirs.
-  const scopePickedRef = React.useRef(false);
   React.useEffect(() => {
-    if (scopePickedRef.current) return;
+    if (scopePicked) return;
     if (scope === 'project' && projectEntries.length === 0 && globalEntries.length > 0) setScope('global');
     if (scope === 'global' && globalEntries.length === 0 && projectEntries.length > 0) setScope('project');
-  }, [globalEntries.length, projectEntries.length, scope]);
+  }, [globalEntries.length, projectEntries.length, scope, scopePicked, setScope]);
   const globalFailed = useAgentMemoryStore((state) => state.globalFailed);
   const projectFailed = useAgentMemoryStore((state) => state.projectFailed);
   const deleteEntry = useAgentMemoryStore((state) => state.deleteEntry);
@@ -313,6 +324,7 @@ export const MemorySection: React.FC<{
 
   const entries = scope === 'global' ? globalEntries : projectEntries;
   const scopeFailed = scope === 'global' ? globalFailed : projectFailed;
+  const scopeLoaded = useAgentMemoryStore(state => state.loaded && (scope === 'global' || state.projectPath === projectPath));
   const viewKey = memoryViewKey(scope, projectPath);
   const storedViewedAt = useUIStore((state) => state.agentMemoryViewedAt[viewKey] ?? 0);
 
@@ -342,28 +354,31 @@ export const MemorySection: React.FC<{
   // the other one would open on "no matches". Follow the search there, the
   // way the strip follows it between sections.
   // Only when the query changes, so a scope picked by hand stays picked.
-  const followedQueryRef = React.useRef('');
   React.useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed === followedQueryRef.current) return;
-    followedQueryRef.current = trimmed;
+    if (trimmed === followedQuery || !scopeLoaded || scopeFailed) return;
+    setFollowedQuery(trimmed);
     if (!trimmed || visibleEntries.length > 0) return;
     const otherScope: AgentMemoryScope = scope === 'global' ? 'project' : 'global';
     const otherEntries = otherScope === 'global' ? globalEntries : projectEntries;
     if (otherEntries.some((entry) => matchesRankQuery([entry.title, entry.body], query))) {
       setScope(otherScope);
     }
-  }, [globalEntries, projectEntries, query, scope, visibleEntries.length]);
+  }, [followedQuery, globalEntries, projectEntries, query, scope, scopeFailed, scopeLoaded, setFollowedQuery, setScope, visibleEntries.length]);
 
   const openEntry = React.useMemo(
     () => (openMemoryId ? entries.find((entry) => entry.id === openMemoryId) ?? null : null),
     [entries, openMemoryId],
   );
+  const orphanTitleKey = useWorkspaceChildKey('memory', openMemoryId, 'title');
+  const orphanBodyKey = useWorkspaceChildKey('memory', openMemoryId, 'body');
+  const orphanTitle = useWorkspaceDraftStore(state => orphanTitleKey ? state.drafts[orphanTitleKey] : undefined);
+  const orphanBody = useWorkspaceDraftStore(state => orphanBodyKey ? state.drafts[orphanBodyKey] : undefined);
 
   // An entry forgotten elsewhere (the agent, another window) closes if open.
   React.useEffect(() => {
-    if (openMemoryId && !openEntry) onOpenMemory(null);
-  }, [onOpenMemory, openEntry, openMemoryId]);
+    if (scopeLoaded && !scopeFailed && openMemoryId && !openEntry && !orphanTitle && !orphanBody) onOpenMemory(null);
+  }, [onOpenMemory, openEntry, openMemoryId, orphanBody, orphanTitle, scopeFailed, scopeLoaded]);
 
   const handleDelete = React.useCallback((memoryId: string) => {
     if (openMemoryId === memoryId) onOpenMemory(null);
@@ -384,14 +399,16 @@ export const MemorySection: React.FC<{
   }, [deleteEntry, onOpenMemory, openMemoryId, projectPath, scope, t]);
 
   const handleSave = React.useCallback(async (memoryId: string, patch: { title?: string; body?: string }) => {
-    if (!await saveEntry(scope, memoryId, patch)) {
+    const saved = await saveEntry(scope, memoryId, patch, projectPath, runtimeKey);
+    if (!saved && runtimeKey === getRuntimeKey()) {
       const detail = useAgentMemoryStore.getState().error;
       toast.error(
         t('rightSidebar.contextNotesTodo.memory.toast.saveFailed'),
         detail ? { description: detail } : undefined,
       );
     }
-  }, [saveEntry, scope, t]);
+    return saved;
+  }, [projectPath, runtimeKey, saveEntry, scope, t]);
 
   const scopeOptions: Array<{ id: AgentMemoryScope; label: string; count: number }> = [
     { id: 'project', label: t('rightSidebar.contextNotesTodo.memory.scope.project'), count: projectEntries.length },
@@ -400,15 +417,20 @@ export const MemorySection: React.FC<{
 
   const openView = openEntry ? (
     <MemoryView
-      key={openEntry.id}
+      key={`${owner}:${scope}:${openEntry.id}`}
       entry={openEntry}
       badge={classifyMemory(openEntry, baseline)}
       scopeLabel={scopeOptions.find((option) => option.id === scope)?.label ?? ''}
-      onSave={(patch) => void handleSave(openEntry.id, patch)}
+      onSave={(patch) => handleSave(openEntry.id, patch)}
       onDelete={() => handleDelete(openEntry.id)}
       showBack={!split}
       onClose={() => onOpenMemory(null)}
     />
+  ) : scopeLoaded && (orphanTitle || orphanBody) ? (
+    <KnowledgeEntryView showBack={!split} backLabel={t('rightSidebar.contextNotesTodo.memory.actions.back')}
+      meta={t('workspaceRestore.itemMissing')} onClose={() => onOpenMemory(null)}>
+      <Textarea value={[orphanTitle?.value, orphanBody?.value].filter(Boolean).join('\n\n')} readOnly rows={12} className="h-full" aria-label={t('rightSidebar.contextNotesTodo.memory.actions.editBody')} />
+    </KnowledgeEntryView>
   ) : null;
 
   const list = (
@@ -428,7 +450,7 @@ export const MemorySection: React.FC<{
               aria-pressed={scope === option.id}
               className="!font-normal"
               onClick={() => {
-                scopePickedRef.current = true;
+                setScopePicked(true);
                 setScope(option.id);
               }}
             >
@@ -473,7 +495,7 @@ export const MemorySection: React.FC<{
   );
 
   if (split) {
-    return <KnowledgeSplit list={list} detail={openView} emptyLabel={t('rightSidebar.contextNotesTodo.memory.selectHint')} />;
+    return <KnowledgeSplit section="memory" list={list} detail={openView} emptyLabel={t('rightSidebar.contextNotesTodo.memory.selectHint')} />;
   }
   return openView ?? list;
 };

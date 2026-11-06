@@ -1,3 +1,5 @@
+import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceViewStateStore } from '@/stores/useWorkspaceViewStateStore';
 import React from 'react';
 import { toast } from '@/components/ui';
 import {
@@ -79,14 +81,51 @@ export function useInlineCommentController<TRange extends LineRangeBase>(
   const updateDraft = useInlineCommentDraftStore((state) => state.updateDraft);
   const removeDraft = useInlineCommentDraftStore((state) => state.removeDraft);
 
-  const [selection, setSelection] = React.useState<TRange | null>(null);
-  const [commentText, setCommentText] = React.useState('');
-  const [editingDraftId, setEditingDraftId] = React.useState<string | null>(null);
-
   const target = useComposerDraftTarget(sessionDirectory ?? effectiveDirectory);
   const targetKey = target
     ? getInlineCommentDraftKey(getRuntimeKey(), target.directory, target.sessionKey)
     : null;
+  const viewScope = React.useContext(WorkspaceViewScope);
+  const unfinishedKey = targetKey && fileLabel && (source === 'diff' || source === 'plan')
+    ? JSON.stringify([targetKey, source, fileLabel, viewScope ?? originKey]) : null;
+  const [storedRange, setStoredRange] = useWorkspaceViewState('comment', unfinishedKey, 'selection');
+  const [commentText, setCommentText] = useWorkspaceViewState('comment', unfinishedKey, 'text');
+  const [editingDraftId, setEditingDraftId] = useWorkspaceViewState('comment', unfinishedKey, 'editingDraftId');
+  const [selectedCode, setSelectedCode] = useWorkspaceViewState('comment', unfinishedKey, 'code');
+  const [selectedOrigin, setSelectedOrigin] = useWorkspaceViewState('comment', unfinishedKey, 'origin');
+  const fromRangeRef = React.useRef(fromDraftRange);
+  fromRangeRef.current = fromDraftRange;
+  const candidate = React.useMemo(() => storedRange ? fromRangeRef.current({
+    id: 'unfinished', sessionKey: '', source, fileLabel: fileLabel ?? '',
+    ...storedRange, code: '', language, text: '', createdAt: 0,
+  }) : null, [fileLabel, language, source, storedRange]);
+  let currentCode: string | null = null;
+  if (candidate) {
+    try { currentCode = getCodeForRange(candidate); } catch { /* Wait for an available range. */ }
+  }
+  const changedCode = selectedCode !== null && (selectedCode !== currentCode || (selectedOrigin !== null && selectedOrigin !== originKey));
+  const selection = changedCode ? null : candidate;
+  const selectionRef = React.useRef(selection);
+  selectionRef.current = selection;
+  const rangeWriterRef = React.useRef({ getCodeForRange, toStoreRange });
+  rangeWriterRef.current = { getCodeForRange, toStoreRange };
+  const warned = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (unfinishedKey && changedCode && currentCode && warned.current !== unfinishedKey) {
+      warned.current = unfinishedKey;
+      toast.error(t('workspaceRestore.commentChanged'));
+    }
+  }, [changedCode, currentCode, t, unfinishedKey]);
+  const setSelection = React.useCallback((update: React.SetStateAction<TRange | null>) => {
+    const next = typeof update === 'function' ? update(selectionRef.current) : update;
+    selectionRef.current = next;
+    const range = next ? normalizeStoreRange(rangeWriterRef.current.toStoreRange(next)) : null;
+    let code: string | null = null;
+    if (next) { try { code = rangeWriterRef.current.getCodeForRange(next); } catch { /* A loading range has no baseline yet. */ } }
+    if (unfinishedKey) useWorkspaceViewStateStore.getState().update('comment', unfinishedKey, previous => ({ ...previous, selection: range, code, origin: next ? originKey : null }));
+    else { setStoredRange(range); setSelectedCode(code); setSelectedOrigin(next ? originKey : null); }
+  }, [originKey, setSelectedCode, setSelectedOrigin, setStoredRange, unfinishedKey]);
+
   const sessionDrafts = useInlineCommentDraftStore(
     React.useCallback(
       (state) => targetKey ? state.drafts[targetKey] ?? EMPTY_INLINE_COMMENT_DRAFTS : EMPTY_INLINE_COMMENT_DRAFTS,
@@ -102,21 +141,25 @@ export function useInlineCommentController<TRange extends LineRangeBase>(
   }, [fileLabel, originKey, sessionDrafts, source, target]);
 
   const reset = React.useCallback(() => {
-    setSelection(null);
-    setCommentText('');
-    setEditingDraftId(null);
-  }, []);
+    if (unfinishedKey) {
+      useWorkspaceViewStateStore.getState().update('comment', unfinishedKey, previous =>
+        previous.selection === null && previous.code === null && previous.origin === null && !previous.text && previous.editingDraftId === null
+          ? previous : { ...previous, selection: null, code: null, origin: null, text: '', editingDraftId: null });
+    } else {
+      setStoredRange(null); setSelectedCode(null); setSelectedOrigin(null); setCommentText(''); setEditingDraftId(null);
+    }
+  }, [setCommentText, setEditingDraftId, setSelectedCode, setSelectedOrigin, setStoredRange, unfinishedKey]);
 
   const cancel = React.useCallback(() => {
     reset();
   }, [reset]);
 
   const startEdit = React.useCallback((draft: InlineCommentDraft) => {
-    const draftRange = normalizeLineRange(fromDraftRange(draft));
+    const draftRange = normalizeLineRange(fromRangeRef.current(draft));
     setSelection(draftRange);
     setCommentText(draft.text);
     setEditingDraftId(draft.id);
-  }, [fromDraftRange]);
+  }, [setCommentText, setEditingDraftId, setSelection]);
 
   const deleteDraft = React.useCallback((draft: InlineCommentDraft) => {
     if (!target) return;

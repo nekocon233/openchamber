@@ -11,11 +11,28 @@ const reference = (id) => ({ conversation_id: id, type_name: 'explorer', role: '
 const step = (id, body) => ({ event: 'step_update', step_update: { conversation_id: id, step_index: 0, state: 'DONE', step_type: 'subagent', text_delta: '', tool_info: null, ...body } });
 
 describe('Antigravity live subagents', () => {
+  it('publishes a completed child generation thinking while the child remains busy', async () => {
+    const events = [];
+    const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
+    const controller = createAntigravitySubagents({ publisher, now: () => 100, loadHistory: async () => null,
+      readReasoning: (nativeId) => nativeId === childId ? [{ step_index: 1, status: 'DONE', type: 'PLANNER_RESPONSE', thinking: 'Inspect the child inputs.' }] : [],
+    });
+    const process = {};
+    const record = buildSessionRecord({ id: 'nag_' + rootId, backend: 'antigravity', directory: '/repo', title: 'Root', created: 1, updated: 1 });
+    const owner = { id: record.id, nativeId: rootId, directory: '/repo', record, turn: { process } };
+    await controller.handle(owner, process, step(rootId, { subagent_info: { subagents: [reference(childId)] } }));
+    await controller.handle(owner, process, step(childId, { step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Working' }));
+    expect(controller.busyIds('/repo')).toContain('nag_' + childId);
+    expect(controller.records('nag_' + childId)[1].parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+    expect(events.some((event) => event.payload.type === 'message.part.updated' && event.payload.properties.part.type === 'reasoning')).toBe(true);
+    expect(events.some((event) => event.payload.type === 'session.idle')).toBe(false);
+  });
+
   it('joins multiple and nested children by live identity and keeps unobserved completion unknown', async () => {
     const events = [];
     let time = 100;
     const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
-    const controller = createAntigravitySubagents({ publisher, now: () => ++time });
+    const controller = createAntigravitySubagents({ publisher, now: () => ++time, loadHistory: async () => null, readReasoning: () => [] });
     const process = {};
     const record = buildSessionRecord({ id: `nag_${rootId}`, backend: 'antigravity', directory: '/repo', title: 'Root', created: 1, updated: 1 });
     const owner = { id: record.id, nativeId: rootId, directory: '/repo', record, turn: { process, send: { modelID: 'gemini-4-argon-high' } } };

@@ -110,6 +110,8 @@ const { useSelectionStore } = await import('@/sync/selection-store');
 const { useGlobalSessionStatusStore } = await import('@/sync/global-session-status');
 const { useSessionUIStore } = await import('@/sync/session-ui-store');
 const { ProjectNotesTodoPanel } = await import('./ProjectNotesTodoPanel');
+const { useWorkspaceViewStateStore } = await import('@/stores/useWorkspaceViewStateStore');
+const { useWorkspaceDraftStore } = await import('@/stores/useWorkspaceDraftStore');
 const { EditorView } = await import('@codemirror/view');
 
 const project = { id: 'chats', path: '/fixture/chats' };
@@ -180,6 +182,8 @@ const mount = async () => {
 };
 
 beforeEach(() => {
+  useWorkspaceViewStateStore.setState({ snapshots: useWorkspaceViewStateStore.getInitialState().snapshots });
+  useWorkspaceDraftStore.setState({ drafts: {}, pendingInputs: {} });
   TestEventSource.instances = [];
   serverContext = emptyContext();
   readFailed = false;
@@ -191,7 +195,7 @@ beforeEach(() => {
   Object.defineProperty(browser.document, 'visibilityState', { value: 'visible', configurable: true });
   Object.defineProperty(browser.navigator, 'onLine', { value: true, configurable: true });
   useProjectContextStore.getState().reset();
-  useUIStore.setState({ projectContextTab: 'notes', isMobile: false });
+  useUIStore.setState({ isMobile: false });
   useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
   // App already owns this shared connection before its knowledge panel opens.
   releaseStream = subscribeOpenchamberEvents(() => {});
@@ -497,8 +501,68 @@ test('peer refreshes preserve typing and switching project discards the old edit
   serverContext = { ...serverContext, todos: [{ ...todo, text: 'Other project' }] };
   await render(true, { id: 'other', path: '/fixture/other' });
   expect(host.querySelector('textarea[aria-label="Todo text"]')).toBeNull();
+  // A project without a saved choice opens on its own default Notes tab.
+  const otherTodoTab = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(button => button.textContent?.startsWith('Todo'));
+  await act(async () => otherTodoTab?.click());
   expect(host.textContent).toContain('Other project');
   expect(todoWrites).toHaveLength(0);
+});
+
+test('a deleted todo leaves its unfinished text readable after remount', async () => {
+  serverContext = { ...serverContext, todos: [{ id: 'removed', text: 'Original', completed: false, createdAt: 3 }] };
+  await mount(); await startTodoEdit(); await typeTodo('Text recovered after deletion');
+  serverContext = { ...serverContext, todos: [] };
+  await announce();
+  expect(todoEditor().value).toBe('Text recovered after deletion');
+  expect(todoEditor().readOnly).toBe(true);
+  expect(host.textContent).toContain('This item no longer exists');
+  await act(async () => root?.unmount());
+  await mount();
+  expect(todoEditor().value).toBe('Text recovered after deletion');
+  expect(todoEditor().readOnly).toBe(true);
+  expect(todoWrites).toHaveLength(0);
+});
+
+test('an unconfirmed add and the next typed input both survive a remount', async () => {
+  const fixtureFetch = globalThis.fetch;
+  let finish: ((response: Response) => void) | null = null;
+  let additions = 0;
+  globalThis.fetch = Object.assign(async (request: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST' && String(request).includes('/notes')) {
+      additions += 1;
+      return new Promise<Response>(resolve => { finish = resolve; });
+    }
+    return fixtureFetch(request, init);
+  }, fixtureFetch);
+  const typeNew = async (text: string) => act(async () => {
+    const field = host.querySelector<HTMLTextAreaElement>('textarea');
+    if (!field) throw new Error('Missing new note field');
+    Object.getOwnPropertyDescriptor(browser.HTMLTextAreaElement.prototype, 'value')?.set?.call(field, text);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  try {
+    await mount();
+    await typeNew('Awaiting confirmation');
+    const add = host.querySelector<HTMLButtonElement>('button[aria-label="Add note"]');
+    if (!add) throw new Error('Missing add note action');
+    await act(async () => add.click());
+    await typeNew('Next input');
+    await act(async () => root?.unmount());
+    browser.dispatchEvent(new browser.Event('pagehide'));
+    await useWorkspaceDraftStore.persist.rehydrate();
+    await mount();
+    expect(host.querySelector('textarea')?.value).toBe('Next input');
+    expect(additions).toBe(1);
+    await act(async () => { if (finish) finish(Response.json({ error: 'offline' }, { status: 503 })); });
+    const recover = host.querySelector<HTMLButtonElement>('button[aria-label="Restore unconfirmed input"]');
+    expect(recover?.textContent).toContain('Awaiting confirmation');
+    await act(async () => recover?.click());
+    expect(host.querySelector('textarea')?.value).toBe('Awaiting confirmation');
+    expect(host.textContent).toContain('Next input');
+    expect(additions).toBe(1);
+  } finally {
+    globalThis.fetch = fixtureFetch;
+  }
 });
 
 type SentMessage = { content: string; options: Parameters<SendMessage>[9] };

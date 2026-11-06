@@ -5,7 +5,7 @@ import { createAntigravityLiveProjection } from './projector.js';
 
 /** Child ownership is established by the parent's live subagent_info, never
  * by an arbitrary conversation id or a persisted running flag. */
-export const createAntigravitySubagents = ({ publisher, now }) => {
+export const createAntigravitySubagents = ({ publisher, now, loadHistory, readReasoning }) => {
   const children = new Map();
 
   const publishSession = (child, created = false) => {
@@ -14,6 +14,24 @@ export const createAntigravitySubagents = ({ publisher, now }) => {
   };
   const captureRecords = (child) => {
     for (const record of child.projection?.records() ?? []) child.records.set(record.info.id, record);
+  };
+  const beginProjection = (child, userIndex) => {
+    captureRecords(child);
+    child.reasoningAfterTool = false;
+    child.projection = createAntigravityLiveProjection({
+      sessionId: child.session.id, nativeId: child.nativeId, directory: child.session.directory, publisher,
+      request: {
+        messageID: 'nag_u_' + child.nativeId.replaceAll('-', '') + '_' + userIndex,
+        // A custom child can use a different model; the CLI does not name it here.
+        model: { providerID: NATIVE_PROVIDER_ANTIGRAVITY, modelID: '' },
+        agent: 'build', sentAt: now(),
+        parts: child.records.size === 0 && child.prompt ? [{ type: 'text', text: child.prompt }] : [],
+      },
+    });
+  };
+  const refreshReasoning = (child) => {
+    try { child.projection.restoreReasoning(readReasoning(child.nativeId)); }
+    catch { /* Optional enrichment preserves the observed child records. */ }
   };
   const announce = (owner, process, step, parent) => {
     for (const agent of agySubagentReferences(step.subagent_info)) {
@@ -54,7 +72,21 @@ export const createAntigravitySubagents = ({ publisher, now }) => {
         const result = frame.result;
         const outcome = result.status === 'SUCCESS' ? 'success'
           : ['CANCELED', 'INTERRUPTED'].includes(result.status) ? 'aborted' : 'error';
-        child.projection?.finish({ outcome, response: result.response, error: result.error ?? '', time: now() });
+        let history = null;
+        try {
+          history = await loadHistory(child.session.id, child.nativeId, directory);
+        } catch { /* Optional recovery retains live output; history reads report failures. */ }
+        const final = history?.records.at(-1);
+        const text = final?.parts.find((part) => part.type === 'text' && !part.synthetic && !part.metadata?.nativeSubagentMessage);
+        const responseStep = final?.info.role === 'assistant' && final.info.finish === 'stop'
+          && final.info.time.completed !== undefined && !final.info.error && text
+          ? { step_index: Number(final.info.id.split('_').at(-1)) } : null;
+        if (!child.projection) beginProjection(child, 'context');
+        child.projection.finish({
+          outcome, response: responseStep && !text.metadata?.nativeOutputTruncated ? text.text : result.response,
+          error: result.error ?? '', time: now(), responseStep,
+        });
+        if (history) child.projection.restoreMissingHistory(history.records, { scope: 'session' });
         captureRecords(child);
         child.phase = 'settled';
         child.session.metadata.openchamber.native.activityKnown = true;
@@ -66,18 +98,8 @@ export const createAntigravitySubagents = ({ publisher, now }) => {
       const step = frame.step_update;
       announce(owner, process, step, child.session);
       if (!child.projection || step.step_type === 'user_input') {
-        captureRecords(child);
         const userIndex = step.step_type === 'user_input' ? step.step_index : 'context';
-        child.projection = createAntigravityLiveProjection({
-          sessionId: child.session.id, nativeId: child.nativeId, directory, publisher,
-          request: {
-            messageID: `nag_u_${child.nativeId.replaceAll('-', '')}_${userIndex}`,
-            // A custom child can use a different model; the CLI does not name it here.
-            model: { providerID: NATIVE_PROVIDER_ANTIGRAVITY, modelID: '' },
-            agent: 'build', sentAt: now(),
-            parts: child.records.size === 0 && child.prompt ? [{ type: 'text', text: child.prompt }] : [],
-          },
-        });
+        beginProjection(child, userIndex);
       }
       if (child.phase !== 'running') {
         child.phase = 'running';
@@ -86,6 +108,14 @@ export const createAntigravitySubagents = ({ publisher, now }) => {
         publisher.status(directory, child.session.id, 'busy');
       }
       await child.projection.applyStep(step, now(), async () => {});
+      if (step.step_type === 'agent_response' && step.state === 'DONE') {
+        refreshReasoning(child);
+        child.reasoningAfterTool = true;
+      } else if (child.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
+        && ['DONE', 'ERROR', 'INVALID'].includes(step.state)) {
+        child.reasoningAfterTool = false;
+        refreshReasoning(child);
+      }
       return true;
     },
 
@@ -106,6 +136,10 @@ export const createAntigravitySubagents = ({ publisher, now }) => {
     },
 
     session(id) { return children.get(id)?.session ?? null; },
+    refreshReasoning(id) {
+      const child = children.get(id);
+      if (child?.projection) refreshReasoning(child);
+    },
     records(id) {
       const child = children.get(id);
       // Once observation ends, the native history owns content again. A

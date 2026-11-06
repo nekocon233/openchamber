@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './tr.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -52,6 +53,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['tr'],
   "agents.combinations.loadFailed": "Kombinasyonlar yüklenemedi. Ayarları yeniden açıp tekrar deneyin.",
   "agents.combinations.saveFailed": "Kombinasyonlar kaydedilemedi. Tekrar deneyin.",
   "agents.combinations.group": "Birleşimler",
@@ -3686,7 +3688,7 @@ export const dict = {
   'chat.workStatus.telemetry.elapsed': 'Geçen süre',
   'chat.workStatus.telemetry.elapsedDescription': 'İlk kullanıcı mesajından son asistan yanıtına kadar geçen gerçek süredir. Model bekleme, araç çalıştırma, sıkıştırma ve diğer aralıkları içerir.',
   'chat.workStatus.telemetry.llmDuration': 'Model süresi',
-  'chat.workStatus.telemetry.llmDurationDescription': "Yanıt bekleme dahil tüm model adımlarının süresi. Araç çalışma süresi ve 5 dakikadan uzun duraklamalar çıkarılır. Yalnızca metin üretme süresi değildir.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Yanıt bekleme dahil model adımlarının süresi. Araç yanıtlarını bekleme süreleri ve 5 dakikadan uzun duraklamalar çıkarılır. Arka plan araçları modelle aynı anda çalışabilir.",
   'chat.workStatus.telemetry.toolDuration': 'Araç süresi',
   'chat.workStatus.telemetry.toolDurationDescription': 'Başarısız çağrılar dahil araçların çalışma süresi. Aynı anda çalışan araçların süreleri bir kez sayılır.',
   'chat.workStatus.telemetry.ttft': 'Ortalama TTFT',
@@ -3695,7 +3697,7 @@ export const dict = {
   'chat.workStatus.telemetry.stepsDescription': 'Bu prompt için modelin kaç kez çağrıldığı. Araç sonucunu okuyup sıradaki işi belirlemek genellikle yeni bir adım gerektirir.',
   'chat.workStatus.telemetry.tokens': 'Tokenlar',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Yüklenen tamamlanmış turlarda üretilen tokenların, araç çalışması ve 5 dakikadan uzun duraklamalar çıkarılmış model süresine bölümü. Daha eski geçmiş yüklenince yeniden hesaplanır.",
+  'chat.workStatus.telemetry.speedDescription': "Yüklenen tamamlanmış turlarda üretilen tokenların, araç bekleme süreleri ve 5 dakikadan uzun duraklamalar çıkarılmış model süresine bölümü. Daha eski geçmiş yüklenince yeniden hesaplanır.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Önbellek hariç girdi: {input}. ↓ Üretilen tokenlar: metin ve araç çağrıları için {output}, akıl yürütme için {reasoning}. Bu promptun tüm adımlarının toplamıdır.',
   'chat.workStatus.telemetry.cacheHit': 'Ort. önbellek',
   'chat.workStatus.telemetry.cacheHitDescription': 'Yüklenen tamamlanmış turlarda prompt önbelleğinden yeniden kullanılan girdi tokenlarının oranı. Daha eski geçmiş yüklenince yeniden hesaplanır.',
@@ -4408,4 +4410,10 @@ export const dict = {
   "settings.gitlab.actions.addInstance": "Add instance",
   "settings.gitlab.device.waiting": "Authorize the device in GitLab, then return to OpenChamber. This page updates automatically.",
   "settings.gitlab.actions.openGitLab": "Open GitLab",
+  "workspaceRestore.draftConflict": "Bu öğe değişti. Taslağınız geri yüklendi ve otomatik kaydetme duraklatıldı.",
+  "workspaceRestore.saveDraft": "Geri yüklenen taslağı kaydet",
+  "workspaceRestore.useLatest": "En son içeriği kullan",
+  "workspaceRestore.itemMissing": "Bu öğe artık mevcut değil. Kaydedilmemiş metniniz burada korunuyor.",
+  "workspaceRestore.commentChanged": "Seçilen kod değişti. Yorumunuza devam etmek için satırları yeniden seçin.",
+  "workspaceRestore.restoreInput": "Onaylanmamış girdiyi geri yükle",
 };

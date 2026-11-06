@@ -7,13 +7,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeEventPublisher } from '../publisher.js';
 import { createNativeRegistry } from '../registry.js';
 import { createAntigravityBackend } from './backend.js';
+import { prepareAgyContextSettings } from './context-settings.js';
 
 const cleanups = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const setup = async ({ decorateSession = async (session) => session, onInteraction = async () => undefined, commandPrefix = [], quotaFailure = '' } = {}) => {
+const setup = async ({ decorateSession = async (session) => session, onInteraction = async () => undefined, commandPrefix = [], quotaFailure = '', prepareContextSettings } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-test-'));
   let conversationId = null;
   let unauthenticated = false;
@@ -38,6 +39,7 @@ const setup = async ({ decorateSession = async (session) => session, onInteracti
     decorateSession,
     onInteraction,
     home,
+    prepareContextSettings,
   });
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   cleanups.push(() => backend.shutdown());
@@ -58,6 +60,192 @@ const setup = async ({ decorateSession = async (session) => session, onInteracti
 };
 
 describe('Antigravity CLI adapter', () => {
+  it('keeps the process-local budget after external sync and refreshes changed routes on an idle admission', async () => {
+    const { backend, directory, home, prompt } = await setup();
+    const settingsFile = path.join(home, 'settings.json');
+    const data = { modelProvider: 'gemini', model: 'magpie/default', customModelsConfig: { customModels: {
+      'magpie/default': { modelName: 'provider/first', maxTokens: 1000000 },
+      other: { modelName: 'provider/other', maxTokens: 32000 },
+    } } };
+    fs.writeFileSync(settingsFile, JSON.stringify(data));
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'mode-probe');
+    const result = () => JSON.parse(backend.liveRecords(session.id).at(-1).parts[0].text);
+    const first = result();
+    expect(first.contextBudgets).toEqual({ 'magpie/default': 1000000, other: 32000 });
+    expect(fs.existsSync(first.settingsFile)).toBe(true);
+    delete data.customModelsConfig.customModels['magpie/default'].maxTokens;
+    fs.writeFileSync(settingsFile, JSON.stringify(data, null, 2));
+    const synced = fs.readFileSync(settingsFile, 'utf8');
+    await prompt(session, 'mode-probe');
+    expect(result().pid).toBe(first.pid);
+    expect(result().settingsFile).toBe(first.settingsFile);
+    expect(result().contextBudgets['magpie/default']).toBe(1000000);
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(synced);
+    data.customModelsConfig.customModels['magpie/default'].modelName = 'provider/second';
+    fs.writeFileSync(settingsFile, JSON.stringify(data));
+    await prompt(session, 'mode-probe');
+    const next = result();
+    expect(next.pid).not.toBe(first.pid);
+    expect(next.resumed).toBe(session.id.slice(4));
+    expect(fs.existsSync(first.settingsFile)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(next.settingsFile, 'utf8')).customModelsConfig.customModels['magpie/default'])
+      .toEqual({ modelName: 'provider/second', maxTokens: 1000000 });
+    await backend.closeSession(session.id);
+    expect(fs.existsSync(next.settingsFile)).toBe(false);
+  });
+
+  it('removes process settings when the CLI refuses startup before prompt dispatch', async () => {
+    const files = [];
+    const { backend, directory, home } = await setup({ prepareContextSettings: async (options) => {
+      const context = await prepareAgyContextSettings(options);
+      if (context) files.push(context.file);
+      return context;
+    } });
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ modelProvider: 'gemini', model: 'custom',
+      customModelsConfig: { customModels: { custom: { modelName: 'same-route' } } } }));
+    const session = await backend.createSession({ directory });
+    await expect(backend.prompt(session.id, { directory, messageID: 'never-dispatched', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'invalid-model' }, parts: [{ type: 'text', text: 'must not run' }] }))
+      .rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_ERROR' });
+    expect(files).toHaveLength(1);
+    await vi.waitFor(() => expect(fs.existsSync(files[0])).toBe(false));
+    expect(backend.busySessionIds(directory)).toEqual([]);
+  });
+
+  it('publishes saved thinking before the turn ends without settling a running tool or polling', async () => {
+    const { backend, directory, home, events } = await setup();
+    const session = await backend.createSession({ directory });
+    const reads = vi.spyOn(backend.store, 'completedReasoning');
+    await backend.prompt(session.id, { directory, messageID: 'live-thinking-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-thinking' }] });
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .some((part) => part.type === 'tool' && part.state.status === 'running')).toBe(true));
+    expect(backend.liveRecords(session.id).flatMap((record) => record.parts).filter((part) => part.type === 'reasoning')).toHaveLength(0);
+    expect(reads).toHaveBeenCalledTimes(1);
+    fs.writeFileSync(path.join(home, 'release-thinking'), 'release');
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .filter((part) => part.type === 'reasoning')).toHaveLength(1));
+    const live = backend.liveRecords(session.id);
+    expect(backend.busySessionIds(directory)).toContain(session.id);
+    expect(events.some((event) => event.payload.type === 'session.idle')).toBe(false);
+    expect(reads).toHaveBeenCalledTimes(2);
+    expect(live[1].parts.map((part) => part.type)).toEqual(['reasoning', 'text', 'tool']);
+    const history = await backend.loadHistory(session.id, directory);
+    expect(live[1].parts[0].id).toBe(history.records[1].parts[0].id);
+    expect(live[1].parts[0].text).toBe(history.records[1].parts[0].text);
+    expect(live[1].parts.at(-1).state.status).toBe('completed');
+    const published = events.filter((event) => event.payload.type === 'message.part.updated' && event.payload.properties.part.type === 'reasoning').length;
+    await backend.loadHistory(session.id, directory);
+    expect(events.filter((event) => event.payload.type === 'message.part.updated' && event.payload.properties.part.type === 'reasoning')).toHaveLength(published);
+    await backend.abort(session.id);
+  });
+
+  it('repairs thinking on a running history read without replacing live tool state', async () => {
+    const { backend, directory, home } = await setup();
+    const session = await backend.createSession({ directory });
+    await backend.prompt(session.id, { directory, messageID: 'history-thinking-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-thinking' }] });
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .some((part) => part.type === 'tool' && part.state.status === 'running')).toBe(true));
+    const log = path.join(home, 'brain', session.id.slice(4), '.system_generated', 'logs', 'transcript_full.jsonl');
+    fs.appendFileSync(log, JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE',
+      thinking: 'Saved after the stream frame.', content: 'Working\n',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'wait for fixture' } }] }) + '\n');
+    const read = vi.spyOn(backend.store, 'completedReasoning').mockImplementationOnce(() => { throw new Error('Temporary read failure'); });
+    await backend.loadHistory(session.id, directory);
+    expect(backend.liveRecords(session.id)[1].parts.at(-1).state.status).toBe('running');
+    expect(backend.busySessionIds(directory)).toContain(session.id);
+    read.mockRestore();
+    await backend.loadHistory(session.id, directory);
+    const parts = backend.liveRecords(session.id)[1].parts;
+    expect(parts[0]).toMatchObject({ type: 'reasoning', text: 'Saved after the stream frame.' });
+    expect(parts.at(-1).state.status).toBe('running');
+    await backend.abort(session.id);
+  });
+
+  it('repairs delayed thinking when history is read for a running child', async () => {
+    const { backend, directory, home, events } = await setup();
+    const session = await backend.createSession({ directory });
+    await backend.prompt(session.id, { directory, messageID: 'live-child-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-child-thinking' }] });
+    let childId;
+    await vi.waitFor(async () => {
+      childId = (await backend.loadHistory(session.id, directory)).childSessions[0]?.id;
+      expect(childId && backend.busySessionIds(directory).includes(childId)).toBe(true);
+    });
+    expect(backend.liveRecords(childId).flatMap((record) => record.parts).some((part) => part.type === 'reasoning')).toBe(false);
+    const log = path.join(home, 'brain', childId.slice(4), '.system_generated', 'logs', 'transcript_full.jsonl');
+    fs.appendFileSync(log, JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE',
+      content: 'Evidence checked.', thinking: 'Delayed child thinking.' }) + '\n');
+    await backend.loadHistory(childId, directory);
+    expect(backend.liveRecords(childId)[1].parts[0]).toMatchObject({ type: 'reasoning', text: 'Delayed child thinking.' });
+    expect(backend.busySessionIds(directory)).toContain(childId);
+    expect(events.some((event) => event.payload.type === 'message.part.updated'
+      && event.payload.properties.sessionID === childId && event.payload.properties.part.type === 'reasoning')).toBe(true);
+    await backend.abort(session.id);
+  });
+
+  it.each(['retained-agent-content', 'retained-agent-no-child-frames'])('publishes retained thinking and child messages for %s with stable historical parts', async (text) => {
+    const { backend, directory, prompt, events } = await setup();
+    const session = await backend.createSession({ directory });
+    const messageId = await prompt(session, text);
+    // Read live state before a history request can trigger another recovery.
+    const live = structuredClone(backend.liveRecords(session.id));
+    const parts = live.flatMap((record) => record.parts);
+    expect(parts.filter((part) => part.type === 'reasoning')).toHaveLength(3);
+    const report = parts.find((part) => part.metadata?.nativeSubagentMessage);
+    expect(report.text).toBe('# Fixture report\n\nThe evidence is complete.');
+    expect(live.filter((record) => record.info.role === 'assistant').every((record) => record.info.parentID === messageId)).toBe(true);
+    expect(parts.filter((part) => ['find_by_name', 'grep_search'].includes(part.tool)).map((part) => part.state.status)).toEqual(['error', 'error']);
+    expect(JSON.stringify(live)).not.toContain('Hidden system notice');
+    expect(JSON.stringify(live)).not.toContain('Hidden unrelated sender');
+    expect(events.some((event) => event.payload.type === 'message.part.updated'
+      && event.payload.properties.part.type === 'reasoning')).toBe(true);
+    const history = await backend.loadHistory(session.id, directory);
+    const identityAndContent = (records) => records.toSorted((left, right) => left.info.time.created - right.info.time.created).map((record) => ({
+      id: record.info.id,
+      parts: record.parts.map((part) => ({ id: part.id, type: part.type, text: part.text, metadata: part.metadata })),
+    }));
+    expect(identityAndContent(live)).toEqual(identityAndContent(history.records));
+    const childId = report.metadata.nativeSubagentSessionID;
+    expect(history.childSessions.map((child) => child.id)).toContain(childId);
+    const childLive = structuredClone(backend.liveRecords(childId));
+    expect(childLive.flatMap((record) => record.parts).filter((part) => part.type === 'reasoning')).toHaveLength(1);
+    if (text === 'retained-agent-no-child-frames') {
+      const texts = childLive.flatMap((record) => record.parts).filter((part) => part.type === 'text').map((part) => part.text);
+      expect(texts).toContain('First progress.');
+      expect(texts.filter((value) => value === 'Evidence checked.')).toHaveLength(1);
+    }
+    const child = await backend.loadHistory(childId, directory);
+    expect(child.records[0].parts[0].text).toBe('Inspect fixture evidence.');
+    expect(child.records[1].info.parentID).toBe(child.records[0].info.id);
+    expect(child.records[1].parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+    expect(identityAndContent(childLive)).toEqual(identityAndContent(child.records));
+    await backend.closeSession(session.id);
+    expect(identityAndContent((await backend.loadHistory(session.id, directory)).records)).toEqual(identityAndContent(history.records));
+  });
+
+  it.each(['retained-child-followup', 'retained-child-followup-result-only'])('recovers later parent tasks and reasoning for %s', async (text) => {
+    const { backend, directory, prompt } = await setup();
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'retained-agent-content');
+    const report = backend.liveRecords(session.id).flatMap((record) => record.parts).find((part) => part.metadata?.nativeSubagentMessage);
+    const childId = report.metadata.nativeSubagentSessionID;
+    await prompt(session, text);
+    const live = structuredClone(backend.liveRecords(childId));
+    const users = live.filter((record) => record.info.role === 'user');
+    expect(users.map((record) => record.parts[0].text)).toEqual(['Inspect fixture evidence.', 'Also inspect error cases.']);
+    const reply = live.find((record) => record.parts.some((part) => part.type === 'text' && part.text === 'Error cases checked.'));
+    expect(reply.info.parentID).toBe(users[1].info.id);
+    expect(reply.parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+    const history = await backend.loadHistory(childId, directory);
+    const content = (records) => records.toSorted((left, right) => left.info.time.created - right.info.time.created)
+      .map((record) => ({ id: record.info.id, parentID: record.info.parentID,
+        parts: record.parts.map((part) => ({ id: part.id, type: part.type, text: part.text })) }));
+    expect(content(live)).toEqual(content(history.records));
+  });
+
   it('discovers only built-in models while preserving direct custom model prompts', async () => {
     const { backend, directory, prompt } = await setup();
     expect((await backend.catalog()).map((model) => model.id)).toEqual(['gemini-test']);

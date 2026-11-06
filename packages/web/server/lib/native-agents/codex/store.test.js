@@ -66,6 +66,27 @@ const createHarness = (handlers) => {
 };
 
 describe('Codex session store', () => {
+  it('reads completion timing from the verified rollout without loading or resuming turns', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-turn-waits-'));
+    directories.push(root);
+    const file = path.join(root, 'rollout.jsonl');
+    const row = (type, payload, ms) => JSON.stringify({ type, payload, timestamp: new Date(ms).toISOString() });
+    fs.writeFileSync(file, [
+      row('session_meta', { id: THREAD_ID }, 1000),
+      row('event_msg', { type: 'task_started', turn_id: 'turn' }, 1000),
+      row('response_item', { type: 'custom_tool_call', call_id: 'call' }, 2000),
+      row('response_item', { type: 'custom_tool_call_output', call_id: 'call' }, 2100),
+      row('event_msg', { type: 'task_complete', turn_id: 'turn' }, 5000),
+    ].join('\n'));
+    const { store, calls } = createHarness({ 'thread/read': async () => ({ thread: thread(THREAD_ID, { path: file }) }) });
+    const detail = await store.readTurnDetails(`ncx_${THREAD_ID}`, 'turn');
+    expect(detail.toolWaits.calls.get('call')).toMatchObject({ start: 2000, end: 2100 });
+    expect(calls.map(call => call.method)).toEqual(['thread/read']);
+    expect(await store.readTurnDetails(`ncx_${THREAD_ID}`, 'missing')).toBeNull();
+    fs.writeFileSync(file, row('session_meta', { id: CHILD_THREAD }, 1000));
+    await expect(store.readTurnDetails(`ncx_${THREAD_ID}`, 'turn')).rejects.toThrow('identity mismatch');
+  });
+
   it('loads a history larger than the RPC limit without requesting it in one response', async () => {
     const output = 'x'.repeat(5500);
     const turns = Array.from({ length: 22 }, (_, index) => ({

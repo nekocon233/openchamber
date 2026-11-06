@@ -32,6 +32,7 @@ import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
 import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
+import { useSourceControlProviderSync } from '@/hooks/useSourceControlProviderSync';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { resolveEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -52,6 +53,7 @@ import { cn } from '@/lib/utils';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
+import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
@@ -849,6 +851,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   const clearError = useSessionUIStore((state) => state.clearError);
   const setIsMobile = useUIStore((state) => state.setIsMobile);
   const refreshSourceControlAuth = useSourceControlAuthStore((state) => state.refreshAll);
+  const refreshSourceControlProviders = useSourceControlProviderRegistry((state) => state.refresh);
   const refreshLinearAuthStatus = useLinearAuthStore((state) => state.refreshStatus);
   const projects = useProjectsStore((state) => state.projects);
   // The mobile shell has no layout-level session list sync, so a lost
@@ -907,6 +910,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
     // only refresh in place when the transport is 'unchanged'.
     const refreshInPlace = () => {
       void initializeApp();
+      void refreshSourceControlProviders(apis.sourceControl);
       void refreshSourceControlAuth(apis.sourceControl, { force: true });
       void refreshLinearAuthStatus(apis.linear, { force: true });
       if (providersCount === 0) void loadProviders({ source: 'mobileApp:nativeResume' });
@@ -991,7 +995,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       lastNativeResumeSyncEventAtRef.current = now;
       window.dispatchEvent(new Event('openchamber:system-resume'));
     }
-  }, [agentsCount, apis.sourceControl, apis.linear, initializeApp, loadAgents, loadProviders, providersCount, refreshSourceControlAuth, refreshLinearAuthStatus]);
+  }, [agentsCount, apis.sourceControl, apis.linear, initializeApp, loadAgents, loadProviders, providersCount, refreshSourceControlAuth, refreshSourceControlProviders, refreshLinearAuthStatus]);
 
   useNativeMobileChrome();
   useNativeMobileLifecycle(handleNativeResume);
@@ -1056,6 +1060,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
 
   useBrowserPushSubscriptionReconciliation({ enabled: isConnected });
   useWebNotificationStream();
+  useSourceControlProviderSync(apis.sourceControl);
 
   // Switching instances (or disconnecting) only changes the runtime endpoint; the
   // stores still hold the previous instance's data. Mirror the web App.tsx reset
@@ -1265,9 +1270,10 @@ function MobileAppContent({ apis }: MobileAppProps) {
   // answer that stuck until something else forced a re-check.
   React.useEffect(() => {
     if (!isConnected) return;
+    void refreshSourceControlProviders(apis.sourceControl);
     void refreshSourceControlAuth(apis.sourceControl, { force: true });
     void refreshLinearAuthStatus(apis.linear, { force: true });
-  }, [apis.sourceControl, apis.linear, isConnected, refreshSourceControlAuth, refreshLinearAuthStatus]);
+  }, [apis.sourceControl, apis.linear, isConnected, refreshSourceControlAuth, refreshSourceControlProviders, refreshLinearAuthStatus, runtimeEndpointEpoch]);
 
   // Discover all worktrees for every known project so the draft session's
   // worktree/branch dropdown can list every available branch — not only the

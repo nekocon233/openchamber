@@ -9,6 +9,7 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import type { GitHubChecksSummary, GitHubPullStatus, GitHubReference, GitHubReferenceComment, GitHubReferenceDetail, LinearIssue, LinearIssueSummary } from '@/lib/api/types';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { useWorkspaceChildKey, useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
 
 import type { CachedValue } from './referenceCache';
 import { ReferenceMarkdownRewriteContext, useGitLabUploadRewrite } from './gitlabUploads';
@@ -46,6 +47,7 @@ const PreviewFrame: React.FC<{ pinned: boolean; footer: React.ReactNode; childre
         // Moving a hidden pane can reset its native scroll offset. Keep the reading position until reactivation.
         return () => { scrollVisible.current = false; };
     }, [pinned]);
+    useWorkspaceScroll(scrollRef, useWorkspaceChildKey('preview-scroll'), pinned);
     if (!pinned) {
         return (
             <article className="flex flex-col gap-4">

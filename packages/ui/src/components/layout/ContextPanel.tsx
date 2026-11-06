@@ -931,7 +931,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
           </span>
         </div>
         {/* The active surface's own toolbar lands here (contextPanelHeaderSlot). */}
-        <div ref={registerHeaderSlot} className="flex min-w-0 flex-1 items-stretch ps-1.5 empty:hidden" />
+        <div ref={registerHeaderSlot} className="flex min-w-0 flex-1 items-stretch ps-1.5 empty:hidden has-[[data-context-panel-actions]]:flex-none" />
         </>
       )}
       <div className="flex h-10 shrink-0 items-center gap-1 self-start px-1.5">

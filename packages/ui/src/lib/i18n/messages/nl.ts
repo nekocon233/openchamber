@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './nl.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -51,6 +52,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['nl'],
   "agents.combinations.loadFailed": "Combinaties konden niet worden geladen. Open de instellingen opnieuw en probeer het nogmaals.",
   "agents.combinations.saveFailed": "Combinaties konden niet worden opgeslagen. Probeer het opnieuw.",
   "agents.combinations.group": "Combinaties",
@@ -3674,11 +3676,11 @@ export const dict = {
   'chat.workStatus.telemetry.responseSpeed': 'Antwoord',
   'chat.workStatus.telemetry.responseSpeedDescription': 'Hoe snel de laatste tekst binnenkwam. Zonder de beginswachttijd, het redeneren en eerdere toolaanroepen. Een schatting op basis van teksttijdstempels, geen snelheidsmeting van de provider.',
   'chat.workStatus.telemetry.speed': 'Gem. tempo',
-  'chat.workStatus.telemetry.speedDescription': "Gegenereerde tokens over de geladen afgeronde beurten, gedeeld door de modeltijd zonder tooluitvoering en zonder pauzes langer dan 5 minuten. Bij het laden van oudere geschiedenis wordt dit opnieuw berekend.",
+  'chat.workStatus.telemetry.speedDescription': "Gegenereerde tokens over de geladen afgeronde beurten, gedeeld door de modeltijd zonder wachttijd op tools en zonder pauzes langer dan 5 minuten. Bij het laden van oudere geschiedenis wordt dit opnieuw berekend.",
   'chat.workStatus.telemetry.elapsed': 'Verstreken tijd',
   'chat.workStatus.telemetry.elapsedDescription': 'Tijd vanaf het eerste gebruikersbericht tot het laatste antwoord van de assistent. Inclusief wachten op het model, tooluitvoering, compactie en andere pauzes.',
   'chat.workStatus.telemetry.llmDuration': 'Modeltijd',
-  'chat.workStatus.telemetry.llmDurationDescription': "Tijd die aan alle modelstappen is besteed, inclusief het wachten op antwoorden. De uitvoeringstijd van tools en pauzes langer dan 5 minuten zijn eruit gehaald. Dit is niet alleen de tijd voor het genereren van tekst.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Tijd besteed aan modelstappen, inclusief het wachten op antwoorden. Wachttijd op tools en pauzes langer dan 5 minuten zijn afgetrokken. Achtergrondtools kunnen tegelijk met het model werken.",
   'chat.workStatus.telemetry.toolDuration': 'Tooltijd',
   'chat.workStatus.telemetry.toolDurationDescription': 'Tijd die is besteed aan het uitvoeren van tools, inclusief mislukte aanroepen. Tools die tegelijkertijd draaien tellen één keer mee en worden niet opgeteld.',
   'chat.workStatus.telemetry.ttft': 'Gemiddelde TTFT',
@@ -4346,4 +4348,10 @@ export const dict = {
   "nativeMemory.hostOnly": "Connect terminal CLIs on the server computer.",
   "nativeMemory.unavailable": "Memory sharing is unavailable on this runtime.",
   "nativeMemory.setupFailed": "Some CLI hooks couldn't be set up. Turn memory off and back on to try again.",
+  "workspaceRestore.draftConflict": "Dit item is gewijzigd. Je concept is hersteld en automatisch opslaan is gepauzeerd.",
+  "workspaceRestore.saveDraft": "Hersteld concept opslaan",
+  "workspaceRestore.useLatest": "Nieuwste inhoud gebruiken",
+  "workspaceRestore.itemMissing": "Dit item bestaat niet meer. Je niet-opgeslagen tekst blijft hier beschikbaar.",
+  "workspaceRestore.commentChanged": "De geselecteerde code is gewijzigd. Selecteer de regels opnieuw om verder te gaan met je opmerking.",
+  "workspaceRestore.restoreInput": "Onbevestigde invoer herstellen",
 };

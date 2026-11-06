@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n';
 import { useGitStore } from '@/stores/useGitStore';
 import { commitSelectionKey, useCommitSelectionStore } from '@/stores/useCommitSelectionStore';
 import { useRuntimeAPIs } from './useRuntimeAPIs';
+import { useWorkspaceViewState } from './useWorkspaceViewState';
 
 type CommitHistory =
   | { key: string; status: 'loading' }
@@ -18,11 +19,16 @@ export function useCommitComparison(directory: string | null, branch: string | n
   const runtimeKey = useGitStore((state) => state.runtimeKey);
   const key = commitSelectionKey(directory ?? '', branch, runtimeKey);
   const selectedCommit = useCommitSelectionStore((state) => state.selections.get(key) ?? null);
-  const selectCommit = useCommitSelectionStore((state) => state.select);
+  const saveSelection = useCommitSelectionStore((state) => state.select);
+  const [savedHash, setSavedHash] = useWorkspaceViewState('changes', directory ? key : null, 'commitHash');
+  const selectCommit = useCallback((target: string, commit: GitLogEntry) => {
+    saveSelection(target, commit);
+    if (target === key) setSavedHash(commit.hash);
+  }, [key, saveSelection, setSavedHash]);
   const [history, setHistory] = useState<CommitHistory | null>(null);
   const requestId = useRef(0);
-  const preferredHashRef = useRef(preferredHash);
-  preferredHashRef.current = preferredHash;
+  const preferredHashRef = useRef(preferredHash ?? savedHash);
+  preferredHashRef.current = preferredHash ?? savedHash;
   const refresh = useCallback(async () => {
     if (!directory || !enabled) return;
     const id = ++requestId.current;
@@ -41,9 +47,16 @@ export function useCommitComparison(directory: string | null, branch: string | n
       const commits = result.all.slice(0, 50);
       setHistory({ key, status: 'ready', commits });
       if (!useCommitSelectionStore.getState().selections.has(key)) {
-        const initial = preferredHashRef.current
-          ? commits.find((commit) => commit.hash === preferredHashRef.current)
+        const targetHash = preferredHashRef.current;
+        let initial = targetHash
+          ? commits.find((commit) => commit.hash === targetHash)
           : commits[0];
+        // A saved selection may have left the latest 50 commits while the app was closed.
+        if (!initial && targetHash) {
+          const exact = await git.getGitLog(directory, { maxCount: 1, to: targetHash });
+          if (requestId.current !== id || getRuntimeKey() !== requestRuntime || useCommitSelectionStore.getState().selections.has(key)) return;
+          initial = exact.all.find(commit => commit.hash === targetHash);
+        }
         if (initial) selectCommit(key, initial);
       }
     } catch (error) {

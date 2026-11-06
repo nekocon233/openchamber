@@ -10,13 +10,16 @@ import { fileURLToPath } from 'node:url';
  * `BusyDots` or `useWaitingBlink`, all on one shared clock. The infinite CSS
  * animations left are bounded by the user: the short `animate-spin` of a button
  * or a quick load, the diff's expand spinner, the model name that scrolls while
- * hovered. A new one fails here until it is replaced or listed with a reason.
+ * hovered. The optional circular session mark is an explicit user preference,
+ * paused by hidden surfaces. A new animation fails until replaced or listed with a reason.
  */
 const ALLOWED = [
   { file: 'index.css', declaration: 'animation: webkit-spin 1s linear infinite !important;' },
   { file: 'index.css', declaration: 'animation: oc-trailing-expand-spin 0.8s linear infinite;' },
   { file: 'index.css', declaration: 'animation: marquee-scroll 5s linear infinite alternate;' },
   { file: 'components/views/PierreDiffViewer.tsx', declaration: 'animation: oc-expand-spin 0.8s linear infinite;' },
+  { file: 'index.css', declaration: 'animation: session-activity-spin 1.5s steps(30) infinite;',
+    reason: 'The user requested the original optional circular session mark. It pauses through ClockPausedContext and inert.' },
 ];
 
 const SOURCE_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -27,7 +30,7 @@ const sourceFiles = readdirSync(SOURCE_ROOT, { recursive: true, encoding: 'utf8'
   .map((file) => file.split('\\').join('/'))
   .filter((file) => /\.(css|tsx?)$/.test(file) && !/\.test\.|__tests__\//.test(file));
 
-test('no infinite CSS animation outside the short, user-bounded ones', () => {
+test('no infinite CSS animation outside the documented exceptions', () => {
   const found: string[] = [];
   for (const file of sourceFiles) {
     const text = readFileSync(join(SOURCE_ROOT, file), 'utf8');

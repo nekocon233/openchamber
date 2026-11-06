@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './pl.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['pl'],
   ...settingsDict,
   "quota.magpie.error.unsupported": "Limity Magpie są niedostępne przy połączeniu z zewnętrzną instancją OpenCode.",
   "quota.magpie.unlimited": "Bez limitu",
@@ -3857,7 +3859,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': 'Czas rzeczywisty',
   'chat.workStatus.telemetry.elapsedDescription': 'Czas od pierwszej wiadomości użytkownika do końcowej odpowiedzi asystenta. Obejmuje oczekiwanie na model, wykonywanie narzędzi, kompakcję i inne przerwy.',
   'chat.workStatus.telemetry.llmDuration': 'Czas modelu',
-  'chat.workStatus.telemetry.llmDurationDescription': "Czas wszystkich kroków modelu wraz z oczekiwaniem na odpowiedzi. Czas narzędzi i przerwy dłuższe niż 5 minut są odjęte. To nie tylko czas generowania tekstu.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Czas kroków modelu wraz z oczekiwaniem na odpowiedzi. Odjęto oczekiwanie na narzędzia i przerwy dłuższe niż 5 minut. Narzędzia w tle mogą działać równocześnie z modelem.",
   'chat.workStatus.telemetry.toolDuration': 'Narzędzia',
   'chat.workStatus.telemetry.toolDurationDescription': 'Czas wykonywania narzędzi, także nieudanych wywołań. Narzędzia działające równolegle liczymy czasowo tylko raz.',
   'chat.workStatus.telemetry.ttft': 'Średni TTFT',
@@ -3866,7 +3868,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': 'Liczba wywołań modelu dla tego promptu. Odczytanie wyniku narzędzia i decyzja o dalszym działaniu zwykle wymaga kolejnego kroku.',
   'chat.workStatus.telemetry.tokens': 'Tokeny',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Wygenerowane tokeny we wczytanych ukończonych turach podzielone przez czas modelu bez wykonywania narzędzi i bez przerw dłuższych niż 5 minut. Wczytanie starszej historii przelicza wynik.",
+  'chat.workStatus.telemetry.speedDescription': "Wygenerowane tokeny we wczytanych ukończonych turach podzielone przez czas modelu bez oczekiwania na narzędzia i bez przerw dłuższych niż 5 minut. Wczytanie starszej historii przelicza wynik.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Wejście bez tokenów z pamięci podręcznej: {input}. ↓ Wygenerowane: {output} dla tekstu i wywołań narzędzi oraz {reasoning} dla rozumowania. Sumy ze wszystkich kroków tego promptu.',
   'chat.workStatus.telemetry.cacheHit': 'Śr. cache',
   'chat.workStatus.telemetry.cacheHitDescription': 'Udział tokenów wejściowych ponownie użytych z pamięci podręcznej promptu we wczytanych ukończonych turach. Wczytanie starszej historii przelicza wynik.',
@@ -4393,4 +4395,10 @@ export const dict: Record<I18nKey, string> = {
   "settings.gitlab.actions.addInstance": "Add instance",
   "settings.gitlab.device.waiting": "Authorize the device in GitLab, then return to OpenChamber. This page updates automatically.",
   "settings.gitlab.actions.openGitLab": "Open GitLab",
+  "workspaceRestore.draftConflict": "Ten element został zmieniony. Przywrócono szkic i wstrzymano automatyczne zapisywanie.",
+  "workspaceRestore.saveDraft": "Zapisz przywrócony szkic",
+  "workspaceRestore.useLatest": "Użyj najnowszej treści",
+  "workspaceRestore.itemMissing": "Ten element już nie istnieje. Niezapisany tekst jest nadal dostępny tutaj.",
+  "workspaceRestore.commentChanged": "Wybrany kod został zmieniony. Wybierz ponownie wiersze, aby kontynuować komentarz.",
+  "workspaceRestore.restoreInput": "Przywróć niepotwierdzone dane",
 };

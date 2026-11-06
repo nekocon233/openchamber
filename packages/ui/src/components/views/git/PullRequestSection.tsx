@@ -1,3 +1,5 @@
+import { useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui';
@@ -187,20 +189,6 @@ const remoteBranchToName = (value: string, remoteName: string | null): string =>
   return normalized;
 };
 
-const getPullRequestSnapshotKey = (directory: string, branch: string): string => `${directory}::${branch}`;
-
-type PullRequestDraftSnapshot = {
-  title: string;
-  body: string;
-  draft: boolean;
-  additionalContext: string;
-  targetBaseBranch?: string;
-  /** The base was picked by hand; a base found for the branch later never replaces it. */
-  targetBaseBranchChosen?: boolean;
-};
-
-const pullRequestDraftSnapshots = new Map<string, PullRequestDraftSnapshot>();
-
 const openExternal = openExternalUrl;
 
 function useDetectedUpstreamRepo(
@@ -282,11 +270,9 @@ export const PullRequestSection: React.FC<{
   // in VS Code, so neither is its entry point.
   const showWalkthroughAction = !isMobile && screenWidth >= 768 && !isVSCodeRuntime();
 
-  const snapshotKey = React.useMemo(() => getPullRequestSnapshotKey(directory, branch), [directory, branch]);
-  const initialSnapshot = React.useMemo(
-    () => pullRequestDraftSnapshots.get(snapshotKey) ?? null,
-    [snapshotKey]
-  );
+  const binding = useRepositoryBinding(directory, sourceControl);
+  const runtimeKey = binding.scope.runtimeKey;
+  const formOwner = binding.contexts[0] ? workspaceViewKey(runtimeKey, directory, 'create-pr', branch, workspaceRepositoryIdentity(binding.contexts[0])) : null;
   const ensurePrStatusEntry = useGitHubPrStatusStore((state) => state.ensureEntry);
   const setPrStatusParams = useGitHubPrStatusStore((state) => state.setParams);
   const beginActiveSourceControlContextsLoad = useGitHubPrStatusStore((state) => state.beginActiveContextsLoad);
@@ -297,39 +283,31 @@ export const PullRequestSection: React.FC<{
   const stopPrStatusWatching = useGitHubPrStatusStore((state) => state.stopWatching);
   const refreshPrStatus = useGitHubPrStatusStore((state) => state.refresh);
 
-  const [title, setTitle] = React.useState(() => initialSnapshot?.title ?? branchToTitle(branch));
-  const [body, setBody] = React.useState(() => initialSnapshot?.body ?? '');
-  const [draft, setDraft] = React.useState(() => initialSnapshot?.draft ?? readCreateAsDraft());
-  const [additionalContext, setAdditionalContext] = React.useState(() => initialSnapshot?.additionalContext ?? '');
-  // Until someone picks a base, it follows the one found for the branch, which
-  // can arrive after the form opened (the layer below it in a stack).
-  const [targetBaseBranchChosen, setTargetBaseBranchChosen] = React.useState(() => initialSnapshot?.targetBaseBranchChosen === true);
-  const [targetBaseBranch, setTargetBaseBranch] = React.useState(() => {
-    const fromSnapshot = typeof initialSnapshot?.targetBaseBranch === 'string'
-      ? normalizeBranchRef(initialSnapshot.targetBaseBranch)
-      : '';
-    if (fromSnapshot) {
-      return fromSnapshot;
-    }
-    return normalizeBranchRef(baseBranch);
-  });
+  const [savedTitle, setTitle] = useWorkspaceViewState('pullRequestForm', formOwner, 'title');
+  const title = savedTitle ?? branchToTitle(branch);
+  const [savedBody, setBody] = useWorkspaceViewState('pullRequestForm', formOwner, 'body');
+  const body = savedBody ?? '';
+  const [savedDraft, setDraft] = useWorkspaceViewState('pullRequestForm', formOwner, 'draft');
+  const draft = savedDraft ?? readCreateAsDraft();
+  const [additionalContext, setAdditionalContext] = useWorkspaceViewState('pullRequestForm', formOwner, 'additionalContext');
+  const [targetBaseBranchChosen, setTargetBaseBranchChosen] = useWorkspaceViewState('pullRequestForm', formOwner, 'targetBaseBranchChosen');
+  const [savedTargetBaseBranch, setTargetBaseBranch] = useWorkspaceViewState('pullRequestForm', formOwner, 'targetBaseBranch');
+  const targetBaseBranch = savedTargetBaseBranch ?? normalizeBranchRef(baseBranch);
 
   const chooseTargetBaseBranch = React.useCallback((value: string) => {
     setTargetBaseBranchChosen(true);
     setTargetBaseBranch(value);
-  }, []);
+  }, [setTargetBaseBranch, setTargetBaseBranchChosen]);
 
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [isCreating, setIsCreating] = React.useState(false);
   // A push for review's options; work in progress shares `draft`, and its remembered choice.
-  const [topic, setTopic] = React.useState('');
-  const [hashtags, setHashtags] = React.useState('');
-  const [privateChange, setPrivateChange] = React.useState(false);
+  const [topic, setTopic] = useWorkspaceViewState('pullRequestForm', formOwner, 'topic');
+  const [hashtags, setHashtags] = useWorkspaceViewState('pullRequestForm', formOwner, 'hashtags');
+  const [privateChange, setPrivateChange] = useWorkspaceViewState('pullRequestForm', formOwner, 'privateChange');
   const [changeIdRevision, setChangeIdRevision] = React.useState(0);
 
-  const [isContextOpen, setIsContextOpen] = React.useState(false);
-  const binding = useRepositoryBinding(directory, sourceControl);
-  const runtimeKey = binding.scope.runtimeKey;
+  const [isContextOpen, setIsContextOpen] = useWorkspaceViewState('pullRequestForm', formOwner, 'contextOpen');
   React.useEffect(() => {
     if (!directory) return;
     const capturedRuntimeKey = binding.scope.runtimeKey;
@@ -482,7 +460,7 @@ export const PullRequestSection: React.FC<{
         setTargetBaseBranch(fallback);
       }
     }
-  }, [availableBaseBranches, baseBranch, targetBaseBranch]);
+  }, [availableBaseBranches, baseBranch, setTargetBaseBranch, targetBaseBranch]);
 
   const pendingActionRefreshTimersRef = React.useRef<number[]>([]);
   const mutationKeysRef = React.useRef(new Map<string, { key: string; inFlight: boolean }>());
@@ -518,10 +496,10 @@ export const PullRequestSection: React.FC<{
 
   // Set target base branch to upstream's default branch when using detected upstream
   React.useEffect(() => {
-    if (useDetectedUpstream && detectedUpstream?.defaultBranch) {
+    if (useDetectedUpstream && detectedUpstream?.defaultBranch && !targetBaseBranchChosen) {
       setTargetBaseBranch(detectedUpstream.defaultBranch);
     }
-  }, [useDetectedUpstream, detectedUpstream?.defaultBranch]);
+  }, [useDetectedUpstream, detectedUpstream?.defaultBranch, setTargetBaseBranch, targetBaseBranchChosen]);
 
   const pr = status?.changeRequest ?? status?.pr ?? null;
   const statusIdentity = status?.identity ?? readContext;
@@ -628,14 +606,8 @@ export const PullRequestSection: React.FC<{
   }, [prStatusKey, readContext, startPrStatusWatching, stopPrStatusWatching]);
 
   React.useEffect(() => {
-    const snapshot = pullRequestDraftSnapshots.get(snapshotKey) ?? null;
-    setTitle(snapshot?.title ?? branchToTitle(branch));
-    setBody(snapshot?.body ?? '');
-    setDraft(snapshot?.draft ?? readCreateAsDraft());
-    const chosen = snapshot?.targetBaseBranchChosen === true && Boolean(snapshot.targetBaseBranch);
-    setTargetBaseBranchChosen(chosen);
-    setTargetBaseBranch(chosen && snapshot?.targetBaseBranch ? normalizeBranchRef(snapshot.targetBaseBranch) : normalizeBranchRef(baseBranch));
-  }, [baseBranch, branch, snapshotKey]);
+    if (!targetBaseBranchChosen) setTargetBaseBranch(normalizeBranchRef(baseBranch));
+  }, [baseBranch, targetBaseBranchChosen, setTargetBaseBranch]);
 
   React.useEffect(() => {
     if (!readContext || !prStatusKey || !sourceControlAuth.connected) return;
@@ -680,19 +652,7 @@ export const PullRequestSection: React.FC<{
     }
   }, [refresh, sourceControlAuth.connected, sourceControlAuthChecked]);
 
-  React.useEffect(() => {
-    if (!directory || !branch) {
-      return;
-    }
-    pullRequestDraftSnapshots.set(snapshotKey, {
-      title,
-      body,
-      draft,
-      additionalContext,
-      targetBaseBranch,
-      targetBaseBranchChosen,
-    });
-  }, [snapshotKey, title, body, draft, additionalContext, targetBaseBranch, targetBaseBranchChosen, directory, branch]);
+
 
   React.useEffect(() => {
     return () => {
@@ -725,11 +685,11 @@ export const PullRequestSection: React.FC<{
       .then((log) => {
         const subject = log.all.length === 1 ? log.all[0]?.message.trim() : '';
         if (cancelled || !subject) return;
-        setTitle((current) => (current === branchToTitle(branch) ? subject : current));
+        setTitle((current) => ((current ?? branchToTitle(branch)) === branchToTitle(branch) ? subject : current));
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [branch, commitRangeBase, directory]);
+  }, [branch, commitRangeBase, directory, setTitle]);
 
   // Unpublished, or ahead of what it tracks: the remote misses commits. On a
   // review host the change's own patchsets say it: the local commit is one of
@@ -775,7 +735,7 @@ export const PullRequestSection: React.FC<{
     } finally {
       setIsGenerating(false);
     }
-  }, [additionalContext, branch, commitRangeBase, descriptorOf, directory, isGenerating, onGeneratedDescription, readContext, t]);
+  }, [additionalContext, branch, commitRangeBase, descriptorOf, directory, isGenerating, onGeneratedDescription, readContext, setBody, setTitle, t]);
 
   const createPr = React.useCallback(async () => {
     if (sourceControlCapabilities?.changeRequests !== true) {

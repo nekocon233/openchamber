@@ -71,6 +71,34 @@ describe('Antigravity application interaction proposals', () => {
     expect(updated.proposal.callID).not.toBe(first.proposal.callID);
   });
 
+  it('removes a terminal plan closing tag while retaining its existing decision identity', () => {
+    const source = input(round(0, markedPlan(`${PLAN}\n</openchamber-plan-v1>`)));
+    const before = structuredClone(source.entries);
+    const result = agyInteractionProposal(source);
+    expect(result.proposal.plan).toBe(PLAN);
+    expect(result.proposal.questions[0].question).toBe(PLAN);
+    expect(result.part.state.input.plan).toBe(PLAN);
+    expect(result.proposal.revision).toBe('8e9c440b7f9a6203c5ee81817246f9b9f819bb5fb039453fa4b7577ebb46856d');
+    expect(source.entries).toEqual(before);
+  });
+
+  it('accepts a closing tag on a CRLF line with trailing whitespace', () => {
+    const result = agyInteractionProposal(input(round(0, markedPlan(`${PLAN}\r\n  </openchamber-plan-v1> \r\n\t`))));
+    expect(result.proposal.plan).toBe(PLAN);
+    expect(result.proposal.questions[0].question).toBe(PLAN);
+  });
+
+  it.each(['</openchamber-plan-v1>', ' \n</openchamber-plan-v1>\n'])('refuses a plan containing only its closing tag: %j', (body) => {
+    expect(agyInteractionProposal(input(round(0, markedPlan(body))))).toBeNull();
+  });
+
+  it('preserves closing tags in ordinary questions and inside plan examples', () => {
+    const literal = `${PLAN}\n\n\`\`\`xml\n</openchamber-plan-v1>\n\`\`\``;
+    expect(agyInteractionProposal(input(round(0, markedPlan(literal)))).proposal.plan).toBe(literal);
+    const ordinary = `Explain this tag:\n</openchamber-plan-v1>`;
+    expect(agyInteractionProposal(input(round(0, ask(ordinary)))).proposal.questions[0].question).toBe(ordinary);
+  });
+
   it('aggregates unresolved questions and prioritizes them over a marked plan in the same round', () => {
     const entries = [
       entry(0, 'USER_INPUT'),

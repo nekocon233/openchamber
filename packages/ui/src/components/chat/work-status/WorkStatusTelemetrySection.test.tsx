@@ -392,12 +392,12 @@ describe('mounted turn telemetry with live sync stores', () => {
     }
   });
 
-  test('the heading falls back to whole-turn speed when response speed is unavailable', async () => {
+  test('the heading and speed row show only the average regardless of response timing', async () => {
     await act(async () => store().setState({ sessionStatusReady: true, part: { [assistant.id]: [
       { id: 'text', type: 'text', sessionID: sessionId, messageID: assistant.id, text: 'Final reply', time: { start: 3000, end: 5000 } },
     ] } }));
-    expect(dom.container.querySelector('button')?.textContent).toBe('Turn stats~10 tok/s');
-    expect(dom.container.textContent).toContain('Response~10 tok/s');
+    expect(dom.container.querySelector('button')?.textContent).toBe('Turn stats~5 tok/s');
+    expect(dom.container.textContent).not.toContain('Response');
     expect(dom.container.textContent).toContain('Avg speed~5 tok/s');
     await act(async () => store().setState({ part: { [assistant.id]: [] } }));
     expect(dom.container.querySelector('button')?.textContent).toBe('Turn stats~5 tok/s');
@@ -414,22 +414,22 @@ describe('mounted turn telemetry with live sync stores', () => {
       },
     }));
     const triggers = dom.container.querySelectorAll<HTMLElement>('[data-slot="tooltip-trigger"]');
-    expect(triggers.length).toBe(10);
+    expect(triggers.length).toBe(9);
     for (const trigger of triggers) expect(trigger.tabIndex).toBe(0);
     expect(dom.container.querySelectorAll('[title]').length).toBe(0);
-    const response = triggers[0];
+    const speed = triggers[0];
     await act(async () => {
-      response.dispatchEvent(new window.PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
-      response.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
-      response.dispatchEvent(new window.MouseEvent('mouseenter', { bubbles: true }));
-      response.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true }));
+      speed.dispatchEvent(new window.PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
+      speed.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+      speed.dispatchEvent(new window.MouseEvent('mouseenter', { bubbles: true }));
+      speed.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 650));
     });
     expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
-    expect(response.hasAttribute('data-popup-open')).toBe(false);
+    expect(speed.hasAttribute('data-popup-open')).toBe(false);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
-    expect(response.hasAttribute('data-popup-open')).toBe(true);
-    expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain('How fast the final text arrived');
+    expect(speed.hasAttribute('data-popup-open')).toBe(true);
+    expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain('Generated tokens across completed turns loaded in this session');
     expect(dom.container.querySelector('[data-slot="tooltip-content"]')).toBeNull();
   });
 

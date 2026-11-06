@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './de.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -52,6 +53,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['de'],
   "agents.combinations.loadFailed": "Kombinationen konnten nicht geladen werden. Öffne die Einstellungen erneut und versuche es noch einmal.",
   "agents.combinations.saveFailed": "Kombinationen konnten nicht gespeichert werden. Versuche es erneut.",
   "agents.combinations.group": "Kombinationen",
@@ -3903,7 +3905,7 @@ export const dict = {
   'chat.workStatus.telemetry.elapsed': 'Verstrichene Zeit',
   'chat.workStatus.telemetry.elapsedDescription': 'Zeit von der ersten Benutzernachricht bis zur letzten Antwort des Assistenten. Enthält das Warten auf das Modell, Werkzeugausführung, Kompaktierung und andere Lücken.',
   'chat.workStatus.telemetry.llmDuration': 'Modellzeit',
-  'chat.workStatus.telemetry.llmDurationDescription': "Zeit aller Modellschritte einschließlich Warten auf Antworten. Die Werkzeuglaufzeit ist abgezogen, und Pausen über 5 Minuten zählen als Leerlauf. Das ist nicht nur die Zeit zur Texterzeugung.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Zeit der Modellschritte einschließlich Warten auf Antworten. Wartezeiten auf Werkzeuge und Pausen über 5 Minuten sind abgezogen. Hintergrundwerkzeuge können gleichzeitig mit dem Modell laufen.",
   'chat.workStatus.telemetry.toolDuration': 'Werkzeugzeit',
   'chat.workStatus.telemetry.toolDurationDescription': 'Laufzeit der Werkzeuge einschließlich fehlgeschlagener Aufrufe. Parallel laufende Werkzeuge zählen zeitlich nur einmal.',
   'chat.workStatus.telemetry.ttft': 'Mittlere TTFT',
@@ -3912,7 +3914,7 @@ export const dict = {
   'chat.workStatus.telemetry.stepsDescription': 'Wie oft das Modell für diesen Prompt aufgerufen wurde. Werkzeugergebnisse lesen und den nächsten Schritt entscheiden erfordert meist einen weiteren Aufruf.',
   'chat.workStatus.telemetry.tokens': 'Tokens',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Erzeugte Tokens aller geladenen abgeschlossenen Turns, geteilt durch die Modellzeit ohne Werkzeugausführung und ohne Pausen über 5 Minuten. Beim Nachladen älterer Historie wird neu berechnet.",
+  'chat.workStatus.telemetry.speedDescription': "Erzeugte Tokens aller geladenen abgeschlossenen Turns, geteilt durch die Modellzeit ohne Wartezeiten auf Werkzeuge und ohne Pausen über 5 Minuten. Beim Nachladen älterer Historie wird neu berechnet.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Eingabetokens ohne Cache: {input}. ↓ Erzeugte Tokens: {output} für Text und Werkzeugaufrufe plus {reasoning} zum Denken. Summen über alle Schritte dieses Prompts.',
   'chat.workStatus.telemetry.cacheHit': 'Ø Cache-Treffer',
   'chat.workStatus.telemetry.cacheHitDescription': 'Anteil der Eingabetokens, die in geladenen abgeschlossenen Turns aus dem Prompt-Cache wiederverwendet wurden. Beim Nachladen älterer Historie wird neu berechnet.',
@@ -4385,4 +4387,10 @@ export const dict = {
   "settings.gitlab.actions.addInstance": "Add instance",
   "settings.gitlab.device.waiting": "Authorize the device in GitLab, then return to OpenChamber. This page updates automatically.",
   "settings.gitlab.actions.openGitLab": "Open GitLab",
+  "workspaceRestore.draftConflict": "Dieser Eintrag wurde geändert. Dein Entwurf wurde wiederhergestellt und das automatische Speichern pausiert.",
+  "workspaceRestore.saveDraft": "Wiederhergestellten Entwurf speichern",
+  "workspaceRestore.useLatest": "Aktuellen Inhalt verwenden",
+  "workspaceRestore.itemMissing": "Dieser Eintrag existiert nicht mehr. Dein ungespeicherter Text bleibt hier verfügbar.",
+  "workspaceRestore.commentChanged": "Der ausgewählte Code wurde geändert. Wähle die Zeilen erneut aus, um deinen Kommentar fortzusetzen.",
+  "workspaceRestore.restoreInput": "Unbestätigte Eingabe wiederherstellen",
 };

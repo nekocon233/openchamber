@@ -35,6 +35,7 @@ import {
   unknownError,
 } from '../records.js';
 import { codexCompactionItemId, parseCodexUserMessageItem, partsForCodexItem, codexSkillId, codexSkillTextHash } from './items.js';
+import { codexToolWaitDuration } from './history-details.js';
 
 const DEFAULT_AGENT = 'build';
 const itemIdentitySchema = z.object({ id: z.string() });
@@ -251,6 +252,9 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
           }),
           parts: [],
         };
+        currentAssistant.info.metadata = { openchamber: { telemetry: {
+          toolWaitDurationMs: outcome === null ? null : codexToolWaitDuration(detail, segmentKey),
+        } } };
         records.push(currentAssistant);
       }
 

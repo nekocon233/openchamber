@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { prepareAgyDelegation, prepareAgyChecklist } from './mcp-setup.js';
 
@@ -32,6 +33,7 @@ import { agyPermissionError } from './protocol.js';
 import { AGY_PLAN_QUESTION_PREFIX } from './interaction-signals.js';
 import { captureAntigravityMeasurements } from './measurements.js';
 import { antigravityChecklistSnapshot } from './checklist.js';
+import { prepareAgyContextSettings } from './context-settings.js';
 
 const MINIMUM_VERSION = [1, 1, 15];
 const IDLE_CLOSE_MS = 5 * 60_000;
@@ -71,11 +73,16 @@ export const createAntigravityBackend = ({
   now = Date.now,
   home = null,
   startupTimeoutMs = 30_000,
+  prepareContextSettings = prepareAgyContextSettings,
 }) => {
   const store = createAntigravityStore({ registry, home, now });
   const sessions = new Map();
   const admissions = new Map();
-  const subagents = createAntigravitySubagents({ publisher, now });
+  const subagents = createAntigravitySubagents({ publisher, now, loadHistory: store.loadHistory, readReasoning: store.completedReasoning });
+  const refreshReasoning = (session, projection) => {
+    try { projection.restoreReasoning(store.completedReasoning(session.nativeId)); }
+    catch { /* Optional enrichment preserves live state; history reads report failures. */ }
+  };
   // Updated only by successful discovery. The CLI still validates availability
   // at launch; this map translates legacy selections without probing each turn.
   let modelAliases = null;
@@ -335,6 +342,14 @@ export const createAntigravityBackend = ({
     await turn.projection.applyStep(step, now(), async (stepIndex) => {
       await registry.bindAntigravityMessage(session.id, turn.send.messageId, stepIndex, turn.send);
     });
+    if (step.step_type === 'agent_response' && step.state === 'DONE') {
+      refreshReasoning(session, turn.projection);
+      turn.reasoningAfterTool = true;
+    } else if (turn.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
+      && ['DONE', 'ERROR', 'INVALID'].includes(step.state)) {
+      turn.reasoningAfterTool = false;
+      refreshReasoning(session, turn.projection);
+    }
   };
 
   const ensureSession = async (sessionId, directory, model, agent, effort) => {
@@ -374,48 +389,61 @@ export const createAntigravityBackend = ({
     }
     const tools = toolConfiguration(sessionId);
     const toolKey = tools?.key ?? '';
-    if (session.process && (session.model !== model || session.agent !== agent || session.effort !== effort || (session.toolKey ?? '') !== toolKey)) {
-      const previous = session.process;
-      await previous.stop('close');
-      if (session.process === previous) session.process = null;
-      session.firstPrompt = true;
-    }
-    if (!session.process) {
-      const command = await requireCommand();
-      const checklist = await checklistLaunch(session.directory);
-      if (tools) await prepareAgyDelegation(tools, buildEnv());
-      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS, checklist.instructions,
-        tools?.child ? 'This is a delegated subagent task. Report your findings or plan to the parent. Do not request approval to execute a plan and do not create subagents.' : null,
-      ].filter(Boolean).join('\n\n');
-      const process = startAgyProcess({
-        executable: command.executable,
-        args: [...command.argsPrefix, ...agyProcessArgs({ cwd: session.directory, model, conversationId: session.nativeId, agent, effort })],
-        cwd: session.directory,
-        env: { ...checklist.env, ...tools?.env, OPENCHAMBER_DELEGATION_CHILD: tools?.child ? '1' : '0' },
-        startupTimeoutMs,
-        onFrame: (frame) => enqueue(session, process, () => handleFrame(session, process, frame)),
-        onExit: (error) => enqueue(session, process, () => handleExit(session, process, error)),
-      });
-      session.process = process;
-      session.toolKey = toolKey;
-      session.globalInstructions = globalInstructions;
-      try {
-        const init = await process.ready;
-        if (init.conversation_id !== session.nativeId) {
-          throw backendError('Antigravity restored a different conversation', 'NATIVE_ANTIGRAVITY_INVALID_RESUME');
-        }
-        session.model = model;
-        session.agent = agent;
-        session.effort = effort;
+    const context = await prepareContextSettings({ home, modelId: model });
+    let adopted = false;
+    try {
+      if (session.process && (session.model !== model || session.agent !== agent || session.effort !== effort || (session.toolKey ?? '') !== toolKey
+        || !isDeepStrictEqual(session.contextSettings ?? null, context?.data ?? null))) {
+        const previous = session.process;
+        await previous.stop('close');
+        if (session.process === previous) session.process = null;
         session.firstPrompt = true;
-      } catch (error) {
-        if (session.process === process) session.process = null;
-        await process.stop('interrupt');
-        throw error;
       }
+      if (!session.process) {
+        const command = await requireCommand();
+        const checklist = await checklistLaunch(session.directory);
+        if (tools) await prepareAgyDelegation(tools, buildEnv());
+        const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS, checklist.instructions,
+          tools?.child ? 'This is a delegated subagent task. Report your findings or plan to the parent. Do not request approval to execute a plan and do not create subagents.' : null,
+        ].filter(Boolean).join('\n\n');
+        const process = startAgyProcess({
+          executable: command.executable,
+          args: [...command.argsPrefix, ...agyProcessArgs({ cwd: session.directory, model, conversationId: session.nativeId, agent, effort,
+            settingsFile: context?.file ?? null })],
+          cwd: session.directory,
+          env: { ...checklist.env, ...tools?.env, OPENCHAMBER_DELEGATION_CHILD: tools?.child ? '1' : '0' },
+          startupTimeoutMs,
+          onFrame: (frame) => enqueue(session, process, () => handleFrame(session, process, frame)),
+          onExit: (error) => enqueue(session, process, async () => {
+            if (context) await context.cleanup().catch(eventFailure);
+            await handleExit(session, process, error);
+          }),
+        });
+        adopted = true;
+        session.process = process;
+        session.toolKey = toolKey;
+        session.contextSettings = context?.data ?? null;
+        session.globalInstructions = globalInstructions;
+        try {
+          const init = await process.ready;
+          if (init.conversation_id !== session.nativeId) {
+            throw backendError('Antigravity restored a different conversation', 'NATIVE_ANTIGRAVITY_INVALID_RESUME');
+          }
+          session.model = model;
+          session.agent = agent;
+          session.effort = effort;
+          session.firstPrompt = true;
+        } catch (error) {
+          if (session.process === process) session.process = null;
+          await process.stop('interrupt');
+          throw error;
+        }
+      }
+      clearTimeout(session.idleTimer);
+      return session;
+    } finally {
+      if (context && !adopted) await context.cleanup().catch(eventFailure);
     }
-    clearTimeout(session.idleTimer);
-    return session;
   };
 
   return {
@@ -470,6 +498,10 @@ export const createAntigravityBackend = ({
       if (!decoded || decoded.backend !== 'antigravity') return null;
       const history = await store.loadHistory(sessionId, decoded.conversationId, directory);
       const session = sessions.get(sessionId);
+      if (history) {
+        if (session?.turn) refreshReasoning(session, session.turn.projection);
+        else subagents.refreshReasoning(sessionId);
+      }
       if (history && !session?.turn) {
         session?.lastProjection?.restoreMissingHistory(history.records);
         if (history.interactionProposal) await onInteraction(history.interactionProposal);

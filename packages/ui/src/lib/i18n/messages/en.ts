@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './en.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -52,6 +53,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['en'],
   "agents.combinations.loadFailed": "Could not load combinations. Reopen settings and retry.",
   "agents.combinations.saveFailed": "Could not save combinations. Retry.",
   "agents.combinations.group": "Combinations",
@@ -3902,11 +3904,11 @@ export const dict = {
   'chat.workStatus.telemetry.responseSpeed': 'Response',
   'chat.workStatus.telemetry.responseSpeedDescription': 'How fast the final text arrived. Excludes the initial wait, reasoning, and earlier tool calls. An estimate from text timestamps, not a provider speed measurement.',
   'chat.workStatus.telemetry.speed': 'Avg speed',
-  'chat.workStatus.telemetry.speedDescription': "Generated tokens across completed turns loaded in this session, divided by model time with tool execution and pauses longer than 5 minutes removed. Loading older history recalculates it.",
+  'chat.workStatus.telemetry.speedDescription': "Generated tokens across completed turns loaded in this session, divided by model time excluding tool waits and pauses longer than 5 minutes. Loading older history recalculates it.",
   'chat.workStatus.telemetry.elapsed': 'Elapsed',
   'chat.workStatus.telemetry.elapsedDescription': 'Wall-clock time from the first user message to the final assistant response. Includes model waiting, tool execution, compaction, and other gaps.',
   'chat.workStatus.telemetry.llmDuration': 'Model time',
-  'chat.workStatus.telemetry.llmDurationDescription': "Time spent on all model steps, including waiting for responses. Tool execution time is removed, and pauses longer than 5 minutes count as idle. This is not just time spent generating text.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Time spent on model steps, including waiting for responses. Tool waits and pauses longer than 5 minutes are removed. Background tools can run while the model works.",
   'chat.workStatus.telemetry.toolDuration': 'Tool time',
   'chat.workStatus.telemetry.toolDurationDescription': 'Time spent running tools, including failed calls. Tools running at the same time are counted once, not added together.',
   'chat.workStatus.telemetry.ttft': 'Average TTFT',
@@ -4334,6 +4336,12 @@ export const dict = {
   'sessions.moveChatToProject.description': 'The conversation continues in the project\'s folder. Files the chat created stay where they are.',
   'sessions.moveChatToProject.success': 'Chat moved to the project',
   'sessions.moveChatToProject.failed': 'Could not move the chat',
+  "workspaceRestore.draftConflict": "This item changed. Your draft is restored and autosave is paused.",
+  "workspaceRestore.saveDraft": "Save restored draft",
+  "workspaceRestore.useLatest": "Use latest content",
+  "workspaceRestore.itemMissing": "This item no longer exists. Your unsaved text is available here.",
+  "workspaceRestore.commentChanged": "The selected code changed. Select the lines again to continue your comment.",
+  "workspaceRestore.restoreInput": "Restore unconfirmed input",
 } as const;
 
 export type I18nKey = keyof typeof dict;

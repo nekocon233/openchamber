@@ -394,6 +394,7 @@ export const createNativeAgentsRuntime = ({
     toolConfiguration: (id) => sourceTools.get(id),
     request: (method, params) => appServer.request(method, params),
     readGlobalInstructions,
+    readTurnDetails: (sessionId, turnId) => codex.readTurnDetails(sessionId, turnId),
     publisher,
     questions,
     onTurnFinished,

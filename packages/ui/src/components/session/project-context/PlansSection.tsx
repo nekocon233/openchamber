@@ -17,6 +17,7 @@ import { openSessionLink } from '@/lib/router/openSessionFromRoute';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { cn } from '@/lib/utils';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { KnowledgeComposer } from './KnowledgeComposer';
 import { KNOWLEDGE_ICON_BUTTON_CLASS } from './knowledgeRowStyle';
 import { KnowledgeMenu, KnowledgePinToggle } from './KnowledgeActions';
@@ -70,6 +71,7 @@ export const PlansSection: React.FC<{
   selectedPlanId: string | null;
 }> = ({ projectRef, plans, query, onOpenPlan, pinnedPlanIds, onTogglePinned, selectedPlanId }) => {
   const { t } = useI18n();
+  const runtimeKey = React.useRef(getRuntimeKey()).current;
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [isImporting, setIsImporting] = React.useState(false);
   const createPlan = useProjectContextStore((state) => state.createPlan);
@@ -126,14 +128,15 @@ export const PlansSection: React.FC<{
         return;
       }
       const parsed = parsePlanMarkdown(text, fallbackTitle || t('rightSidebar.contextNotesTodo.plan.defaultTitle'));
-      const created = await createPlan(projectRef, { title: parsed.title, body: parsed.body });
+      const created = await createPlan(projectRef, { title: parsed.title, body: parsed.body }, runtimeKey);
+      if (runtimeKey !== getRuntimeKey()) return;
       if (!created) {
         toast.error(t('rightSidebar.contextNotesTodo.toast.importPlanFailed'));
         return;
       }
       toast.success(t('rightSidebar.contextNotesTodo.toast.planImported'));
     },
-    [createPlan, projectRef, t]
+    [createPlan, projectRef, runtimeKey, t]
   );
 
   const handleTriggerImport = React.useCallback(async () => {
@@ -234,15 +237,15 @@ export const PlansSection: React.FC<{
   // and the rest is written in the editor.
   const handleCreatePlan = React.useCallback(async (title: string) => {
     const createdFor = resolveProjectContextId(projectRef);
-    const created = await createPlan(projectRef, { title, body: '' });
+    const created = await createPlan(projectRef, { title, body: '' }, runtimeKey);
     if (!created) {
       const detail = useProjectContextStore.getState().getEntry(projectRef).error;
-      toast.error(t('rightSidebar.contextNotesTodo.toast.createPlanFailed'), detail ? { description: detail } : undefined);
+      if (runtimeKey === getRuntimeKey()) toast.error(t('rightSidebar.contextNotesTodo.toast.createPlanFailed'), detail ? { description: detail } : undefined);
       return false;
     }
-    if (shownProjectIdRef.current === createdFor) handleOpenPlan(created);
+    if (shownProjectIdRef.current === createdFor && runtimeKey === getRuntimeKey()) handleOpenPlan(created);
     return true;
-  }, [createPlan, handleOpenPlan, projectRef, t]);
+  }, [createPlan, handleOpenPlan, projectRef, runtimeKey, t]);
 
   return (
     <div className="space-y-2">
@@ -258,6 +261,7 @@ export const PlansSection: React.FC<{
         }}
       />
       <KnowledgeComposer
+        draftId="plan"
         placeholder={t('rightSidebar.contextNotesTodo.plans.newPlaceholder')}
         addLabel={t('rightSidebar.contextNotesTodo.plans.create')}
         maxLength={PROJECT_PLAN_TITLE_MAX_LENGTH}

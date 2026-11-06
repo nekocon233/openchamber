@@ -1,3 +1,9 @@
+import { getSafeStorage } from '@/stores/utils/safeStorage';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { useWorkspaceScroll, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
+import { useWorkspaceDraftStore } from '@/stores/useWorkspaceDraftStore';
+import { DraftRecoveryNotice } from '@/components/ui/draft-recovery-notice';
 import React from 'react';
 import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
@@ -201,6 +207,11 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
   const [loadedProjectPlanPath, setLoadedProjectPlanPath] = React.useState<string | null>(null);
   const hasDocument = Boolean(loadedProjectPlanId);
   const [content, setContent] = React.useState<string>('');
+  const planDraftKey = savedPlanProjectRef && savedPlanId ? workspaceViewKey(activeRuntimeKey, savedPlanProjectRef.path, 'plan', savedPlanId) : null;
+  const [serverContent, setServerContent] = React.useState('');
+  const recovery = useWorkspaceDraft(planDraftKey, serverContent, loadedProjectPlanId === savedPlanId && loadedProjectPlanId !== null);
+  const { conflict: recoveryConflict, setValue: setRecoveredContent } = recovery;
+
   const { isPlaying: isTTSPlaying, play: playTTS, stop: stopTTS } = useMessageTTS();
   const showMessageTTSButtons = useConfigStore((state) => state.showMessageTTSButtons);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -217,13 +228,24 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
   const sendPromptTitle = React.useMemo(() => parsedTitle.trim() || t('planView.title.default'), [parsedTitle, t]);
   const [loading, setLoading] = React.useState(false);
   const [copiedContent, setCopiedContent] = React.useState(false);
-  const [mdViewMode, setMdViewMode] = React.useState<'preview' | 'edit'>('edit');
+  const [savedViewMode, setMdViewMode] = useWorkspaceViewState('knowledge', planDraftKey, 'planViewMode');
+  const legacyViewMode = React.useRef<{ owner: string | null | undefined; value: 'preview' | 'edit' }>({ owner: undefined, value: 'edit' });
+  if (legacyViewMode.current.owner !== planDraftKey) {
+    let value: 'preview' | 'edit' = 'edit';
+    try { if (JSON.parse(getSafeStorage().getItem('openchamber:plan:md-viewer-mode') ?? 'null') === 'preview') value = 'preview'; }
+    catch { /* An absent legacy preference uses the editor. */ }
+    legacyViewMode.current = { owner: planDraftKey, value };
+  }
+  const mdViewMode = savedViewMode ?? legacyViewMode.current.value;
   const copiedContentTimeoutRef = React.useRef<number | null>(null);
 
-  const [lineSelection, setLineSelection] = React.useState<SelectedLineRange | null>(null);
   const editorViewRef = React.useRef<EditorView | null>(null);
   const editorWrapperRef = React.useRef<HTMLDivElement | null>(null);
   const previewRef = React.useRef<HTMLDivElement | null>(null);
+  const editorScrollRef = React.useRef<HTMLElement | null>(null);
+  const [editorScroller, setEditorScroller] = React.useState<HTMLElement | null>(null);
+  useWorkspaceScroll(editorScrollRef, planDraftKey ? JSON.stringify([planDraftKey, 'editor-scroll']) : null, hasDocument && editorScroller !== null && mdViewMode === 'edit', visible);
+  useWorkspaceScroll(previewRef, planDraftKey ? JSON.stringify([planDraftKey, 'preview-scroll']) : null, hasDocument && mdViewMode === 'preview', visible);
   const setPreviewContainer = React.useCallback((node: HTMLDivElement | null) => {
     previewRef.current = node;
   }, []);
@@ -242,27 +264,14 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
 
   const MD_VIEWER_MODE_KEY = 'openchamber:plan:md-viewer-mode';
 
-  React.useEffect(() => {
-    try {
-      const stored = localStorage.getItem(MD_VIEWER_MODE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored) as unknown;
-      if (parsed === 'preview' || parsed === 'edit') {
-        setMdViewMode(parsed);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
   const saveMdViewMode = React.useCallback((mode: 'preview' | 'edit') => {
     setMdViewMode(mode);
     try {
-      localStorage.setItem(MD_VIEWER_MODE_KEY, JSON.stringify(mode));
+      getSafeStorage().setItem(MD_VIEWER_MODE_KEY, JSON.stringify(mode));
     } catch {
       // ignore
     }
-  }, []);
+  }, [setMdViewMode]);
   const extractSelectedCode = React.useCallback((text: string, range: SelectedLineRange): string => {
     const lines = text.split('\n');
     const startLine = Math.max(1, range.start);
@@ -285,10 +294,10 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     commentText,
     setCommentText,
     editingDraftId,
-    setSelection: setCommentSelection,
+    selection: lineSelection,
+    setSelection: setLineSelection,
     saveComment,
     cancel,
-    reset,
     startEdit,
     deleteDraft,
   } = commentController;
@@ -300,19 +309,10 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     isMobile,
   });
 
-  React.useEffect(() => {
-    setLineSelection(null);
-    reset();
-  }, [content, reset]);
-
-  React.useEffect(() => {
-    setCommentSelection(lineSelection);
-  }, [lineSelection, setCommentSelection]);
-
   const handleCancelComment = React.useCallback(() => {
     setLineSelection(null);
     cancel();
-  }, [cancel]);
+  }, [cancel, setLineSelection]);
 
   const handleSaveComment = React.useCallback((textToSave: string, rangeOverride?: { start: number; end: number }) => {
     if (rangeOverride) {
@@ -320,7 +320,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     }
     saveComment(textToSave, rangeOverride ?? lineSelection ?? undefined);
     setLineSelection(null);
-  }, [lineSelection, saveComment]);
+  }, [lineSelection, saveComment, setLineSelection]);
 
   React.useEffect(() => {
     if (!lineSelection) return;
@@ -357,7 +357,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
       window.clearTimeout(timeoutId);
       document.removeEventListener('click', handleClickOutside);
     };
-  }, [cancel, commentText, editingDraftId, isDragReleaseClick, isMobile, lineSelection]);
+  }, [cancel, commentText, editingDraftId, isDragReleaseClick, isMobile, lineSelection, setLineSelection]);
 
   const editorFontSize = useUIStore((state) => state.editorFontSize);
 
@@ -385,7 +385,9 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     editRevision: number;
     savedRevision: number;
     runtimeKey: string;
-  }>({ key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '' });
+    draftKey: string | null;
+    canSave: boolean;
+  }>({ key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '', draftKey: null, canSave: false });
   const saveQueue = React.useState(createPlanSaveQueue)[0];
 
   // Queue any unflushed edits. Runs on document switches and on unmount, both
@@ -395,7 +397,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
   // from one host being written into another after a runtime switch.
   const scheduleSave = React.useCallback(() => {
     const doc = docRef.current;
-    if (!doc.key || !doc.target || doc.editRevision <= doc.savedRevision) {
+    if (!doc.canSave || !doc.key || !doc.target || doc.editRevision <= doc.savedRevision) {
       return;
     }
     const captured = {
@@ -404,6 +406,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
       content: doc.content,
       revision: doc.editRevision,
       runtimeKey: doc.runtimeKey,
+      draftKey: doc.draftKey,
     };
     saveQueue.schedule(captured.key, captured.revision, async () => {
       if (getRuntimeKey() !== captured.runtimeKey) {
@@ -412,10 +415,12 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
         return;
       }
       await savePlanDocument(captured.target, captured.content);
+      if (captured.draftKey) useWorkspaceDraftStore.getState().acknowledge(captured.draftKey, captured.content);
       const current = docRef.current;
       if (current.key === captured.key) {
         current.savedRevision = Math.max(current.savedRevision, captured.revision);
         // A recovered save clears the stale failure banner.
+        setServerContent(captured.content);
         setSaveError(null);
       }
     }).catch((error) => {
@@ -428,7 +433,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
   React.useEffect(() => {
     if (!savedPlanId) {
       scheduleSave();
-      docRef.current = { key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '' };
+      docRef.current = { key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '', draftKey: null, canSave: false };
       setLoadedProjectPlanId(null);
       setLoadedProjectPlanPath(null);
       setContent('');
@@ -443,10 +448,10 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
       // edits typed within the debounce window survive a plan switch. React
       // reuses this component instance across saved-plan tabs.
       scheduleSave();
-      docRef.current = { key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '' };
+      docRef.current = { key: null, target: null, content: '', editRevision: 0, savedRevision: 0, runtimeKey: '', draftKey: null, canSave: false };
       setLoadedProjectPlanId(null);
       setLoadedProjectPlanPath(null);
-      setContent('');
+      setContent(planDraftKey ? useWorkspaceDraftStore.getState().drafts[planDraftKey]?.value ?? '' : '');
       setSaveError(null);
       setLoadError(null);
 
@@ -472,15 +477,20 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
           setLoadError('Plan not found');
           return;
         }
+        const restoredDraft = planDraftKey ? useWorkspaceDraftStore.getState().drafts[planDraftKey] : undefined;
+        const openedContent = restoredDraft?.value ?? plan.raw;
         docRef.current = {
           key: savedPlanKey,
           target: { projectRef: savedPlanProjectRef, planId: savedPlanId },
-          content: plan.raw,
+          content: openedContent,
+          draftKey: planDraftKey,
+          canSave: false,
           editRevision: 0,
           savedRevision: 0,
           runtimeKey: activeRuntimeKey,
         };
-        setContent(plan.raw);
+        setServerContent(plan.raw);
+        setContent(openedContent);
         setLoadedProjectPlanId(savedPlanId);
         setLoadedProjectPlanPath(plan.path ?? null);
       } catch (error) {
@@ -496,7 +506,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     return () => {
       cancelled = true;
     };
-  }, [activeRuntimeKey, savedPlanId, savedPlanKey, savedPlanProjectRef, saveQueue, scheduleSave]);
+  }, [activeRuntimeKey, planDraftKey, savedPlanId, savedPlanKey, savedPlanProjectRef, saveQueue, scheduleSave]);
 
   // An agent can change the open plan, through the knowledge tool or by
   // editing its file. With no unsaved edits the editor takes the new text, so
@@ -515,11 +525,12 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
         const plan = await fetchProjectPlan(savedPlanProjectRef, savedPlanId);
         // A deleted plan keeps its text on screen; the next save reports it gone.
         if (!plan) throw new Error('Plan not found');
+        if (docRef.current === doc) setServerContent(plan.raw);
         return plan.raw;
       },
       getLoadedContent: () => doc.content,
       getLoadedRevision: () => doc.editRevision,
-      isDirty: () => docRef.current !== doc || doc.editRevision > doc.savedRevision,
+      isDirty: () => docRef.current !== doc || doc.editRevision > doc.savedRevision || Boolean(doc.draftKey && useWorkspaceDraftStore.getState().drafts[doc.draftKey]),
       applyContent: (raw) => {
         doc.content = raw;
         setContent(raw);
@@ -576,8 +587,10 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
     if (next === docRef.current.content) return;
     docRef.current.content = next;
     docRef.current.editRevision += 1;
+    docRef.current.canSave = !recoveryConflict;
+    setRecoveredContent(next);
     setContent(next);
-  }, []);
+  }, [recoveryConflict, setRecoveredContent]);
 
   // The debounced write and the close/switch flush go through the same queue
   // (scheduleSave), so two saves of one document can never complete out of
@@ -786,7 +799,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
       },
       onDelete: deleteDraft,
     });
-  }, [commentText, deleteDraft, editingDraftId, handleCancelComment, handleSaveComment, isDragging, lineSelection, planFileDrafts, planFileLabel, setCommentText, startEdit]);
+  }, [commentText, deleteDraft, editingDraftId, handleCancelComment, handleSaveComment, isDragging, lineSelection, planFileDrafts, planFileLabel, setCommentText, setLineSelection, startEdit]);
 
   // Improve and implement each open the same choice of where the plan goes.
   const sendMenu = (action: 'improve' | 'implement') => (
@@ -894,6 +907,22 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
       </div>
       </ContextPanelHeaderToolbar>
 
+      <DraftRecoveryNotice conflict={recovery.conflict}
+        onResume={() => {
+          recovery.resume();
+          docRef.current.canSave = true;
+          docRef.current.editRevision += 1;
+          scheduleSave();
+        }}
+        onUseLatest={() => {
+          recovery.useLatest();
+          docRef.current.content = serverContent;
+          docRef.current.editRevision = 0;
+          docRef.current.savedRevision = 0;
+          docRef.current.canSave = false;
+          setContent(serverContent);
+        }} />
+
       <TodoSendDialog
         open={pendingPlanSend !== null}
         onOpenChange={(open) => {
@@ -944,11 +973,11 @@ export const PlanView: React.FC<PlanViewProps> = ({ visible = true, savedProject
                     <CodeMirrorEditor
                       value={content}
                       onChange={handleContentChange}
-                      readOnly={false}
+                      readOnly={!hasDocument}
                       className="h-full"
                       extensions={editorExtensions}
-                      onViewReady={(view) => { editorViewRef.current = view; }}
-                      onViewDestroy={() => { editorViewRef.current = null; }}
+                      onViewReady={(view) => { editorViewRef.current = view; editorScrollRef.current = view.scrollDOM; setEditorScroller(view.scrollDOM); }}
+                      onViewDestroy={() => { editorViewRef.current = null; editorScrollRef.current = null; setEditorScroller(null); }}
                       blockWidgets={blockWidgets}
                       highlightLines={lineSelection
                         ? {

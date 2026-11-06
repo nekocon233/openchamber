@@ -196,6 +196,14 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
+  /** Numeric completion metadata from this thread's own rollout, without resuming it. */
+  const readTurnDetails = async (sessionId, turnId) => {
+    const threadId = threadIdOf(sessionId);
+    const thread = await readThread(threadId);
+    if (!thread?.path) return null;
+    return (await readCodexHistoryDetails(thread.path, threadId)).get(turnId) ?? null;
+  };
+
   const readTurnItems = async (threadId, turnId, signal) => {
     const items = [];
     let cursor = null;
@@ -446,5 +454,5 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
 
   return { listRootSessions, listStatisticsSessions: (signal) => listRootSessions(undefined, { statistics: true, signal }),
     loadStatistics: (sessionId, directory, options) => loadHistory(sessionId, directory, { ...options, statistics: true }),
-    getSession, loadHistory, latestPlan, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
+    getSession, loadHistory, readTurnDetails, latestPlan, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
 };

@@ -17,6 +17,7 @@ import { listModelVariantIds } from '@/lib/modelVariants'
 
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { create } from "zustand"
+import { navigationReturnSchema, type NavigationReturn } from './navigation-return'
 import type { NativeAgentModel } from '@/lib/native-agents/combinations'
 import { captureAgentCombinationDraft } from '@/lib/native-agents/combination-drafts'
 import { isSameModelRef, toModelRef, type Metadata, type ModelRef, type Part, type Session, type TextPart } from "@/lib/opencode/model"
@@ -647,6 +648,8 @@ export type SessionUIState = {
   ) => void
   /** Capture a return action before a tool navigates to another workspace. */
   captureNavigationReturn: (directory: string) => () => void
+  captureNavigationReturnSnapshot: (directory: string) => NavigationReturn
+  restoreNavigationReturn: (snapshot: NavigationReturn) => void
   clearMaterializedDraftSession: (sessionId: string) => void
   prepareForRuntimeSwitch: (apiBaseUrl?: string | null) => void
   restoreForRuntimeSwitch: (apiBaseUrl?: string | null, previousRuntimeKey?: string | null) => void
@@ -1729,11 +1732,21 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
 
 
   captureNavigationReturn: (directory) => {
-    const runtimeKey = getRuntimeKey()
-    const sessionId = get().currentSessionId
-    const draft = cloneDraft(get().newSessionDraft)
-    const projectId = useProjectsStore.getState().activeProjectId
-    return () => {
+    const snapshot = {
+      runtimeKey: getRuntimeKey(), directory,
+      sessionId: get().currentSessionId, draft: cloneDraft(get().newSessionDraft),
+      projectId: useProjectsStore.getState().activeProjectId,
+    }
+    return () => get().restoreNavigationReturn(snapshot)
+  },
+
+  captureNavigationReturnSnapshot: (directory) => navigationReturnSchema.parse({
+    runtimeKey: getRuntimeKey(), directory,
+    sessionId: get().currentSessionId, draft: get().newSessionDraft,
+    projectId: useProjectsStore.getState().activeProjectId,
+  }),
+
+  restoreNavigationReturn: ({ runtimeKey, directory, sessionId, draft, projectId }) => {
       if (getRuntimeKey() !== runtimeKey) return
       if (sessionId) {
         get().setCurrentSession(sessionId, directory)
@@ -1741,6 +1754,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         return
       }
       if (draft.open) {
+        nextDraftId = Math.max(nextDraftId, draft.draftId + 1)
         // Keep the draft id, prepared chat directory and attached context intact.
         // Restore its directory's selections without reapplying project defaults.
         draftDefaultsRevision += 1
@@ -1765,7 +1779,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       if (projectId) useProjectsStore.getState().setActiveProjectIdOnly(projectId)
       useDirectoryStore.getState().setDirectory(directory, { showOverlay: false })
       opencodeClient.setDirectory(directory)
-    }
   },
 
   openNewSessionDraft: (options) => {

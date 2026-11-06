@@ -15,6 +15,7 @@ import {
 import { tags } from '@lezer/highlight';
 
 import { AttachedOverlayScrollbar } from '@/components/ui/AttachedOverlayScrollbar';
+import { useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
 
 /**
  * The note editor: one surface that is always editable and always reads as
@@ -194,10 +195,14 @@ export const NoteEditor: React.FC<{
   onBlur: () => void;
   ariaLabel: string;
   maxLength: number;
-}> = ({ value, onChange, onBlur, ariaLabel, maxLength }) => {
+  scrollKey?: string | null;
+}> = ({ value, onChange, onBlur, ariaLabel, maxLength, scrollKey = null }) => {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const viewRef = React.useRef<EditorView | null>(null);
   const [scroller, setScroller] = React.useState<HTMLElement | null>(null);
+  const scrollRef = React.useRef<HTMLElement | null>(null);
+  scrollRef.current = scroller;
+  useWorkspaceScroll(scrollRef, scrollKey, scroller !== null);
   // The view is built once; the callbacks it calls must stay current.
   const onChangeRef = React.useRef(onChange);
   const onBlurRef = React.useRef(onBlur);

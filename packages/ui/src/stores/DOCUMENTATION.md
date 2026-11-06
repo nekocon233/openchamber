@@ -243,6 +243,55 @@ verbatim, a reply spoken in full) do not consult it; they silence the 404 on
 
 ### UI state stores
 
+`useWorkspaceViewStateStore` keeps device-local reading state for PR, Changes
+and Project knowledge windows. Only `snapshots` is durable; explicit diff file
+navigation is a one-shot request keyed by runtime and owning workspace. Closing
+and reopening a window or restarting the app restores its selection without
+replaying that request. `useWorkspaceViewState` subscribes to individual fields,
+uses shared defaults for absent owners, and leaves unrelated records stable.
+
+PR column preferences belong to the runtime and registered project; worktrees
+share those columns. PR lists and details also name the workspace and current
+repository/account/binding authority. Changes identifies its checked-out branch,
+comparison source and, for turn diffs, the conversation. Knowledge uses the same
+project reference and context ID as its server data. Existing zone geometry and
+global display preferences stay in `useUIStore`; per-file diff layouts now round
+trip there too. A bad stored owner cannot discard another owner's valid record.
+
+`useWorkspaceDraftStore` owns unfinished input and its last confirmed baseline.
+Restoration alone never enables autosave. A new edit may resume an unchanged
+baseline; a changed server value requires an explicit choice between saving the
+restored draft and using the latest content. Only an acknowledged save clears
+its exact text, and an acknowledgement of older text rebases newer typing.
+Optimistic display equality never acknowledges a draft, so rollback cannot erase
+input. Unconfirmed new-entry submissions retain separate input tickets until success,
+so the next typed entry cannot replace a pending one. Recovered tickets are
+editable input, never replayed operations. Saved provider reviews and attached
+inline drafts keep their existing stores; this store does not copy their server records or mutation attempts.
+
+`useWorkspaceScroll` captures offsets while the DOM is measurable, restores an
+item anchor when available, and stops restoring when the user navigates or
+scrolls. Writes coalesce until scrolling rests. Hide, freeze and unload flush the
+captured offsets and the deferred storage queue in that order; a hidden zero
+cannot replace the last visible reading position. Hidden scopes release their
+observers and listeners. Snapshot writes remain synchronous and ordered through
+the existing safe storage adapter; unavailable durable storage retains current
+choices in its in-memory fallback.
+
+Draft note and plan create/save actions carry the editor's captured runtime,
+validate it and their store generation before queued dispatch, and never apply
+late results or rollback to the new host's cache. A confirmed old-host receipt
+may acknowledge its source draft without changing the current host. Memory
+edits likewise retain their project and runtime through the write queue.
+
+### Why reading state and input have separate storage
+
+Reading state contains identifiers and display choices. An unfinished editor
+also needs its confirmed baseline and save acknowledgement, and must survive
+failed or conflicting writes. Keeping those lifecycles separate prevents a
+list refresh, window cleanup or optimistic update from clearing typed text.
+
+
 Work status opens as a transient desktop dropdown (`workStatusOverlayOpen`),
 never a layout column. Hydration starts it closed. Version 26 discards the old
 panel enablement, visibility and fit fields while preserving section visibility,
@@ -319,9 +368,14 @@ previous path. Views own their lazy patch caches through `useRangeKeyedCache`.
 Mobile requests only the active detail path and suspends reads while its
 keep-alive workspace pane is hidden.
 
-`usePullRequestSelectionStore.ts` shares session-only PR choices across desktop,
-mobile Changes and walkthrough, keyed by runtime, directory, checked-out branch
-and bound repository, so a rebind to another repository starts without a choice. Explicit selection bounds remembered choices to 100 entries. A choice
+`usePullRequestSelectionStore.ts` coordinates live PR choices and one-shot
+handoffs across desktop, mobile Changes and walkthrough. `usePullRequestComparison`
+restores its durable choice only under the complete runtime, directory, branch,
+provider, instance, account, repository, remote and binding-revision identity.
+A pending request also captures its runtime and known binding authority. An
+unbound URL remains intent until the first authoritative binding resolves it
+into a new request object; it cannot be accepted while unbound or rebound later
+to another account. Explicit selection bounds remembered choices to 100 entries. A choice
 contains the PR number and its repository, so fork and upstream PRs with equal
 numbers remain distinct. `usePullRequestComparison` owns the searchable,
 paginated list while PR mode is active and reads it through
@@ -775,6 +829,15 @@ OpenChamber control stream and explicitly does not support server terminals; foc
 remains available without opening a server-only stream there.
 
 ## Git / PR Stores
+
+`useDiffFileFilterStore` persists only excluded file extensions, keyed by runtime
+and normalized owning project path, in device-local storage. It is independent
+of Git status and server settings. Clearing a project removes its exclusions
+without affecting any other owner. Records survive project and runtime switches
+without silent eviction. Hydration parses owner keys and extension arrays per
+record, so one malformed entry does not erase valid projects. The shared deferred
+safe storage coalesces writes and flushes on page hide and shutdown; restricted
+storage retains the current session's choices in memory.
 
 `usePullRequestSelectionStore.ts` also owns one-shot desktop GitHub PR open
 requests, keyed by runtime and hosting workspace. Each carries the source

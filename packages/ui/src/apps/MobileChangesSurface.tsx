@@ -1,6 +1,8 @@
 import { ChangeRequestDiffUnavailable } from '@/components/views/git/ChangeRequestDiffUnavailable';
 import { isCompleteIdentity } from '@/lib/api/git-identity';
 import React from 'react';
+import { DiffFileTypeFilter, DiffFileFilterEmpty } from '@/components/views/DiffFileTypeFilter';
+import { useDiffFileFilter } from '@/components/views/useDiffFileFilter';
 import { Icon } from '@/components/icon/Icon';
 import { useIsContributorWorktree } from '@/hooks/useIsContributorWorktree';
 import { WhitespaceToggleIcon } from '@/components/views/WhitespaceToggleIcon';
@@ -414,7 +416,43 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   const pendingReview = usePendingReview(prComparison.readContext, reviewPull, visible && mode === 'pr');
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile } = comparison;
   const comparisonFiles = React.useMemo(() => comparison.files ? [...comparison.files].sort((a, b) => a.path.localeCompare(b.path)) : null, [comparison.files]);
-  const activeComparisonPath = route.type === 'comparison' && route.sourceKey === comparison.key ? route.path : null;
+  const turnFiles = React.useMemo(
+    () => lastTurnDiffs
+      .map((diff) => ({
+        path: diff.file ?? '',
+        status: statusToGitCode(diff.status),
+        insertions: diff.additions ?? 0,
+        deletions: diff.deletions ?? 0,
+      }))
+      .filter((file) => file.path)
+      .sort((a, b) => a.path.localeCompare(b.path)),
+    [lastTurnDiffs],
+  );
+
+
+  const changeEntries = React.useMemo(() => {
+    const files = status?.files ?? [];
+    const unique = new Map<string, (typeof files)[number]>();
+    for (const file of files) {
+      unique.set(file.path, file);
+    }
+    return Array.from(unique.values()).sort((a, b) => a.path.localeCompare(b.path));
+  }, [status?.files]);
+
+
+  const activeFiles = mode === 'working' ? changeEntries : mode === 'turn' ? turnFiles : comparisonFiles ?? [];
+  const fileFilter = useDiffFileFilter<{ path: string }>(runtimeKey, currentDirectory, activeFiles);
+  const { isHidden: isFileHidden, restoreType } = fileFilter;
+  const isFileVisible = React.useCallback((path: string) => !isFileHidden(path), [isFileHidden]);
+  React.useEffect(() => {
+    if (!visible || !('path' in route) || !isFileHidden(route.path)) return;
+    const path = route.path;
+    setRoute(LIST_ROUTE);
+    toast.info(t('diffFilter.hiddenTarget', { path }), {
+      action: { label: t('diffFilter.restoreType'), onClick: () => restoreType(path) },
+    });
+  }, [isFileHidden, restoreType, route, setRoute, t, visible]);
+  const activeComparisonPath = route.type === 'comparison' && route.sourceKey === comparison.key && isFileVisible(route.path) ? route.path : null;
   const [comparisonRetry, setComparisonRetry] = React.useState(0);
   const fetchComparisonDiff = React.useCallback(async (path: string): Promise<ComparisonDiff> => {
     try {
@@ -487,18 +525,6 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
       : current);
   }, [comparison.key, ownerKey]);
 
-  const turnFiles = React.useMemo(
-    () => lastTurnDiffs
-      .map((diff) => ({
-        path: diff.file ?? '',
-        status: statusToGitCode(diff.status),
-        insertions: diff.additions ?? 0,
-        deletions: diff.deletions ?? 0,
-      }))
-      .filter((file) => file.path)
-      .sort((a, b) => a.path.localeCompare(b.path)),
-    [lastTurnDiffs],
-  );
 
   const turnDiffData = React.useMemo(() => {
     const map = new Map<string, MobileDiffData>();
@@ -519,14 +545,6 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     return map;
   }, [lastTurnDiffs]);
 
-  const changeEntries = React.useMemo(() => {
-    const files = status?.files ?? [];
-    const unique = new Map<string, (typeof files)[number]>();
-    for (const file of files) {
-      unique.set(file.path, file);
-    }
-    return Array.from(unique.values()).sort((a, b) => a.path.localeCompare(b.path));
-  }, [status?.files]);
 
   // What the walkthrough reads: the same subject as the list on screen. The
   // working tree is walked through whole, as the desktop's default scope; a
@@ -662,17 +680,17 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
       ...stagedChangeEntries.map((entry) => entry.path),
       ...visibleChangePaths,
       ...changeEntries.slice(0, 20).map((entry) => entry.path),
-    ])).filter(Boolean);
+    ])).filter((path) => Boolean(path) && isFileVisible(path));
     if (orderedPaths.length === 0) return;
     const timeoutId = window.setTimeout(() => {
       void prefetchDiffs(currentDirectory, git, orderedPaths, { maxFiles: 40 });
     }, 120);
     return () => window.clearTimeout(timeoutId);
-  }, [changeEntries, currentDirectory, git, mode, prefetchDiffs, stagedChangeEntries, visibleChangePaths, visible]);
+  }, [changeEntries, currentDirectory, git, isFileVisible, mode, prefetchDiffs, stagedChangeEntries, visibleChangePaths, visible]);
 
   React.useEffect(() => {
     if (!visible) return;
-    if (route.type !== 'diff') {
+    if (route.type !== 'diff' || isFileHidden(route.path)) {
       setDiffLoadError(null);
       return;
     }
@@ -719,7 +737,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     return () => {
       cancelled = true;
     };
-  }, [currentDirectory, diffRetryNonce, fetchStatus, getDiff, git, route, setDiff, visible]);
+  }, [currentDirectory, diffRetryNonce, fetchStatus, getDiff, git, isFileHidden, route, setDiff, visible]);
 
   const handleSyncAction = async (action: Exclude<SyncAction, null>, remote?: GitRemote, forceChoose = false) => {
     if (!currentDirectory) return;
@@ -1127,7 +1145,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     return renderListState(<MobileChangesState loading message={t('gitView.loading.checkingRepository')} />);
   }
 
-  if (route.type === 'diff') {
+  if (route.type === 'diff' && isFileVisible(route.path)) {
     return (
       <MobileDiffDetail
         path={route.path}
@@ -1142,7 +1160,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     );
   }
 
-  if (route.type === 'turn') {
+  if (route.type === 'turn' && isFileVisible(route.path)) {
     return (
       <MobileDiffDetail
         path={route.path}
@@ -1232,7 +1250,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
         ? t('commitComparison.emptyDiff')
         : t('diffView.branch.empty', { base: sourceLabel ?? '' })} />;
     }
-    return <MobileComparisonFileList files={comparisonFiles} onSelect={(path) => {
+    if (fileFilter.hiddenCount === comparisonFiles.length) return <DiffFileFilterEmpty onRestore={fileFilter.restoreAll} />;
+    return <MobileComparisonFileList files={comparisonFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => {
       if (comparison.key) setRoute({ type: 'comparison', path, sourceKey: comparison.key });
     }} />;
   };
@@ -1251,7 +1270,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     }
     if (!hasTurnData && currentSessionId) return <MobileChangesState loading message={t('diffView.state.loadingChanges')} />;
     if (turnFiles.length === 0) return <MobileChangesState message={t('diffView.state.noLastTurnChanges')} />;
-    return <MobileComparisonFileList files={turnFiles} onSelect={(path) => setRoute({ type: 'turn', path })} />;
+    if (fileFilter.hiddenCount === turnFiles.length) return <DiffFileFilterEmpty onRestore={fileFilter.restoreAll} />;
+    return <MobileComparisonFileList files={turnFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => setRoute({ type: 'turn', path })} />;
   };
 
   return (
@@ -1289,6 +1309,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
           </DropdownMenuContent>
         </DropdownMenu>
         {nestedRepoPicker}
+        <DiffFileTypeFilter mobile options={fileFilter.options} excludedTypes={fileFilter.excludedTypes}
+          hiddenCount={fileFilter.hiddenCount} onChange={fileFilter.setTypes} />
         {visible && mode === 'branch' && (
           <BranchComparisonSelector mobile key={JSON.stringify([ownerKey, currentBranch])}
             branches={branches?.all ?? []} currentBranch={currentBranch} base={branchComparison.base}
@@ -1425,6 +1447,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
         <div className="flex min-h-0 flex-1 flex-col">
           {/* File list scrolls inside ChangesPanel; the commit footer stays pinned. */}
           <div className="min-h-0 flex-1 overflow-hidden px-4 pt-4">
+            {fileFilter.hiddenCount === changeEntries.length ? <DiffFileFilterEmpty onRestore={fileFilter.restoreAll} /> :
             <ChangesPanel
               groups={changeGroups}
               diffStats={status?.diffStats}
@@ -1433,7 +1456,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
               isRevertingAll={isRevertingAll}
               headerBackgroundClassName="bg-transparent"
               onVisiblePathsChange={setVisibleChangePaths}
-            />
+              isFileVisible={isFileVisible}
+            />}
           </div>
           {/* Held at the bottom of the panel: it rides the keyboard over the list. */}
           <div data-keyboard-rider="" className="shrink-0 border-t border-edge bg-background px-4 pb-4 pt-3">

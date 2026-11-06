@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { cn } from '@/lib/utils';
 import { ContextPanelHeaderSlotContext } from './contextPanelHeaderSlotContext';
+import { cn } from '@/lib/utils';
 
 /**
  * Lets the active context-panel surface put its own toolbar into the panel
@@ -19,6 +19,7 @@ export function ContextPanelHeaderSlotProvider({ value, children }: { value: HTM
  * in place. The header hides its own mode label while a toolbar is present
  * (`data-context-panel-toolbar`), so a surface that renders no toolbar — an
  * empty or loading state — still leaves the header named.
+ * `preserveTitle` places compact actions beside the existing mode label.
  */
 export function ContextPanelHeaderToolbar({ children, preserveTitle = false }: { children: React.ReactNode; preserveTitle?: boolean }): React.ReactNode {
   const slot = React.useContext(ContextPanelHeaderSlotContext);
@@ -28,7 +29,8 @@ export function ContextPanelHeaderToolbar({ children, preserveTitle = false }: {
   return createPortal(
     // Stretched to the header's height, so a tab strip's active underline
     // sits on the header's bottom edge like the panel's own tabs.
-    <div data-context-panel-toolbar={preserveTitle ? undefined : ''} data-context-panel-actions={preserveTitle ? '' : undefined} className={cn('flex min-w-0 items-stretch', !preserveTitle && 'flex-1')}>
+    <div data-context-panel-toolbar={preserveTitle ? undefined : ''} data-context-panel-actions={preserveTitle ? '' : undefined}
+      className={cn('flex min-w-0 items-stretch', !preserveTitle && 'flex-1')}>
       {children}
     </div>,
     slot,

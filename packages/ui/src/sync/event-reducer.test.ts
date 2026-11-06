@@ -5,6 +5,7 @@ import type { Message, Part, PermissionRequest, Session } from "@/lib/opencode/m
 import { toolContentShellChars } from "@/lib/opencode/toolContentShells"
 import { applyDirectoryEvent, reduceGlobalEvent } from "./event-reducer"
 import { INITIAL_STATE, type State } from "./types"
+import { translateNativeEvent } from "@/lib/native-agents/events"
 
 const session = (overrides: Partial<Session> = {}): Session => ({
   id: "ses_1",
@@ -51,6 +52,28 @@ const state = (overrides: Partial<State> = {}): State => ({
 })
 
 const apply = (draft: State, event: SyncEvent) => applyDirectoryEvent(draft, event)
+
+test("a delayed native telemetry patch preserves a history refresh and unrelated metadata", () => {
+  const sessionID = "ncx_01a0d2a6-b55b-7162-a837-c62053537e00"
+  const refreshed = assistant({ sessionID, modelID: "historical-model", time: { created: 10, completed: 5000 },
+    tokens: { input: 100, output: 200, reasoning: 300, cache: { read: 50, write: 0 } },
+    metadata: { retained: true, openchamber: { other: "keep", telemetry: { other: 42 } } },
+  })
+  const draft = state({ message: { [sessionID]: [] } })
+  apply(draft, { type: "message.updated", properties: { info: refreshed } })
+  const event = translateNativeEvent({ type: "message.patched", properties: { sessionID, messageID: refreshed.id,
+    patch: { telemetry: { toolWaitDurationMs: 100 } },
+  } })
+  if (!event) throw new Error("Expected a native telemetry patch")
+  expect(apply(draft, event)).toBe(true)
+  expect(draft.message[sessionID][0]).toEqual({ ...refreshed,
+    metadata: { retained: true, openchamber: { other: "keep", telemetry: { other: 42, toolWaitDurationMs: 100 } } },
+  })
+  expect(apply(draft, event)).toBe(false)
+  expect(translateNativeEvent({ type: "message.patched", properties: { sessionID, messageID: refreshed.id,
+    patch: { telemetry: { toolWaitDurationMs: -1 } },
+  } })).toBeNull()
+})
 
 describe("session events", () => {
   test("a patch updates the session in place and bumps its revision", () => {

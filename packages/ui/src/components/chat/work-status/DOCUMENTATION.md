@@ -110,7 +110,7 @@ native task summaries request their session snapshot once and follow live events
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | same provider grouping in desktop and mobile work status |
 | Linked threads | `lib/linkedIssues.ts` over session metadata | written by the flows that attach an issue or PR |
-| Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; response speed describes that turn, while cache and speed average the completed history through it; the header falls back to average speed when response timing is unavailable; without a complete previous turn, the existing waiting row remains; either rate above 5,000 tok/s is unknown |
+| Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; cache and speed average the completed history through it; the header shows the same average speed as the speed row; without a complete previous turn, the existing waiting row remains; a rate above 5,000 tok/s is unknown |
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | the switch reuses the dropdown's `setEnabled` |
 | Pinned messages | `getContextObligatoryMessages` + `state.part`, else one `getSessionMessage` read | see below |
@@ -263,28 +263,20 @@ tooltip. Model-only session updates invalidate the live-session comparison.
 
 The section follows Usage by default and reuses the panel's existing rows. Only its header
 has an icon; metric rows use labels and values without leading icons. It
-reads already-loaded records without fetching history. Response speed and the
-header describe the newest turn, which needs a preceding user message and
-completed assistant steps. The cache and speed rows instead average every
+reads already-loaded records without fetching history. Turn metrics describe
+the newest turn, which needs a preceding user message and completed assistant
+steps. The cache and speed rows average every
 complete turn in the loaded records, so paging in older history recalculates
 them. A truncated leading segment or an unfinished trailing turn is skipped
 rather than counted as zero.
 
-Two rates answer different questions. Response speed uses the final assistant
-message's output tokens divided by the union of its nonempty text intervals.
-It excludes initial waiting, reasoning tokens and reasoning time, and earlier
-tool steps. It requires complete, valid text timing and a final message without
-execution tools, errors, synthetic text or ignored text. Application-only native
-question/approval parts explicitly marked `openchamberToolSource: 'native-interaction'`
-do not suppress response speed and contribute no tool duration. Native CLI tool
-calls retain normal interval validation. This measures text delivery from
-stored timestamps, not provider-side decode speed. The header shows this rate
-when it is available and falls back to the average speed when it is not.
+The header and speed row both show average speed. A single speed readout keeps
+their measurement consistent even when final-text delivery timing is available.
 
 Average speed sums output plus reasoning tokens and model time across every
 complete loaded turn, then divides the totals. Model time is the turn's
 wall-clock time from its user message through its last completed step, minus
-the union of its completed and failed tool intervals, and minus every gap
+blocking tool waits, and minus every gap
 longer than 5 minutes between finished steps. Using the whole turn covers
 thinking and queue time before each step's first content block, which per-step
 windows leave out and which made proxy sessions report implausibly high rates.
@@ -301,15 +293,24 @@ text/reasoning start delay from every step of the newest turn, only when all
 steps have a valid sample. Empty stream text/reasoning placeholders supply no
 first-token sample; their creation stamps cannot establish TTFT.
 
-Either rate above 5,000 tok/s is reported as unknown. No provider streams that
+Codex supplies measured blocking waits in the assistant message's
+`metadata.openchamber.telemetry.toolWaitDurationMs`. A background command's
+execution interval can overlap model work, so its process lifetime cannot be
+subtracted from model time. A missing, null or invalid measurement hides model
+duration and throughput while preserving tokens, cache and tool execution
+duration. Other backends continue to use the union of their completed and failed
+tool intervals. The tool execution row retains its own meaning and can overlap
+model duration. Average speed uses this rule.
+
+An average speed above 5,000 tok/s is reported as unknown. No provider streams that
 fast, so such a value means the measured window is broken: a tool that runs
-for nearly the whole step leaves a residual of a millisecond, and a text
-interval can be equally short. The row is omitted rather than shown wrong.
+for nearly the whole step leaves a residual of a millisecond.
+The row and header value are omitted when average speed is unknown.
 
 Elapsed time is wall-clock time from the first user message in the turn through
 the final assistant completion. It includes model waits, tool execution,
-compaction, and other gaps. Average speed uses it minus tool time as its
-denominator; response speed continues to use text intervals.
+compaction, and other gaps. Average speed uses it minus blocking tool waits and
+idle pauses as its denominator.
 
 Metric labels stay short. Every row is a single hover and keyboard-focus target
 for a shared tooltip that opens above the row after a 300ms hover delay, with a

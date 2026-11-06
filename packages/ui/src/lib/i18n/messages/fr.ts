@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './fr.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -52,6 +53,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['fr'],
   "agents.combinations.loadFailed": "Impossible de charger les combinaisons. Rouvrez les paramètres et réessayez.",
   "agents.combinations.saveFailed": "Impossible d'enregistrer les combinaisons. Réessayez.",
   "agents.combinations.group": "Combinaisons",
@@ -3902,7 +3904,7 @@ export const dict = {
   'chat.workStatus.telemetry.elapsed': 'Temps écoulé',
   'chat.workStatus.telemetry.elapsedDescription': 'Temps réel entre le premier message de l’utilisateur et la réponse finale de l’assistant. Inclut l’attente du modèle, l’exécution des outils, la compaction et les autres intervalles.',
   'chat.workStatus.telemetry.llmDuration': 'Modèle',
-  'chat.workStatus.telemetry.llmDurationDescription': "Durée de toutes les étapes du modèle, attente des réponses comprise. Le temps des outils est soustrait, et les pauses de plus de 5 minutes comptent comme de l'inactivité. Ce ne sont pas uniquement les secondes de génération du texte.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Durée des étapes du modèle, attente des réponses comprise. Les attentes des outils et les pauses de plus de 5 minutes sont soustraites. Les outils en arrière-plan peuvent fonctionner en même temps que le modèle.",
   'chat.workStatus.telemetry.toolDuration': 'Outils',
   'chat.workStatus.telemetry.toolDurationDescription': 'Temps passé à exécuter les outils, y compris les appels échoués. Les outils exécutés en parallèle ne sont comptés qu’une fois.',
   'chat.workStatus.telemetry.ttft': 'TTFT moyen',
@@ -3911,7 +3913,7 @@ export const dict = {
   'chat.workStatus.telemetry.stepsDescription': 'Nombre d’appels au modèle pour ce prompt. Lire les résultats d’un outil et décider de la suite demande généralement une nouvelle étape.',
   'chat.workStatus.telemetry.tokens': 'Jetons',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Jetons générés sur les tours terminés déjà chargés, divisés par le temps du modèle hors exécution des outils et hors pauses de plus de 5 minutes. Le chargement d'un historique plus ancien recalcule la valeur.",
+  'chat.workStatus.telemetry.speedDescription': "Jetons générés sur les tours terminés déjà chargés, divisés par le temps du modèle hors attentes des outils et hors pauses de plus de 5 minutes. Le chargement d'un historique plus ancien recalcule la valeur.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Entrée hors cache : {input}. ↓ Jetons générés : {output} pour le texte et les appels aux outils, plus {reasoning} pour le raisonnement. Totaux de toutes les étapes de ce prompt.',
   'chat.workStatus.telemetry.cacheHit': 'Cache moyen',
   'chat.workStatus.telemetry.cacheHitDescription': 'Part des jetons d’entrée réutilisés depuis le cache du prompt sur les tours terminés déjà chargés. Le chargement d’un historique plus ancien recalcule la valeur.',
@@ -4332,4 +4334,10 @@ export const dict = {
   "sessions.moveChatToProject.description": 'La conversation se poursuit dans le dossier du projet. Les fichiers créés par le chat restent où ils sont.',
   "sessions.moveChatToProject.success": 'Chat déplacé vers le projet',
   "sessions.moveChatToProject.failed": 'Impossible de déplacer le chat',
+  "workspaceRestore.draftConflict": "Cet élément a changé. Votre brouillon est restauré et l'enregistrement automatique est suspendu.",
+  "workspaceRestore.saveDraft": "Enregistrer le brouillon restauré",
+  "workspaceRestore.useLatest": "Utiliser le contenu récent",
+  "workspaceRestore.itemMissing": "Cet élément n'existe plus. Votre texte non enregistré reste disponible ici.",
+  "workspaceRestore.commentChanged": "Le code sélectionné a changé. Sélectionnez à nouveau les lignes pour poursuivre votre commentaire.",
+  "workspaceRestore.restoreInput": "Restaurer la saisie non confirmée",
 };

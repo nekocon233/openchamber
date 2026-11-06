@@ -126,8 +126,11 @@ const segmentProposal = ({ entries, nativeId, readRoot, sessionId, directory, se
     send: selection,
   };
   if (kind) {
+    const planText = signal.plan.replace(/(?:^|\r?\n)[ \t]*<\/openchamber-plan-v1>[ \t\r\n]*$/, '');
+    if (!planText.trim()) return null;
     proposal.kind = kind;
-    proposal.plan = signal.plan;
+    proposal.plan = planText;
+    proposal.questions = signal.questions.map((question) => ({ ...question, question: planText }));
   }
   const time = agyTime(final.created_at, completion?.time ?? send.sentAt);
   const metadata = { openchamberToolSource: 'native-interaction' };
@@ -135,7 +138,7 @@ const segmentProposal = ({ entries, nativeId, readRoot, sessionId, directory, se
   const part = buildToolPart({
     id: `${callID}_part`, sessionID: sessionId, messageID, callID,
     tool: kind ? 'plan_exit' : 'question',
-    input: kind ? { plan: signal.plan } : { questions: signal.questions },
+    input: kind ? { plan: proposal.plan } : { questions: proposal.questions },
     title: '', start: time,
     metadata,
     result: { status: 'completed', output: '', end: time },

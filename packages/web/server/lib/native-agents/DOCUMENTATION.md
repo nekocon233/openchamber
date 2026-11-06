@@ -395,12 +395,30 @@ Codex gotchas:
   The projector extends the assistant's `time.completed` to the latest
   finished part. Items without a recorded time still fall back to the turn's
   bounds.
+- Assistant metadata carries `openchamber.telemetry.toolWaitDurationMs` for
+  each user/steer/compaction segment. It unions matched `function_call` or
+  `custom_tool_call` returns and native plan-confirmation intervals, clipped
+  at segment boundaries. A complete measured zero is distinct from null.
+  Missing starts, returns, turn boundaries or supplemental history leave it
+  unknown. The numeric duration survives unified conversation clock offsets.
+  Native command parts retain their actual process lifetimes.
 - A steer starts a new user message segment inside the same turn. Failures and
   ordinary stops carry an error on their assistant message; Claude's explicit
   keep-planning choice follows the behavior below.
 - Only JSON-RPC `-32600` "thread not loaded" or "invalid thread id" means a
   thread is missing. Every other error propagates, so a transport failure is
   never reported as a deleted session.
+
+### Why Codex throughput uses tool returns
+
+A yielded command can keep running while Codex generates the rest of a turn.
+Subtracting its lifetime removed an hour of concurrent model work and reported
+261 tok/s for a conversation whose call/return ledger measures about 41.
+The rollout's matched tool returns measure blocking waits. Completed-turn
+notifications read that ledger once and publish only the finalized messages'
+timing metadata, through the same projector as history. Stream deltas and idle
+sessions do not read it. A failed read keeps timing unknown; rewinds and deleted
+live owners discard delayed completions.
 
 ## Live turns
 

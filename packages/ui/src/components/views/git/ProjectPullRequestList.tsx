@@ -1,9 +1,11 @@
+import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
 import { referencePickerItemKey } from '@/components/references/referencePickerItems';
-import { useGitHubReadContext } from '@/components/references/referenceSources';
+import { useGitHubReadContext, useGitHubReferenceList } from '@/components/references/referenceSources';
+import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
 import { useReferenceBrowser } from '@/components/references/useReferenceBrowser';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
 import { useBoardRevalidation } from '@/components/sourceBoard/useBoardRevalidation';
@@ -20,6 +22,13 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { PullRequestDetail } from './PullRequestDetail';
+import { useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
+import { WORKSPACE_VIEW_DEFAULTS, readWorkspaceViewState, useWorkspaceViewStateStore, workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
+import { SourceBoardLinkFeedback } from '@/components/sourceBoard/SourceBoardLinkFeedback';
+import { isSameRepositoryItemLink } from '@/components/sourceBoard/boardLinkTarget';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
+import { useWorkspaceDraftStore, workspaceReplyDraftKey } from '@/stores/useWorkspaceDraftStore';
+import { Textarea } from '@/components/ui/textarea';
 
 /** Single-repository PR list, retained across the panel's branch and detail views. */
 export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDirectory: string; active: boolean }> = ({ directory, workspaceDirectory, active }) => {
@@ -28,7 +37,25 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
   const { isMobile } = useDeviceInfo();
   const openSettings = useOpenSourceControlSettings();
   const context = useGitHubReadContext(directory);
-  const browser = useReferenceBrowser({ source: 'github', directory, isMobile, mode: 'project-pulls', active });
+  const owner = useWorkspaceViewOwner(workspaceDirectory);
+  const stateOwner = context && context !== 'missing' ? workspaceViewKey(owner.runtime, workspaceDirectory, workspaceRepositoryIdentity(context)) : null;
+  const browser = useReferenceBrowser({ source: 'github', directory, isMobile, mode: 'project-pulls', active, projectPullsState: { owner: stateOwner, preferences: owner.project } });
+  const restoreUrl = browser.selectionUrl;
+  const previewUrl = browser.previewItem?.source === 'github' ? browser.previewItem.reference.url : null;
+  const restoring = Boolean(restoreUrl && restoreUrl !== previewUrl);
+  const restoreTarget = restoreUrl ? parseChangeRequestReference(restoreUrl) : null;
+  const orphanKey = restoreTarget?.project && context && context !== 'missing' ? workspaceReplyDraftKey(owner.runtime, context, {
+    kind: 'pull', number: restoreTarget.number, sourceRepo: { owner: restoreTarget.project.owner, repo: restoreTarget.project.name },
+  }) : null;
+  const orphan = useWorkspaceDraftStore(state => orphanKey ? state.drafts[orphanKey] : undefined);
+  const restored = useGitHubReferenceList({ directory, kind: 'pull', filter: DEFAULT_REPOSITORY_FILTER,
+    query: restoreUrl ?? '', scope: 'repository', enabled: restoring && active, active });
+  React.useEffect(() => {
+    if (!restoring || !active || !restoreUrl) return;
+    if (stateOwner && readWorkspaceViewState(useWorkspaceViewStateStore.getState(), 'pullRequest', stateOwner).selectedUrl !== restoreUrl) return;
+    const reference = restored.items.find(item => item.kind === 'pull' && isSameRepositoryItemLink(item.url, restoreUrl));
+    if (reference) browser.openItem({ source: 'github', reference });
+  }, [active, browser, restoreUrl, restored.error, restored.items, restored.refreshing, restored.status, restoring, stateOwner]);
   const [refreshingFromHost, setRefreshingFromHost] = React.useState(false);
   const refreshPending = React.useRef(false);
   const refreshFromHost = async () => {
@@ -57,9 +84,17 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
   const scrollTop = React.useRef(0);
   const listVisibleRef = React.useRef(false);
   const preview = browser.previewItem;
-  const selectedPull = preview?.source === 'github' && preview.reference.kind === 'pull' ? preview.reference : null;
+  const selectedPull = !restoring && preview?.source === 'github' && preview.reference.kind === 'pull' ? preview.reference : null;
   const showingDetail = selectedPull !== null;
-  const showingList = active && !showingDetail;
+  const showingList = active && !showingDetail && !restoring;
+  const depthIdentity = JSON.stringify([browser.githubFilter.people, browser.query]);
+  const savedDepth = React.useRef({ identity: depthIdentity, count: browser.loadedCount });
+  if (savedDepth.current.identity !== depthIdentity) savedDepth.current = { identity: depthIdentity, count: browser.loadedCount };
+  React.useEffect(() => {
+    if (!showingList || browser.list.status !== 'ready') return;
+    if (browser.list.items.length < savedDepth.current.count && browser.list.hasMore && !browser.list.error) browser.list.loadMore();
+    if (browser.list.items.length > browser.loadedCount) browser.setLoadedCount(browser.list.items.length);
+  }, [browser, showingList]);
   const searching = Boolean(browser.debouncedQuery.trim()) || browser.githubFilter.people !== 'any';
   useBoardRevalidation(active);
 
@@ -69,6 +104,8 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     // Hidden Activity boundaries disconnect effects before the list can report a hidden scroll offset.
     return () => { listVisibleRef.current = false; };
   }, [showingList]);
+  useWorkspaceScroll(scrollRef, stateOwner ? JSON.stringify([stateOwner, 'list', browser.githubFilter.people, browser.query]) : null,
+    showingList && browser.list.status === 'ready' && (browser.list.items.length >= savedDepth.current.count || !browser.list.hasMore), showingList);
 
   const rememberScroll = () => { scrollTop.current = scrollRef.current?.scrollTop ?? 0; };
   const goBack = () => {
@@ -78,6 +115,15 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
 
   return (
     <div hidden={!active} className={active ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      {restoring ? <>
+        <div className="shrink-0 border-b border-border/60 px-4 py-2">
+          <Button size="sm" variant="ghost" onClick={goBack}><Icon name="arrow-left" className="size-4" />{t('gitView.pullRequest.backToList')}</Button>
+        </div>
+        <SourceBoardLinkFeedback url={restoreUrl!} state={restored.error ? 'error' : restored.unavailable === 'disconnected' ? 'disconnected'
+          : restored.unavailable === 'no-repo' ? 'noRepository' : restored.status === 'ready' && !restored.refreshing ? 'notFound' : 'loading'}
+          error={restored.error} onRetry={() => void restored.retry()} />
+        {orphan && restored.status === 'ready' ? <div className="shrink-0 px-4 pb-4"><Textarea value={orphan.value} readOnly rows={4} aria-label={t('sourceBoard.reply.label')} /></div> : null}
+      </> : null}
       {showingDetail ? (
         <>
           <div className="shrink-0 border-b border-border/60 px-4 py-2">
@@ -113,6 +159,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             activeId={browser.githubFilter.people}
             onSelect={id => {
               if ((id !== 'reviewRequested' && id !== 'created' && id !== 'any') || id === browser.githubFilter.people) return;
+              if (stateOwner) useWorkspaceViewStateStore.getState().update('scroll', JSON.stringify([stateOwner, 'list', id, browser.query]), () => WORKSPACE_VIEW_DEFAULTS.scroll);
               browser.selectGitHubFilter({ people: id });
               scrollTop.current = 0;
               if (scrollRef.current) scrollRef.current.scrollTop = 0;

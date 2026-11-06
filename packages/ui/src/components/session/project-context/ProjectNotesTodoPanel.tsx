@@ -1,3 +1,4 @@
+import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import React from 'react';
 
 import { toast } from '@/components/ui';
@@ -8,6 +9,8 @@ import { resolveProjectContextId, type ProjectRef, type ProjectTodoChange, type 
 import { observeProjectContext } from '@/lib/projectContextSync';
 import { cn } from '@/lib/utils';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { WorkspaceViewScope, WorkspaceViewVisible, useWorkspaceScroll, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceKnowledgeKey } from '@/stores/useWorkspaceViewStateStore';
 import { selectProjectMemoryForPath, useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { countHighlightedMemories, memoryViewKey } from '@/lib/agentMemoryBadges';
 import { EMPTY_PROJECT_CONTEXT_ENTRY, useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -189,8 +192,9 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
     observer.observe(activeLabelMeasureNode);
     return () => observer.disconnect();
   }, [sectionsNode, allLabelsMeasureNode, activeLabelMeasureNode]);
-  const storedTab = useUIStore((state) => state.projectContextTab);
-  const setStoredTab = useUIStore((state) => state.setProjectContextTab);
+  const viewOwner = useWorkspaceViewOwner(projectRef?.path);
+  const stateOwner = workspaceKnowledgeKey(viewOwner.runtime, projectRef);
+  const [storedTab, setStoredTab] = useWorkspaceViewState('knowledge', stateOwner, 'tab');
   const requestedTab = TAB_ORDER.includes(storedTab as ProjectContextTab)
     ? storedTab as ProjectContextTab
     : 'notes';
@@ -202,15 +206,15 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
   // Todos open nothing, so they never split.
   const split = wide && activeTab !== 'todos';
 
-  const [query, setQuery] = React.useState('');
-  const [searchOpen, setSearchOpen] = React.useState(false);
+  const [query, setQuery] = useWorkspaceViewState('knowledge', stateOwner, 'query');
+  const [searchOpen, setSearchOpen] = useWorkspaceViewState('knowledge', stateOwner, 'searchOpen');
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
   // Closing the search clears it, so a list never stays filtered by text
   // nobody can see.
   const closeSearch = React.useCallback(() => {
     setSearchOpen(false);
     setQuery('');
-  }, []);
+  }, [setQuery, setSearchOpen]);
   const toggleSearch = React.useCallback(() => {
     if (searchOpen) {
       closeSearch();
@@ -218,7 +222,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
     }
     setSearchOpen(true);
     setSearchFocusRequest((request) => request + 1);
-  }, [closeSearch, searchOpen]);
+  }, [closeSearch, searchOpen, setSearchOpen]);
   /**
    * The entry being read, shown in place of its section's list. Plans used to
    * open as a separate context-panel tab, and notes and memories expanded
@@ -226,7 +230,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
    * opens an entry the same way, and the panel owns which one so the back
    * control in the section strip can close it.
    */
-  const [openEntry, setOpenEntry] = React.useState<{ section: ProjectContextTab; id: string } | null>(null);
+  const [openEntry, setOpenEntry] = useWorkspaceViewState('knowledge', stateOwner, 'entry');
   const openIdIn = (section: ProjectContextTab): string | null => (
     openEntry?.section === section && activeTab === section ? openEntry.id : null
   );
@@ -243,7 +247,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
       returnPointRef.current = { section, id, scrollTop: listScrollerRef.current?.scrollTop ?? 0 };
     }
     setOpenEntry(id ? { section, id } : null);
-  }, []);
+  }, [setOpenEntry]);
   const openNote = React.useCallback((id: string | null) => openEntryIn('notes', id), [openEntryIn]);
   const openMemory = React.useCallback((id: string | null) => openEntryIn('memory', id), [openEntryIn]);
   const openPlan = React.useCallback((plan: { id: string }) => openEntryIn('plans', plan.id), [openEntryIn]);
@@ -333,43 +337,33 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
     target?.focus({ preventScroll: true });
   }, [activeTab, listShown]);
 
-  // An entry belongs to its project and to its section; leaving either must
-  // not leave it open over a list it no longer matches.
-  React.useEffect(() => {
-    setOpenEntry(null);
-  }, [projectContextId]);
-
   React.useEffect(() => {
     setOpenEntry((current) => (current && current.section !== activeTab ? null : current));
-  }, [activeTab]);
+  }, [activeTab, setOpenEntry]);
 
   // A plan an agent asked to show. Declared after the resets above so a request
   // that switched the tab or mounted the panel is not closed again by them. A
   // request for another project waits for that project's panel.
   const planRequest = useUIStore((state) => state.projectKnowledgePlanRequest);
   React.useEffect(() => {
-    if (!planRequest || planRequest.projectContextId !== projectContextId || activeTab !== 'plans') return;
+    if (!planRequest || planRequest.projectContextId !== projectContextId) return;
+    if (activeTab !== 'plans') { setStoredTab('plans'); return; }
     useUIStore.getState().clearProjectKnowledgePlanRequest();
     openEntryIn('plans', planRequest.planId);
-  }, [activeTab, openEntryIn, planRequest, projectContextId]);
-
-  // Reset the filter when the project changes: a query that matched the old
-  // project would silently hide everything in the new one.
-  React.useEffect(() => {
-    closeSearch();
-  }, [closeSearch, projectContextId]);
+  }, [activeTab, openEntryIn, planRequest, projectContextId, setStoredTab]);
 
   // Follow the search to where the matches are. Without this, typing a query
   // whose hits are all in another tab shows an empty list and the user has to
   // guess which tab to try. Only moves off a tab that has nothing, and only
   // when the query changes: a tab the user picks by hand while searching
   // stays picked, even when it has no matches.
-  const followedQueryRef = React.useRef('');
+  const followedQueryRef = React.useRef({ owner: stateOwner, query: trimmedQuery });
+  if (followedQueryRef.current.owner !== stateOwner) followedQueryRef.current = { owner: stateOwner, query: trimmedQuery };
   React.useEffect(() => {
-    if (trimmedQuery === followedQueryRef.current) {
+    if (trimmedQuery === followedQueryRef.current.query) {
       return;
     }
-    followedQueryRef.current = trimmedQuery;
+    followedQueryRef.current.query = trimmedQuery;
     if (!trimmedQuery || counts[activeTab] > 0) {
       return;
     }
@@ -378,6 +372,9 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
       setStoredTab(withMatches);
     }
   }, [activeTab, counts, setStoredTab, trimmedQuery]);
+
+  useWorkspaceScroll(listScrollerRef, stateOwner ? JSON.stringify([stateOwner, 'knowledge-list', activeTab, query]) : null,
+    contextEntry.loaded && !split && (openEntry === null || openEntry.section !== activeTab), visible, 'data-knowledge-entry-id');
 
   const handlePersistTodos = React.useCallback(
     async (nextTodos: ProjectTodoItem[], change?: ProjectTodoChange): Promise<boolean> => {
@@ -510,6 +507,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
 
   const plansList = (
     <PlansSection
+      key={stateOwner}
       projectRef={projectRef}
       plans={contextEntry.plans}
       query={query}
@@ -543,6 +541,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
   );
 
   return (
+    <WorkspaceViewVisible.Provider value={visible}><WorkspaceViewScope.Provider value={stateOwner}>
     <div ref={setRootNode} className={cn('flex h-full min-h-0 w-full min-w-0 flex-col', className)}>
       {inPanelHeader ? (
         <ContextPanelHeaderToolbar>{toolbar}</ContextPanelHeaderToolbar>
@@ -576,6 +575,8 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
       >
         {activeTab === 'notes' ? (
           <NotesSection
+            key={stateOwner}
+            loaded={contextEntry.loaded}
             projectRef={projectRef}
             notes={contextEntry.notes}
             disabled={isLoading}
@@ -595,6 +596,8 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
             <TodosSection
               key={`${getRuntimeKey()}:${projectContextId}`}
               todos={todos}
+              loaded={contextEntry.loaded && !contextEntry.error}
+              readFailed={Boolean(contextEntry.error)}
               query={query}
               disabled={isLoading}
               canCreateWorktree={canCreateWorktree}
@@ -609,6 +612,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
 
         {activeTab === 'memory' && memoryVisible ? (
           <MemorySection
+            key={stateOwner}
             projectPath={projectRef.path}
             query={query}
             openMemoryId={openIdIn('memory')}
@@ -620,6 +624,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
         {activeTab === 'plans' ? (
           split ? (
             <KnowledgeSplit
+              section="plans"
               list={plansList}
               detail={openPlanId ? planView(openPlanId, false) : null}
               emptyLabel={t('rightSidebar.contextNotesTodo.plans.selectHint')}
@@ -642,5 +647,6 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
         onConfirm={send.confirmSend}
       />
     </div>
+    </WorkspaceViewScope.Provider></WorkspaceViewVisible.Provider>
   );
 };

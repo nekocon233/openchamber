@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
+import { useWorkspaceChildKey, useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
 
 /** Width of the list column in the split layout. */
 const LIST_WIDTH_PX = 380;
@@ -18,9 +19,14 @@ export const KnowledgeSplit: React.FC<{
   /** The open entry, or null for the quiet hint. */
   detail: React.ReactNode | null;
   emptyLabel: string;
-}> = ({ list, detail, emptyLabel }) => (
+  section: string;
+}> = ({ list, detail, emptyLabel, section }) => {
+  const scroller = React.useRef<HTMLElement>(null);
+  useWorkspaceScroll(scroller, useWorkspaceChildKey('knowledge-split', section), true, true, 'data-knowledge-entry-id');
+  return (
   <div className="flex h-full min-h-0">
     <ScrollableOverlay
+      ref={scroller}
       outerClassName="h-full flex-shrink-0 border-e border-edge"
       outerStyle={{ width: LIST_WIDTH_PX }}
       className="p-3"
@@ -36,4 +42,5 @@ export const KnowledgeSplit: React.FC<{
       )}
     </div>
   </div>
-);
+  );
+};

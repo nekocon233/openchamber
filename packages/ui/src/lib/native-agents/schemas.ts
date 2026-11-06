@@ -54,6 +54,7 @@ const assistantMessageSchema = z.object({
   id: z.string().min(1),
   sessionID: nativeSessionIdSchema,
   role: z.literal('assistant'),
+  metadata: metadataSchema.optional(),
   time: z.object({ created: z.number(), completed: z.number().optional() }),
   error: nativeMessageErrorSchema.optional(),
   parentID: z.string().min(1),

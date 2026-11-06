@@ -16,11 +16,14 @@ import { syncDebug } from "./debug"
 import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
 import { nativeHistoryRevision, withNativeHistoryRevision } from "@/lib/native-agents/history"
 import { isUnifiedNativeSessionId } from "@/lib/native-agents/ids"
+import { z } from "zod"
 import {
   compareMessagesChronologically,
   findMessageIndex,
   insertMessageChronologically,
 } from "./message-ordering"
+
+const metadataFields = z.record(z.string(), z.json()).catch({})
 
 type DedupeMetadata = {
   __dedupeNextDeltaFields?: string[]
@@ -219,6 +222,11 @@ function applySessionPatch(session: Session, patch: SessionPatch): Session {
 function applyMessagePatch(message: Message, patch: MessagePatch): Message {
   if (message.role === "assistant") {
     const next = { ...message }
+    if (patch.telemetry) {
+      const openchamber = metadataFields.parse(message.metadata?.openchamber)
+      const telemetry = metadataFields.parse(openchamber.telemetry)
+      next.metadata = { ...message.metadata, openchamber: { ...openchamber, telemetry: { ...telemetry, ...patch.telemetry } } }
+    }
     if (patch.time) next.time = compact({ ...message.time, ...patch.time })
     if (patch.finish !== undefined) next.finish = patch.finish
     if (patch.error !== undefined) next.error = patch.error

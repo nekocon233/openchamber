@@ -22,6 +22,10 @@ import { PROJECT_TODO_TEXT_MAX_LENGTH, type ProjectTodoChange, type ProjectTodoI
 import { cn } from '@/lib/utils';
 import { hasTextSelectionWithin } from '@/lib/textSelection';
 import { KnowledgeComposer } from './KnowledgeComposer';
+import { WorkspaceViewScope, useWorkspaceChildKey, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { DraftRecoveryNotice } from '@/components/ui/draft-recovery-notice';
+import { useWorkspaceDraftStore } from '@/stores/useWorkspaceDraftStore';
 import { KNOWLEDGE_ICON_BUTTON_CLASS, useKnowledgeRevealClass } from './knowledgeRowStyle';
 import { KnowledgeMenu } from './KnowledgeActions';
 
@@ -85,19 +89,27 @@ const TodoEditor: React.FC<{
   initialText: string;
   disabled: boolean;
   saving: boolean;
-  onSave: (text: string) => void;
+  onSave: (text: string) => Promise<boolean>;
   onCancel: () => void;
-}> = ({ initialText, disabled, saving, onSave, onCancel }) => {
+  draftKey: string | null;
+}> = ({ initialText, disabled, saving, onSave, onCancel, draftKey }) => {
   const { t } = useI18n();
-  const [text, setText] = React.useState(initialText);
+  const input = useWorkspaceDraft(draftKey, initialText);
+  const { value: text, setValue: setText } = input;
   const field = React.useRef<HTMLTextAreaElement>(null);
+  const recoveredInitially = React.useRef(input.recovered);
   React.useEffect(() => {
+    if (recoveredInitially.current) return;
     field.current?.focus();
     const length = field.current?.value.length ?? 0;
     field.current?.setSelectionRange(length, length);
   }, []);
-  const save = () => { if (!disabled && !saving && text.trim()) onSave(text.trim()); };
+  const save = () => {
+    if (!disabled && !saving && text.trim()) void onSave(text.trim()).then(ok => { if (ok) input.acknowledge(text); });
+  };
+  const cancel = () => { input.useLatest(); onCancel(); };
   return <form className="min-w-0 flex-1 space-y-2 py-1" aria-busy={saving} onSubmit={event => { event.preventDefault(); save(); }}>
+    <DraftRecoveryNotice conflict={input.conflict} onResume={() => { input.resume(); save(); }} onUseLatest={input.useLatest} />
     <Textarea
       ref={field}
       value={text}
@@ -110,14 +122,14 @@ const TodoEditor: React.FC<{
       onKeyDown={event => {
         if (isIMECompositionEvent(event)) return;
         if (event.key === 'Escape' && !saving) {
-          event.preventDefault(); event.stopPropagation(); onCancel();
+          event.preventDefault(); event.stopPropagation(); cancel();
         } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault(); save();
         }
       }}
     />
     <div className="flex justify-end gap-2">
-      <Button type="button" size="sm" variant="ghost" disabled={saving} onClick={onCancel}>{t('rightSidebar.contextNotesTodo.todo.cancel')}</Button>
+      <Button type="button" size="sm" variant="ghost" disabled={saving} onClick={cancel}>{t('rightSidebar.contextNotesTodo.todo.cancel')}</Button>
       <Button type="submit" size="sm" disabled={disabled || saving || !text.trim()}>
         {saving ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : null}
         {t('rightSidebar.contextNotesTodo.todo.save')}
@@ -128,6 +140,8 @@ const TodoEditor: React.FC<{
 
 export const TodosSection: React.FC<{
   todos: ProjectTodoItem[];
+  loaded: boolean;
+  readFailed: boolean;
   /** Panel-wide filter. Mutations still act on the full list. */
   query: string;
   disabled: boolean;
@@ -145,6 +159,8 @@ export const TodosSection: React.FC<{
   todos,
   query,
   disabled,
+  loaded,
+  readFailed,
   canCreateWorktree,
   sendingTodoId,
   onPersistTodos,
@@ -153,21 +169,31 @@ export const TodosSection: React.FC<{
   onSendToNewWorktreeSession,
 }) => {
   const { t } = useI18n();
-  const [expandedTodoIds, setExpandedTodoIds] = React.useState<Set<string>>(() => new Set());
-  const [editingTodoId, setEditingTodoId] = React.useState<string | null>(null);
+  const owner = React.useContext(WorkspaceViewScope);
+  const [expandedTodoIds, setExpandedTodoIds] = useWorkspaceViewState('knowledge', owner, 'expandedTodos');
+  const [editingTodoId, setEditingTodoId] = useWorkspaceViewState('knowledge', owner, 'editingTodo');
+  const newTodoDraftKey = useWorkspaceChildKey('todo');
+  const editingExists = todos.some(todo => todo.id === editingTodoId);
+  const editingInList = editingTodoId !== null && editingExists;
+  const orphanKey = newTodoDraftKey && editingTodoId ? JSON.stringify([newTodoDraftKey, editingTodoId]) : null;
+  const orphan = useWorkspaceDraftStore(state => orphanKey ? state.drafts[orphanKey] : undefined);
+  React.useEffect(() => {
+    if (loaded && editingTodoId && !editingExists && !orphan) setEditingTodoId(null);
+  }, [editingExists, editingTodoId, loaded, orphan, setEditingTodoId]);
   const [savingEdit, setSavingEdit] = React.useState(false);
   const reveal = useKnowledgeRevealClass();
   const blocked = disabled || savingEdit;
 
   const handleEditTodo = async (id: string, text: string) => {
-    if (blocked || !text.trim()) return;
+    if (blocked || !text.trim()) return false;
     const todo = todos.find(item => item.id === id);
-    if (!todo) return;
-    if (todo.text === text) { setEditingTodoId(null); return; }
+    if (!todo) return false;
+    if (todo.text === text) { setEditingTodoId(null); return true; }
     setSavingEdit(true);
     try {
       const saved = await onPersistTodos(todos.map(item => item.id === id ? { ...item, text } : item), { kind: 'edit', id, text });
       if (saved) setEditingTodoId(current => current === id ? null : current);
+      return saved;
     } finally { setSavingEdit(false); }
   };
 
@@ -185,15 +211,9 @@ export const TodosSection: React.FC<{
 
   const handleToggleTodoExpanded = React.useCallback((id: string) => {
     setExpandedTodoIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
+      return previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id];
     });
-  }, []);
+  }, [setExpandedTodoIds]);
 
   const handleToggleTodo = React.useCallback(
     (id: string, completed: boolean) => {
@@ -228,7 +248,7 @@ export const TodosSection: React.FC<{
 
   const handleTodoReorder = React.useCallback(
     (event: DragEndEvent) => {
-      if (blocked || editingTodoId !== null) return;
+      if (blocked || editingInList) return;
       const { active, over } = event;
       if (!over || active.id === over.id) {
         return;
@@ -240,7 +260,7 @@ export const TodosSection: React.FC<{
       }
       onPersistTodos(sortTodosWithCompletedLast(arrayMove(todos, oldIndex, newIndex)));
     },
-    [blocked, editingTodoId, onPersistTodos, todos]
+    [blocked, editingInList, onPersistTodos, todos]
   );
 
   const todoSensors = useSensors(
@@ -259,12 +279,21 @@ export const TodosSection: React.FC<{
   return (
     <div className="space-y-2">
       <KnowledgeComposer
+        draftId="todo"
         placeholder={t('rightSidebar.contextNotesTodo.todo.inputPlaceholder')}
         addLabel={t('rightSidebar.contextNotesTodo.todo.addAria')}
         maxLength={PROJECT_TODO_TEXT_MAX_LENGTH}
         disabled={blocked}
         onSubmit={handleAddTodo}
       />
+
+      {!editingExists && orphan && (loaded || readFailed) ? (
+        <div className="space-y-2 rounded-md bg-[var(--status-warning-background)] p-3">
+          <p role="status" className="typography-micro">{t(loaded ? 'workspaceRestore.itemMissing' : 'rightSidebar.contextNotesTodo.toast.loadNotesFailed')}</p>
+          <Textarea value={orphan.value} readOnly rows={3} aria-label={t('rightSidebar.contextNotesTodo.todo.editorLabel')} />
+          <Button size="sm" variant="ghost" onClick={() => setEditingTodoId(null)}>{t('rightSidebar.contextNotesTodo.todo.cancel')}</Button>
+        </div>
+      ) : null}
 
       <div className="rounded-lg border border-edge bg-background/40">
         {visibleTodos.length === 0 ? (
@@ -285,15 +314,15 @@ export const TodosSection: React.FC<{
             >
               <ul className="divide-y divide-edge">
                 {visibleTodos.map((todo) => {
-                  const isExpandedTodo = expandedTodoIds.has(todo.id);
+                  const isExpandedTodo = expandedTodoIds.includes(todo.id);
                   const isEditingTodo = editingTodoId === todo.id;
                   return (
-                    <SortableTodoItem key={todo.id} id={todo.id} disabled={blocked || editingTodoId !== null}>
+                    <SortableTodoItem key={todo.id} id={todo.id} disabled={blocked || editingInList}>
                       {(dragHandleProps) => (
                         <div className={cn('group/knowledge flex gap-1.5 px-2.5 py-1.5', isExpandedTodo || isEditingTodo ? 'items-start' : 'items-center')}>
                           <button
                             type="button"
-                            disabled={blocked || editingTodoId !== null}
+                            disabled={blocked || editingInList}
                             ref={dragHandleProps.setActivatorNodeRef}
                             {...dragHandleProps.attributes}
                             {...dragHandleProps.listeners}
@@ -316,10 +345,11 @@ export const TodosSection: React.FC<{
                             />
                           </div>
                           {isEditingTodo ? <TodoEditor
+                            draftKey={newTodoDraftKey ? JSON.stringify([newTodoDraftKey, todo.id]) : null}
                             initialText={todo.text}
                             disabled={disabled}
                             saving={savingEdit}
-                            onSave={text => { void handleEditTodo(todo.id, text); }}
+                            onSave={text => handleEditTodo(todo.id, text)}
                             onCancel={() => setEditingTodoId(null)}
                           /> : <>
                           <div
@@ -366,7 +396,7 @@ export const TodosSection: React.FC<{
                               items={[{
                                 id: 'edit',
                                 label: t('rightSidebar.contextNotesTodo.todo.menu.edit'),
-                                disabled: editingTodoId !== null || sendingTodoId === todo.id,
+                                disabled: editingInList || sendingTodoId === todo.id,
                                 onSelect: () => setEditingTodoId(todo.id),
                               }, {
                                 id: 'send-new-session',
@@ -402,7 +432,7 @@ export const TodosSection: React.FC<{
         <button
           type="button"
           onClick={handleClearCompletedTodos}
-          disabled={blocked || editingTodoId !== null}
+          disabled={blocked || editingInList}
           className="px-1 typography-meta text-muted-foreground/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {t('rightSidebar.contextNotesTodo.todo.clearCompleted')}

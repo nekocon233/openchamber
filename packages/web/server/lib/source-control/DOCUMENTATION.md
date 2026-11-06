@@ -75,6 +75,15 @@ Snapshot writes use unique same-directory temporary files, mode `0600` before re
 
 Reference-picker reads validate `scope=repository|network` before resolving the read context, then pass it to the provider. Omission keeps `network`. The web adapter retains the provider's scope echo so a project-only list can reject an unscoped response. Disabled reference-picker capabilities still answer the existing unsupported response.
 
+The shell also registers the versioned review draft at `GET /pr/review/pending`
+and `POST /pr/review/pending` under `reviewDrafts`. Reads require the optional
+`resources.pendingReview` method and send `Cache-Control: no-store`; mutations
+require the route in the provider's mutation table and use the shared durable
+executor. A provider without that contract answers
+`501 SOURCE_CONTROL_CAPABILITY_UNSUPPORTED`. GitHub preserves its existing response,
+`change-request-pending-review` kind and digest. Other review routes are
+unchanged.
+
 ## Repository binding routes
 
 - `GET /api/source-control/repository-context?directory=...` returns canonical repository identity, config revision, and redacted remotes.

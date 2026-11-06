@@ -1,3 +1,4 @@
+import { navigationReturnSchema } from './navigation-return';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
@@ -36,6 +37,17 @@ afterAll(() => {
 });
 
 describe('tool navigation return', () => {
+  test('a serialized return restores the exact draft identity after a remount', () => {
+    const draft = { ...useSessionUIStore.getInitialState().newSessionDraft, draftId: 78, open: true,
+      preparedChatDirectory: '/chats/restored', title: 'Restored draft', projectContextPins: { notes: ['note-1'], plans: [] } };
+    useSessionUIStore.setState({ currentSessionId: null, newSessionDraft: draft });
+    const snapshot = useSessionUIStore.getState().captureNavigationReturnSnapshot('/chats/restored');
+    const serialized: unknown = JSON.parse(JSON.stringify(snapshot));
+    useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: 'source', directoryOverride: '/source' });
+    useSessionUIStore.getState().restoreNavigationReturn(navigationReturnSchema.parse(serialized));
+    expect(useSessionUIStore.getState().newSessionDraft).toEqual(draft);
+    expect(useDirectoryStore.getState().currentDirectory).toBe('/chats/restored');
+  });
   test('restores a prepared chat draft and its manual selections without changing the other directory', () => {
     const directory = '/chats/prepared-origin';
     const draft = { ...useSessionUIStore.getInitialState().newSessionDraft, draftId: 41, open: true,

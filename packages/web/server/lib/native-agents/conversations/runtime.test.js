@@ -392,6 +392,20 @@ describe('unified native backend contract', () => {
     }
   });
 
+  it('projects recovered part snapshots into unified message and part identities', async () => {
+    const h = await setup();
+    const session = await h.conversation('antigravity');
+    await h.send(session.id, 'antigravity');
+    const source = h.requests[0].id;
+    const record = h.sources.get(source).records.at(-1);
+    h.controller.publish({ directory: h.directory, payload: { type: 'message.parts.replaced',
+      properties: { sessionID: source, messageID: record.info.id, parts: record.parts } } });
+    const event = h.events.at(-1).payload;
+    const historical = (await h.history(session.id)).records.at(-1);
+    expect(event.type).toBe('message.parts.replaced');
+    expect(event.properties).toEqual({ sessionID: session.id, messageID: historical.info.id, parts: historical.parts });
+  });
+
   it.each(pairs)('switches %s to %s with stable live and saved identities and source retirement', async (from, to) => {
     const h = await setup();
     const session = await h.conversation(from);
@@ -514,6 +528,36 @@ describe('unified native backend contract', () => {
     h.controller.publish({ directory: h.directory, payload: { type: 'message.part.delta', properties: { sessionID: old, messageID: 'old', partID: 'old', field: 'text', delta: 'late' } } });
     expect(h.events).toHaveLength(count);
     expect((await h.api.getSession(session.id, h.directory)).metadata.openchamber.native.backend).toBe('codex');
+  });
+
+  it('delivers late Codex timing after a backend switch only within retained history', async () => {
+    const h = await setup();
+    const session = await h.conversation('codex');
+    await h.send(session.id, 'codex');
+    const source = h.requests[0].id;
+    const first = h.sources.get(source).records.at(-1);
+    const secondUser = await h.send(session.id, 'codex');
+    const second = h.sources.get(source).records.at(-1);
+    const logicalFirst = (await h.history(session.id)).records[1].info.id;
+    await h.send(session.id, 'claude');
+    // A failed unrelated source must not block a readable Codex correction.
+    const unrelated = h.requests.at(-1).id;
+    h.missing.add(unrelated);
+    const publishTiming = (messageID) => h.controller.publish({ directory: h.directory, payload: {
+      type: 'message.patched', properties: { sessionID: source, messageID, patch: { telemetry: { toolWaitDurationMs: 100 } } },
+    } });
+    publishTiming(first.info.id);
+    await h.api.updateSession(session.id, h.directory, { title: 'Flush timing correction' });
+    expect(h.events.filter(event => event.payload.type === 'message.patched').map(event => event.payload.properties))
+      .toEqual([{ sessionID: session.id, messageID: logicalFirst, patch: { telemetry: { toolWaitDurationMs: 100 } } }]);
+
+    h.missing.delete(unrelated);
+    await h.api.revert(session.id, secondUser, h.directory);
+    publishTiming(second.info.id);
+    h.sources.get(source).records.push({ ...second, info: { ...second.info, id: 'outside-retained-boundary' } });
+    publishTiming('outside-retained-boundary');
+    await h.api.updateSession(session.id, h.directory, { title: 'Flush rejected corrections' });
+    expect(h.events.filter(event => event.payload.type === 'message.patched')).toHaveLength(1);
   });
 
   it('confirms uncertain native admissions from history without replaying them', async () => {

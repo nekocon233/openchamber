@@ -379,18 +379,20 @@ export const SourceBoardPullLinks: React.FC<{
         const restoreWorkspace = linkedDiff && directory !== currentDirectory
             ? useSessionUIStore.getState().captureNavigationReturn(returnTo.workspaceDirectory)
             : undefined;
+        const navigationReturn = restoreWorkspace && returnTo
+            ? useSessionUIStore.getState().captureNavigationReturnSnapshot(returnTo.workspaceDirectory) : null;
         if (directory === currentDirectory) ui.closeMainSurfaces();
         else useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: linkedDiff ? directory : project.path });
         if (surface === 'diff') {
             if (mobile) {
                 // The phone's Changes looks requests up by the normalized folder.
-                usePullRequestSelectionStore.getState().requestDiff(normalizePath(directory) ?? directory, source);
+                usePullRequestSelectionStore.getState().requestDiff(normalizePath(directory) ?? directory, source, undefined, context);
                 onLeave?.();
                 mobile.openChanges();
                 return;
             }
             usePullRequestSelectionStore.getState().requestDiff(returnTo ? context.directory : directory, source,
-                returnTo ? { ...returnTo, reference: pull, context, restoreWorkspace } : undefined);
+                returnTo ? { ...returnTo, reference: pull, context, restoreWorkspace, navigationReturn } : undefined, context);
             ui.openContextPanelTab(directory, { mode: 'diff', diffScope: 'pr' });
             return;
         }

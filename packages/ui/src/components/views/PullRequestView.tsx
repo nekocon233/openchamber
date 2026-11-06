@@ -1,3 +1,4 @@
+import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
@@ -28,10 +29,12 @@ import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { ProjectPullRequestList } from './git/ProjectPullRequestList';
 import { pullRequestNavigationKey, usePullRequestSelectionStore, type PullRequestOpenRequest } from '@/stores/usePullRequestSelectionStore';
 import { LinkedPullRequestView } from './git/LinkedPullRequestView';
+import { useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 
 const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string; context: SourceControlReadContext | null }> = ({ directory, workspaceDirectory, context }) => {
   const { t } = useI18n();
-  const [tab, setTab] = React.useState<'project' | 'branch'>('project');
+  const owner = useWorkspaceViewOwner(workspaceDirectory);
+  const [tab, setTab] = useWorkspaceViewState('pullRequest', owner.project, 'tab');
   const runtimeKey = useGitStore(state => state.runtimeKey);
   const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, workspaceDirectory)));
   React.useEffect(() => {
@@ -42,7 +45,7 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
     }
     setTab(returning.tab);
     if (returning.tab === 'branch') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
-  }, [context, returning]);
+  }, [context, returning, setTab]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-border/60 px-4 py-2">
@@ -73,28 +76,45 @@ export const PullRequestView: React.FC<{ directory: string; visible?: boolean }>
   const pending = usePullRequestSelectionStore(state => state.openRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
   const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
   const [opened, setOpened] = React.useState<PullRequestOpenRequest | null>(null);
+  const owner = useWorkspaceViewOwner(directory);
+  const [savedLink, setSavedLink] = useWorkspaceViewState('pullRequest', owner.workspace, 'link');
+  const restoredLink = React.useMemo<PullRequestOpenRequest | null>(() => savedLink ? {
+    ...savedLink, runtimeKey, workspaceDirectory: directory, failureBehavior: 'manual',
+  } : null, [directory, runtimeKey, savedLink]);
   // Normal tabs consume their own return request when Activity reconnects.
   // Drop the link before those child effects can remove the request.
   if (visible && returning && returning.tab !== 'linked' && opened) setOpened(null);
   const request = visible && returning
     ? returning.tab === 'linked' ? returning.request : null
-    : (visible ? pending : null) ?? (opened?.runtimeKey === runtimeKey ? opened : null);
+    : (visible ? pending : null) ?? (opened?.runtimeKey === runtimeKey ? opened : restoredLink);
   React.useEffect(() => {
     if (!visible || !pending) return;
     if (usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== pending) return;
     setOpened(pending);
+    setSavedLink({ sourceDirectory: pending.sourceDirectory, url: pending.url });
     usePullRequestSelectionStore.getState().settleOpenRequest(pending);
-  }, [directory, pending, runtimeKey, visible]);
+  }, [directory, pending, runtimeKey, setSavedLink, visible]);
   React.useEffect(() => {
     if (!visible || !returning || returning.tab !== 'linked') return;
     if (usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== returning) return;
     setOpened(returning.request);
+    setSavedLink({ sourceDirectory: returning.request.sourceDirectory, url: returning.request.url });
     usePullRequestSelectionStore.getState().settleReturnRequest(returning);
-  }, [directory, returning, runtimeKey, visible]);
+  }, [directory, returning, runtimeKey, setSavedLink, visible]);
+  React.useLayoutEffect(() => {
+    if (visible && returning && returning.tab !== 'linked'
+      && usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)) === returning) setSavedLink(null);
+  }, [directory, returning, runtimeKey, setSavedLink, visible]);
   const closeLink = React.useCallback(() => {
-    if (request) usePullRequestSelectionStore.getState().settleOpenRequest(request);
-    setOpened(null);
-  }, [request]);
+    const pending = usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, directory));
+    if (request) {
+      if (pending && pending !== request) return;
+      usePullRequestSelectionStore.getState().settleOpenRequest(request);
+    }
+    const closingPending = pending === request;
+    setOpened(previous => closingPending || previous === request ? null : previous);
+    setSavedLink(previous => closingPending || (previous === savedLink && previous?.url === request?.url && previous?.sourceDirectory === request?.sourceDirectory) ? null : previous);
+  }, [directory, request, runtimeKey, savedLink, setSavedLink]);
   const reference = request ? parseChangeRequestReference(request.url) : null;
   const key = request ? JSON.stringify([runtimeKey, request.sourceDirectory,
     reference?.project?.owner.toLowerCase(), reference?.project?.name.toLowerCase(), reference?.number]) : '';

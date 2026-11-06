@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { I18nProvider } from '@/lib/i18n';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { SessionActivityIndicator } from './SessionActivityIndicator';
+import { PauseClock } from '@/components/ui/pause-clock';
 
 
 describe('SessionActivityIndicator', () => {
@@ -17,8 +18,8 @@ describe('SessionActivityIndicator', () => {
 
   const globalNames = ['window', 'document', 'HTMLElement', 'Element', 'Node', 'IS_REACT_ACT_ENVIRONMENT'];
 
-  const renderIndicator = async (props: React.ComponentProps<typeof SessionActivityIndicator>) => {
-    await act(async () => root.render(<I18nProvider><SessionActivityIndicator {...props} /></I18nProvider>));
+  const renderIndicator = async (props: React.ComponentProps<typeof SessionActivityIndicator>, paused = false) => {
+    await act(async () => root.render(<I18nProvider><PauseClock paused={paused}><SessionActivityIndicator {...props} /></PauseClock></I18nProvider>));
     return host.innerHTML;
   };
 
@@ -93,6 +94,7 @@ describe('SessionActivityIndicator', () => {
     for (const state of ['running', 'subagent', 'shell'] as const) {
       await renderIndicator({ state });
       expect(host.querySelector(`[data-session-activity-indicator="${state}"] [data-spinner]`)).not.toBeNull();
+      expect(iconHref(state)).toBe('#oc-loader-4');
     }
     await renderIndicator({ state: 'unread' });
     expect(iconHref('unread')).toBe('#oc-checkbox-circle');
@@ -107,5 +109,17 @@ describe('SessionActivityIndicator', () => {
     await act(async () => useSessionDisplayStore.getState().setAnimatedActivityIndicators(false));
     expect(host.querySelector('[data-spinner]')).toBeNull();
     expect(iconHref('running')).toBe('#oc-circle');
+  });
+
+  test('pauses and resumes the circular mark with its hidden surface', async () => {
+    useSessionDisplayStore.setState({ animatedActivityIndicators: true });
+    await renderIndicator({ state: 'running' });
+    const mark = host.querySelector<SVGElement>('[data-spinner]');
+    expect(mark?.style.animationPlayState).toBe('running');
+    await renderIndicator({ state: 'running' }, true);
+    expect(host.querySelector('[data-spinner]')).toBe(mark);
+    expect(mark?.style.animationPlayState).toBe('paused');
+    await renderIndicator({ state: 'running' });
+    expect(mark?.style.animationPlayState).toBe('running');
   });
 });

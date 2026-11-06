@@ -34,6 +34,9 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useDeviceInfo } from '@/lib/device';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useProjectContextOwner } from '@/hooks/useProjectContextOwner';
+import { useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceKnowledgeKey } from '@/stores/useWorkspaceViewStateStore';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { toastContextFileOpenFailure, validateContextFileOpen } from '@/lib/contextFileOpenGuard';
 import { toast } from '@/components/ui';
@@ -188,7 +191,10 @@ export const CommandPalette: React.FC = () => {
   const openContextFile = useUIStore((s) => s.openContextFile);
   const shortcutOverrides = useUIStore((s) => s.shortcutOverrides);
   const setArchivePageOpen = useUIStore((s) => s.setArchivePageOpen);
-  const setProjectContextTab = useUIStore((s) => s.setProjectContextTab);
+  const knowledgeDirectory = useSessionUIStore(state => state.currentSessionDirectory);
+  const knowledgeOwner = useProjectContextOwner(knowledgeDirectory);
+  const runtimeKey = useGitStore(state => state.runtimeKey);
+  const [, setProjectContextTab] = useWorkspaceViewState('knowledge', workspaceKnowledgeKey(runtimeKey, knowledgeOwner), 'tab');
 
   const openNewSessionDraft = useSessionUIStore((s) => s.openNewSessionDraft);
   const setCurrentSession = useSessionUIStore((s) => s.setCurrentSession);

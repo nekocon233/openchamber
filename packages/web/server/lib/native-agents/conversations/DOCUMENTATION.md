@@ -49,6 +49,8 @@ conversation. User sends retain their client IDs; forks namespace inherited
 records for their own conversation. A segment's clock offset is shared by live
 and historical projection. Child links retain native identity and execution
 ownership. Per-turn model, effort and agent come from captured sends.
+Native message-part snapshots project every part identity and timestamp as
+history does, preserving recovered reasoning order during a running turn.
 
 History pages carry an opaque `ncvpage_` cursor and `historyRevision`. They read
 only the segments needed by the window. If an older source fails after newer
@@ -101,6 +103,10 @@ questions, children and background work retain their protection. Acceptance
 updates the next model and Build selection only at the captured revision.
 An application-owned answer can settle on a retained planning source after
 backend handoff; other events from inactive sources stay excluded.
+Completed Codex tool-wait patches are the other narrow exception. They update
+only timing metadata, after a serialized retained-history read confirms the
+message is inside the source boundary and before any rewind cut. Unreadable or
+removed history rejects the patch without replacing messages or live activity.
 The conversation send owner reports a completed rollback to the plan approval
 owner, including numeric JSON-RPC refusals. The approval then reopens for a
 different model or effort. Timeout and disconnect failures retain the target

@@ -1,6 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 
-import { nativeCapabilitiesSchema, nativeCatalogSchema, nativeSessionListSchema } from './schemas';
+import { nativeCapabilitiesSchema, nativeCatalogSchema, nativeMessageSchema, nativeSessionListSchema } from './schemas';
+
+test('native assistant metadata preserves measured, unknown and older-server telemetry', () => {
+  const info = { id: 'reply', sessionID: 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00', role: 'assistant',
+    time: { created: 1000, completed: 5000 }, parentID: 'user', providerID: 'codex-native', modelID: 'test',
+    mode: 'build', agent: 'build', path: { cwd: '/work', root: '/work' } };
+  for (const value of [0, 100, null, 'invalid']) {
+    const metadata = { openchamber: { telemetry: { toolWaitDurationMs: value } } };
+    expect(nativeMessageSchema.parse({ ...info, metadata })).toMatchObject({ metadata });
+  }
+  expect(nativeMessageSchema.parse(info)).not.toHaveProperty('metadata');
+});
 
 const capabilities = () => ({
   supported: true as const,

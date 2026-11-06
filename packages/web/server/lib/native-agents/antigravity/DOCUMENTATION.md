@@ -199,10 +199,33 @@ two CLI calls. A cold direct prompt using an old slug with an explicit effort
 reads the catalog once before admission if discovery has not happened yet.
 Canonical ids and prompts without an explicit effort need no extra discovery.
 
-Model limits and non-text input are unknown and therefore not advertised. Images are
+Output limits and non-text input are unknown and therefore not advertised. Images are
 refused before native input; text files and file references follow the shared
 prompt-parts conversion. Authentication failure is reported separately as
 `reason: 'unauthenticated'` in the native catalog partition.
+
+### Why all catalog models use a 1M context window
+
+Every catalog model uses the maintainer-selected 1,000,000-token capacity for
+shared usage readings and unified handoff budgets, because `agy models` does
+not report limits. Built-in models and native Google login retain the CLI's
+own capacity. In Gemini API mode, OpenChamber also applies a 1,000,000-token
+budget to the selected and saved-default custom model definitions, identified
+by their key or label. Other custom model budgets and all routes stay intact.
+Automatic compaction remains under the CLI's control.
+
+### Why API context budgets use process-local settings
+
+An external catalog manager can replace custom model definitions and omit
+AGY's `maxTokens` field. Each prompt admission reads the current definitions
+and creates an owner-only temporary settings file for the CLI's `--settings`
+override. This changes no global CLI settings or external application code.
+Only custom model definitions go into the file; permission and authentication
+settings remain with the CLI. The model, effort and full-access launch flags
+are unchanged. A semantically unchanged override reuses the idle process;
+changed definitions retire it before the next prompt so routes stay current.
+Process exit, failed startup and discarded candidates remove their files.
+Invalid or unreadable settings refuse admission before any prompt is sent.
 
 ## Identity, history and live state
 
@@ -244,6 +267,59 @@ current projection; completed-turn records are merged on read.
 and history. `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC` and `CHECKPOINT` map to
 user, assistant, tool and compaction records. Tool results join their planner
 step by index. Instructions injected by OpenChamber are hidden in both paths.
+Nonempty `PLANNER_RESPONSE.thinking` becomes a reasoning part before text and
+tools, with a stable native-step ID. A `thinking` truncation marker survives as
+`nativeOutputTruncated`. The installed CLI's `stream-json` agent responses
+expose text deltas without thinking fields. Completed-turn history recovery
+remains the final fallback. During a running turn, completed native generation
+snapshots supply reasoning after an agent-response DONE frame and once after
+its first finished tool, covering transcript writes that lag the response
+frame. History reads also enrich observed live generations so the live overlay
+cannot hide saved thinking. These updates change only reasoning parts; running
+tools and session activity remain owned by the live stream. Complete thinking
+replaces shortened snapshots, and repeated reads publish no duplicate parts.
+Running reasoning inserts also publish the existing message-parts snapshot event so
+clients place reasoning before text and tools immediately. Unified projection
+maps every snapshot part into the same logical identities as history.
+Completed-history recovery keeps individual part updates because the interaction
+layer may own additional answered plan parts outside the native projection.
+Child completion uses the same recovery before publishing idle, including when
+the result arrives without any child update frames. Saved parent tasks restore
+their users' text and timestamps and their replies' parentage, keeping each
+assignment before its recovered generation.
+
+Conversation `SYSTEM_MESSAGE` envelopes expose only validated UUID senders.
+The native index's immediate `parent_conversation_id` relationship determines
+whether a sender is the parent or a direct child. Parent messages become user
+tasks in the child transcript; the initial task retains the live context user
+ID. Direct-child reports become ordinary assistant text with
+`nativeSubagentMessage` and `nativeSubagentSessionID` metadata. Completed-turn
+recovery publishes reports omitted by the stream. Long native messages can
+omit the envelope's closing tag; the validated header still supplies their
+sender and complete retained body. System notices, background
+task notifications and unrelated senders stay hidden. A partial child index
+retains readable records, marks metadata incomplete and grants no ownership to
+unreadable rows. Visible tasks and reports participate in unified handoffs;
+reasoning stays with the source CLI.
+
+### Why child recovery covers every saved task
+
+Parent assignments are retained as system messages and may arrive without a
+new user-input frame. A completed child observation therefore recovers its
+whole saved history and task boundaries. Foreground turns retain their own
+accepted-send boundary so one completion cannot publish another user turn.
+The last complete visible reply supplies the final step identity before child
+settlement. A result without preceding update frames therefore cannot overwrite
+an earlier progress reply; unreadable history retains the stream result fallback.
+
+### Why running reasoning reads follow completed steps
+
+The stream omits thinking even when the transcript already contains it. A
+generation completion and its first tool completion each allow one transcript
+read; token deltas and idle time read nothing. Only DONE planner snapshots can
+enrich already observed generations, so a history read neither invents a live
+message nor settles a running tool.
+
 Malformed complete lines and unknown step types mark history incomplete;
 unterminated trailing writes are not treated as corruption.
 Native `truncated_fields` markers survive in assistant text and tool metadata,
@@ -255,8 +331,9 @@ Background `run_command` results join their original tool step through the
 native task id in `SYSTEM_MESSAGE` completion notifications. Only matching
 conversation and task ids can complete the tool; a saved `RUNNING` row without
 a completion has an unrecorded outcome, never proof of live activity. Native
-tool errors and nonzero command exit codes remain errors in both live and
-historical records. `tools.js` maps native read/edit/write/command arguments
+tool errors, `INVALID` results and nonzero command exit codes remain errors in
+historical records. Live tool errors retain the native error field. `tools.js`
+maps native read/edit/write/command arguments
 to the shared tool cards, including file paths and replacement text.
 
 Completed edits carry replacement excerpts as `files`/`diff`, marked
@@ -358,6 +435,13 @@ feedback metadata can supply its complete draft on a history read; a denied
 write remains an error and grants no file access. Ordinary assistant prose,
 truncated arguments, native answers and incomplete/error/aborted turns never
 create approvals. Child sessions remain read-only.
+
+### Why plan marker cleanup follows identity generation
+
+Application plan text omits an optional final `</openchamber-plan-v1>` line,
+and an empty result cannot become a proposal. Revision hashes still use the
+original signal before cleanup so pending and answered decisions retain their
+identity across reloads; native transcripts stay unchanged.
 
 `decisions.js` owns request identity, reply delivery and recovery. The registry
 stores source call ID, user step, revision, request ID and open/dispatching/settled

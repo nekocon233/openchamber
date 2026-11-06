@@ -37,7 +37,8 @@ project.
 
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
   open PRs only, with Awaiting my review, Created by me, and All categories in
-  that order. Awaiting my review is the initial selection. Category filters stay separate from
+  that order. The saved project category is restored, defaulting to Awaiting my
+  review. Category filters stay separate from
   the picker and board; the panel does not preload issues or expose their state
   filter. It asks for `scope=repository`; existing
   callers keep `network`. Scope joins the list cache key. A hidden panel reads
@@ -106,6 +107,18 @@ project.
 - Attaching reads the full context the agent receives through the provider-neutral source-control reads (`issueGet` + `issueComments`, `changeRequestContext`) with the same read context: issue with all comments, PR context with the diff only when "Also send the diff" is checked for that PR, Linear issue with comments. Chips and context parts use the provider-neutral kinds `repository-issue` and `change-request` (with its provider). Each item resolves on its own; the ones that fail stay checked in the picker with the reason, the rest attach.
 - Linear sub-issues: a sub-issue's row names its parent above the title, a parent's row shows how many sub-issues are finished (`2/5`, or `20+` when the list counted only the first 20). The preview has a Parent row and, once the detail lands, a Sub-issues section. Clicking either previews that issue through `openItem`, kept like a pinned item while the list does not hold it; the picker and the board both pass `onOpenLinearIssue`. A parent or sub-issue comes without labels, so the preview takes labels and parent from its detail when it has one. The agent gets the parent and sub-issues with the issue's JSON.
 - The composer keeps attached items as a list (`chat/composer/composerReferences.ts`). The same item attached again replaces its chip in place.
+
+## PR window restoration
+
+The PR tool passes a workspace/account-bound state owner to `useReferenceBrowser`.
+Its project category remains independent of picker and board filters. The query,
+selected URL and loaded depth survive reloads; a selected URL is resolved afresh
+before its preview can act. A new selection supersedes an older lookup, and
+returning from Changes can select an item absent from the list. Category and
+query changes reset list positioning; revisiting or restarting restores it.
+PR preview scopes retain discussion expansion, unfinished thread replies,
+ordinary replies and check-dialog visibility. Reply text is acknowledged only
+after the provider confirms the corresponding write.
 
 ## Keyboard
 

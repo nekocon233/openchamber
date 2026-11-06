@@ -190,6 +190,15 @@ runtime, directory and session identity. Linked PR-to-Changes navigation uses th
 action so Back to PR returns to its hosting workspace without replacing its
 unsent draft.
 
+`captureNavigationReturnSnapshot` makes the same return declarative for a
+persisted PR-to-Changes origin. The navigation schema retains runtime, session
+or draft identity, prepared directory and project metadata; composer buffers and
+attachments remain with their existing owners. `restoreNavigationReturn` owns
+both live and serialized returns, rejects another runtime, restores the original
+configuration without new-draft defaults, and advances the draft ID allocator
+past a recovered ID. A stored origin is revalidated against the current
+repository/account binding before it can be used and is consumed once.
+
 ## Catalog changes apply live
 
 Worktree drafts keep their checkout root as target identity and expose a separate
@@ -1018,6 +1027,14 @@ A successful local session creation publishes its session record and calls `Sess
 Initial loads use smaller requests on constrained VS Code/mobile surfaces and publish the cursor-extended ten-turn window described above. The mounted chat timeline requests one history batch when its pinned viewport is underfilled, when the user scrolls toward history, or when load older is pressed; mobile uses the explicit button. Timeline caches, pending work, prepend snapshots, and stale checks use runtime + directory + session identity so equal session IDs in different worktrees cannot share lifecycle state. Older pages are fetched through the same loader and merged with optimistic records before publication. The same chronology contract applies in the VS Code webview because it consumes this shared loader and sync store; the extension bridge must transport OpenCode records without introducing its own ID-based ordering.
 
 ## Native CLI sessions
+
+Completed native tool-wait measurements arrive as `message.patched` with a
+validated `telemetry` field. The reducer merges that field into
+`metadata.openchamber.telemetry`, preserving the current message's usage,
+model, timestamps and unrelated metadata. A history refresh can finish before
+this correction. Replaying a captured whole-message snapshot would undo its
+more complete data. Repeated equivalent corrections are no-ops; an absent
+owning message follows the existing materialization path.
 
 Unified native conversations use `ncv_` IDs and the server's separate `unified`
 listing partition. They are the default for new native-model drafts when the

@@ -69,7 +69,7 @@ color; `useSessionTurnActivity` in `sync/global-session-status.ts` decides, the
 session's own run first, then the subagent), and a finished unseen turn is
 `checkbox-circle` (success color). Collapsed aggregates show only running or
 unread. The local Appearance preference `animatedActivityIndicators`
-is off by default. Enabling it swaps every running kind for a stepped spinner,
+enables the original circular `loader-4` mark at 20 frames per second,
 even when the OS requests reduced motion; the unread icon stays. Permission/question badges and per-session
 elapsed counters retain their existing precedence and behavior. A session
 row's title carries its state too: semibold at full strength while a finished
@@ -79,6 +79,16 @@ store is at version 10 (v10 dropped the Recent toggle): missing preferences inhe
 while an explicitly saved choice survives reload.
 Existing downstream layouts retain their animated running indicators during
 migration. `SessionRunningIndicator` follows the same appearance preference.
+The desktop sidebar pauses its activity indicators while closed. Opening
+or peeking the sidebar resumes it without remounting the session rows.
+
+### Why animated session marks retain circular motion
+
+The maintainer prefers the original circular mark and its 1.5-second,
+30-step rotation over the shared clock's eight-bar loader. This exception
+remains behind the existing animation preference and uses transform-only CSS;
+`ClockPausedContext` and inert surfaces pause it while hidden. Other loading
+spinners keep using the shared clock.
 
 Full-app active records remain in the collection when their directory is no
 longer in known topology, such as a deleted worktree. Grouping first uses exact

@@ -4,6 +4,7 @@ import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
+import { PauseClock } from '@/components/ui/pause-clock';
 import { beginLayoutAnimation, LAYOUT_ANIMATION_EASING, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
 import type { SidebarPeek } from './useSidebarPeek';
@@ -261,10 +262,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
                 onPointerLeave={peeking ? peek?.overlayHandlers.onPointerLeave : undefined}
                 onAnimationEnd={peeking ? peek?.overlayHandlers.onAnimationEnd : undefined}
             >
-                {topBar}
-                <ScrollableOverlay outerClassName="flex-1 min-h-0" disableHorizontal>
-                    <ErrorBoundary>{children}</ErrorBoundary>
-                </ScrollableOverlay>
+                <PauseClock paused={!isOpen && !peeking}>
+                    {topBar}
+                    <ScrollableOverlay outerClassName="flex-1 min-h-0" disableHorizontal>
+                        <ErrorBoundary>{children}</ErrorBoundary>
+                    </ScrollableOverlay>
+                </PauseClock>
             </aside>
         </div>
     );

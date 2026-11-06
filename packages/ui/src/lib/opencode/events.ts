@@ -62,6 +62,8 @@ export type SessionPatch = {
 
 /** Fields of a message that change after it appeared. */
 export type MessagePatch = {
+  /** Native call/return timing, merged without replacing other message fields. */
+  telemetry?: { toolWaitDurationMs: number | null }
   time?: { created?: number; streamed?: number; completed?: number }
   finish?: Extract<Message, { role: "assistant" }>["finish"]
   error?: StructuredError

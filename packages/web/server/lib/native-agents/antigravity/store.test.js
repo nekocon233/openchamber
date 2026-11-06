@@ -55,6 +55,59 @@ const setup = ({ confirmed = true } = {}) => {
 const step = (value) => JSON.stringify({ created_at: '2026-10-01T12:00:00Z', status: 'DONE', ...value });
 
 describe('Antigravity native store', () => {
+  it('reads only completed nonblank reasoning snapshots for live enrichment', () => {
+    const { registry, home, writeTranscript } = setup();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Complete thinking' }),
+      step({ step_index: 2, type: 'PLANNER_RESPONSE', status: 'RUNNING', thinking: 'Still changing' }),
+      step({ step_index: 3, type: 'PLANNER_RESPONSE', thinking: ' \n ' }),
+      step({ step_index: 4, type: 'PLANNER_RESPONSE', thinking: 'Shortened', truncated_fields: ['thinking'] }),
+    ]);
+    const store = createAntigravityStore({ registry, home });
+    expect(store.completedReasoning(NATIVE_ID).map((entry) => entry.step_index)).toEqual([1, 4]);
+  });
+
+  it('projects only indexed direct-child reports and the indexed parent task', async () => {
+    const { home, directory, registry, writeSummary, writeTranscript } = setup();
+    const child = '410d8822-277d-48ee-a2eb-42b5c19688dc';
+    const stranger = '548ea2ac-3595-41f4-89a6-3f183cb940fb';
+    const nested = '80ee3811-32f6-4c89-9770-ebd76509d824';
+    const message = (sender, text) => '<SYSTEM_MESSAGE>\r\n[Message] timestamp=2026-10-01T12:00:00Z sender='
+      + sender + ' priority=MESSAGE_PRIORITY_HIGH content=' + text + '\r\n</SYSTEM_MESSAGE>';
+    writeSummary();
+    writeSummary(child, '/child/worktree', NATIVE_ID);
+    writeSummary(stranger);
+    writeSummary(nested, directory, child);
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Investigate' }),
+      step({ step_index: 1, type: 'SYSTEM_MESSAGE', content: message(child, 'Direct child report') }),
+      step({ step_index: 2, type: 'SYSTEM_MESSAGE', content: message(stranger, 'Unrelated report') }),
+      step({ step_index: 3, type: 'SYSTEM_MESSAGE', content: message(nested, 'Nested report for another parent') }),
+    ]);
+    writeTranscript([
+      step({ step_index: 0, type: 'SYSTEM_MESSAGE', content: message(NATIVE_ID, 'Inspect the tests') }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Inspect fixtures', content: 'Child answer' }),
+    ], child);
+    const store = createAntigravityStore({ registry, home });
+    const parent = await store.loadHistory(SESSION_ID, NATIVE_ID, directory);
+    expect(parent.records).toHaveLength(2);
+    expect(parent.records[1].parts[0].text).toBe('Direct child report');
+    expect(parent.childSessions).toMatchObject([{ id: 'nag_' + child, directory }]);
+    const history = await store.loadHistory('nag_' + child, child, directory);
+    expect(history.records[0].parts[0].text).toBe('Inspect the tests');
+    expect(history.records[1].parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+
+    // Unreadable child metadata preserves readable history and its partial flag.
+    const db = new DatabaseSync(path.join(home, 'conversation_summaries.db'));
+    db.prepare('update conversation_summaries set last_modified_time = null where conversation_id = ?').run(child);
+    db.close();
+    const partial = await store.loadHistory(SESSION_ID, NATIVE_ID, directory);
+    expect(partial.metadataComplete).toBe(false);
+    expect(partial.records.map((record) => record.info.role)).toEqual(['user']);
+    expect(partial.records[0].parts[0].text).toBe('Investigate');
+  });
+
   it('reads the native index after a concurrent CLI writer commits', async () => {
     const { home, registry, entry, directory, writeSummary } = setup();
     writeSummary();

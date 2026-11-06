@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './ja.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['ja'],
   "agents.combinations.loadFailed": "組み合わせを読み込めませんでした。設定を開き直して再試行してください。",
   "agents.combinations.saveFailed": "組み合わせを保存できませんでした。再試行してください。",
   "agents.combinations.group": "組み合わせ",
@@ -3903,7 +3905,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': '経過時間',
   'chat.workStatus.telemetry.elapsedDescription': '最初のユーザーメッセージから最終アシスタント応答までの実時間です。モデルの待ち時間、ツール実行、コンパクション、その他の間隔を含みます。',
   'chat.workStatus.telemetry.llmDuration': 'モデル時間',
-  'chat.workStatus.telemetry.llmDurationDescription': "応答待ちを含む全モデルステップの時間です。ツール実行時間と 5 分を超える停止は差し引いています。テキスト生成だけの時間ではありません。",
+  'chat.workStatus.telemetry.llmDurationDescription': "応答待ちを含むモデルステップの時間です。ツールの結果待ちと 5 分を超える停止は差し引いています。バックグラウンドのツールはモデルと同時に動作できます。",
   'chat.workStatus.telemetry.toolDuration': 'ツール時間',
   'chat.workStatus.telemetry.toolDurationDescription': '失敗した呼び出しも含むツールの実行時間です。同時に動いたツールの時間は重複して加算しません。',
   'chat.workStatus.telemetry.ttft': '平均 TTFT',
@@ -3912,7 +3914,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': 'このプロンプトでモデルを呼び出した回数です。ツールの結果を読み、次の処理を決める際は通常もう一度呼び出します。',
   'chat.workStatus.telemetry.tokens': 'トークン',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "読み込まれている完了済みターンの生成トークン数を、ツール実行と 5 分を超える停止を除いたモデル時間で割った平均です。古い履歴を読み込むと再計算されます。",
+  'chat.workStatus.telemetry.speedDescription': "読み込まれている完了済みターンの生成トークン数を、ツール待機と 5 分を超える停止を除いたモデル時間で割った平均です。古い履歴を読み込むと再計算されます。",
   'chat.workStatus.telemetry.tokensDescription': '↑ キャッシュを除く入力: {input}。↓ 生成: テキストとツール呼び出し {output}、推論 {reasoning}。このプロンプトの全ステップの合計です。',
   'chat.workStatus.telemetry.cacheHit': '平均キャッシュ率',
   'chat.workStatus.telemetry.cacheHitDescription': '読み込まれている完了済みターンで、プロンプトキャッシュから再利用した入力トークンの割合です。古い履歴を読み込むと再計算されます。',
@@ -4333,4 +4335,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': '会話はプロジェクトのフォルダーで続きます。チャットが作成したファイルはそのまま残ります。',
   'sessions.moveChatToProject.success': 'チャットをプロジェクトへ移動しました',
   'sessions.moveChatToProject.failed': 'チャットを移動できませんでした',
+  "workspaceRestore.draftConflict": "内容が更新されています。下書きを復元し、自動保存を一時停止しました。",
+  "workspaceRestore.saveDraft": "復元した下書きを保存",
+  "workspaceRestore.useLatest": "最新の内容を使用",
+  "workspaceRestore.itemMissing": "この項目は存在しません。未保存のテキストはここに残っています。",
+  "workspaceRestore.commentChanged": "選択したコードが変更されています。行を選び直してコメントを続けてください。",
+  "workspaceRestore.restoreInput": "未確定の入力を復元",
 };

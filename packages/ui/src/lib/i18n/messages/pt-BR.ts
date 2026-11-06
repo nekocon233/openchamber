@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './pt-BR.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['pt-BR'],
   "agents.combinations.loadFailed": "Não foi possível carregar as combinações. Reabra as configurações e tente novamente.",
   "agents.combinations.saveFailed": "Não foi possível salvar as combinações. Tente novamente.",
   "agents.combinations.group": "Combinações",
@@ -3895,7 +3897,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': 'Tempo decorrido',
   'chat.workStatus.telemetry.elapsedDescription': 'Tempo de relógio entre a primeira mensagem do usuário e a resposta final do assistente. Inclui espera pelo modelo, execução de ferramentas, compactação e outros intervalos.',
   'chat.workStatus.telemetry.llmDuration': 'Modelo',
-  'chat.workStatus.telemetry.llmDurationDescription': "Tempo de todas as etapas do modelo, incluindo a espera pelas respostas. O tempo das ferramentas e as pausas de mais de 5 minutos são descontados. Não é apenas o tempo de geração do texto.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Tempo das etapas do modelo, incluindo a espera pelas respostas. A espera pelas ferramentas e as pausas de mais de 5 minutos são descontadas. Ferramentas em segundo plano podem funcionar ao mesmo tempo que o modelo.",
   'chat.workStatus.telemetry.toolDuration': 'Ferramentas',
   'chat.workStatus.telemetry.toolDurationDescription': 'Tempo de execução das ferramentas, incluindo chamadas que falharam. Ferramentas executadas ao mesmo tempo contam uma vez só.',
   'chat.workStatus.telemetry.ttft': 'TTFT médio',
@@ -3904,7 +3906,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': 'Quantas vezes o modelo foi chamado para este prompt. Ler o resultado de uma ferramenta e decidir o próximo passo geralmente exige outra chamada.',
   'chat.workStatus.telemetry.tokens': 'Tokens',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Tokens gerados nos turnos concluídos já carregados, divididos pelo tempo de modelo sem execução de ferramentas e sem pausas de mais de 5 minutos. Carregar histórico mais antigo recalcula o valor.",
+  'chat.workStatus.telemetry.speedDescription': "Tokens gerados nos turnos concluídos já carregados, divididos pelo tempo do modelo sem espera pelas ferramentas e sem pausas de mais de 5 minutos. Carregar histórico mais antigo recalcula o valor.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Entrada sem tokens em cache: {input}. ↓ Gerados: {output} para texto e chamadas de ferramentas, mais {reasoning} de raciocínio. Totais de todas as etapas deste prompt.',
   'chat.workStatus.telemetry.cacheHit': 'Cache médio',
   'chat.workStatus.telemetry.cacheHitDescription': 'Parcela dos tokens de entrada reutilizados do cache do prompt nos turnos concluídos já carregados. Carregar histórico mais antigo recalcula o valor.',
@@ -4334,4 +4336,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': 'A conversa continua na pasta do projeto. Os arquivos que o chat criou ficam onde estão.',
   'sessions.moveChatToProject.success': 'Chat movido para o projeto',
   'sessions.moveChatToProject.failed': 'Não foi possível mover o chat',
+  "workspaceRestore.draftConflict": "Este item foi alterado. Seu rascunho foi restaurado e o salvamento automático está pausado.",
+  "workspaceRestore.saveDraft": "Salvar rascunho restaurado",
+  "workspaceRestore.useLatest": "Usar conteúdo mais recente",
+  "workspaceRestore.itemMissing": "Este item não existe mais. Seu texto não salvo continua disponível aqui.",
+  "workspaceRestore.commentChanged": "O código selecionado foi alterado. Selecione as linhas novamente para continuar seu comentário.",
+  "workspaceRestore.restoreInput": "Restaurar entrada não confirmada",
 };

@@ -8,11 +8,12 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useI18n } from '@/lib/i18n';
 import type { GitHubPendingReviewAction, GitHubPendingReviewComment } from '@/lib/source-control/pendingReview';
 import { usePendingReviewDraftStore } from '@/stores/usePendingReviewDraftStore';
+import { useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 import type { PendingReviewController } from './usePendingReview';
 
 const ReviewComment: React.FC<{ comment: GitHubPendingReviewComment; controller: PendingReviewController }> = ({ comment, controller }) => {
   const { t } = useI18n();
-  const [editing, setEditing] = React.useState(false);
+  const [editing, setEditing] = useWorkspaceViewState('thread', JSON.stringify([controller.key, 'edit', comment.id]), 'editing');
   const draftKey = `${controller.key}:edit:${comment.id}`;
   const saved = usePendingReviewDraftStore(state => state.texts[draftKey]);
   const text = saved ?? comment.body;

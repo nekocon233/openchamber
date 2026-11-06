@@ -12,6 +12,7 @@ import {
   requireProviderArray,
 } from './mappers.js';
 import { readPendingReview } from './review-draft.js';
+import { parsePendingReviewAction, performPendingReviewMutation, preparePendingReviewMutation } from './pending-reviews.js';
 
 /**
  * GitHub's durable mutations behind the shared route shell: the persisted
@@ -44,6 +45,7 @@ const ROUTE_OPERATIONS = Object.freeze({
   '/pr/ready': 'ready',
   '/pr/comment': 'comment',
   '/pr/review': 'review',
+  '/pr/review/pending': 'pending-review',
   '/pr/review/comment': 'review-comment',
   '/pr/review/comment/update': 'review-comment-update',
   '/pr/review/comment/delete': 'review-comment-delete',
@@ -258,6 +260,11 @@ function normalizeOperation(operation, body, context, actor, credential, limits)
       input: { verdict, body: text },
       digest: (target) => digestOf(text === undefined ? { target, verdict } : { target, verdict, body: text }),
     };
+  }
+  if (operation === 'pending-review') {
+    requiredText(context.target.headSha, 'target headSha');
+    const action = parsePendingReviewAction(body.action);
+    return { input: { action }, digest: (target) => digestOf({ target, action }) };
   }
   if (operation === 'review-comment') {
     requiredText(context.target.headSha, 'target headSha');
@@ -759,7 +766,7 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
   const reconcileExisting = async (octokit, operation, target, input) => {
     // A comment or a review leaves nothing that tells a lost write from one
     // never sent short of guessing from its text, so the outcome stays unknown.
-    if (['comment', 'review', 'issue-comment', 'thread-reply', 'discussion-comment'].includes(operation)) return unknownOutcome();
+    if (['comment', 'review', 'pending-review', 'issue-comment', 'thread-reply', 'discussion-comment'].includes(operation)) return unknownOutcome();
     if (REVIEW_DRAFT_OPERATIONS.has(operation)) return unknownOutcome();
     const project = target.project;
     if (operation === 'discussion-state') {
@@ -996,6 +1003,9 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
         return deleteReviewComment(octokit, input.commentId);
       case 'review-discard':
         return discardReview(octokit, providerTarget.pendingReviewId);
+      case 'pending-review':
+        try { return await performPendingReviewMutation(octokit, providerTarget.pendingReviewMutation); }
+        catch (error) { throw graphqlRejection(error); }
       case 'review': {
         const { event, state } = REVIEW_EVENTS[input.verdict];
         // A pending review goes out with the verdict: GitHub keeps one per
@@ -1064,7 +1074,15 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
         const sourceRepo = (await resolveRepo(context.directory, input.headRemote))?.repo;
         return { providerTarget: { sourceProject: sourceRepo ? repoProject(sourceRepo) : null }, target: replayOf.target };
       }
-      return rejected(() => resolveNew(octokit, context, operation, input));
+      const resolved = await rejected(() => resolveNew(octokit, context, operation, input));
+      if (operation === 'pending-review') {
+        const pendingReviewMutation = await preparePendingReviewMutation({
+          octokit, project: resolved.target.project, number: resolved.target.number, headSha: resolved.target.headSha,
+          providerAccountId: session.providerUserId, action: input.action, idempotencyKey: context.idempotencyKey,
+        });
+        return { ...resolved, providerTarget: { pendingReviewMutation } };
+      }
+      return resolved;
     },
     /**
      * What a succeeded mutation leaves stale: the target's cached context and

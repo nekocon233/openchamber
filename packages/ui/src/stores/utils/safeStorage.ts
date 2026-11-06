@@ -7,6 +7,11 @@ let deferredSafeStorageInstance: Storage | null = null;
 const deferredFlushers = new Set<() => void>();
 let deferredFlushListenersRegistered = false;
 
+/** Call after capturing lifecycle state, even if the global pagehide listener ran first. */
+export const flushDeferredSafeStorage = () => {
+    for (const flush of deferredFlushers) flush();
+};
+
 type JsonStorageOptions = {
     reviver?: (key: string, value: unknown) => unknown;
     replacer?: (key: string, value: unknown) => unknown;
@@ -17,11 +22,7 @@ const registerDeferredFlusher = (flush: () => void) => {
     if (deferredFlushListenersRegistered || typeof window === 'undefined') return;
 
     deferredFlushListenersRegistered = true;
-    const flushAll = () => {
-        for (const flushDeferredStorage of deferredFlushers) {
-            flushDeferredStorage();
-        }
-    };
+    const flushAll = flushDeferredSafeStorage;
 
     try {
         window.addEventListener('pagehide', flushAll, { capture: true });

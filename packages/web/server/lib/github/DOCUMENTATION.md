@@ -111,7 +111,9 @@ GitHub Enterprise authenticates per instance, the same model GitLab uses: each i
 
 `GET /api/source-control/github/pr/review/pending` returns only the exact
 account's pending review and its paginated comments, with `Cache-Control:
-no-store`. The server verifies the GraphQL viewer against the trusted provider
+no-store`. The shared route shell dispatches it to `resources.pendingReview`;
+the versioned `POST` is in the same shell's mutation table. The server verifies
+the GraphQL viewer on the selected instance against the trusted provider
 user ID and checks each comment's review and author. A failed read remains an
 error, including GraphQL errors returned with HTTP 200.
 
@@ -133,7 +135,10 @@ ID and content digest. The server verifies ownership before every global-node
 mutation, refuses stale PR heads, and refuses comments on a pending review for
 an earlier commit. Submission publishes all its comments with COMMENT, APPROVE
 or REQUEST_CHANGES; the last requires a summary. Own-PR approval and changes
-requests are rejected. Each action dispatches one provider write. A lost write
+requests are rejected. A draft on an older commit can be submitted as COMMENT;
+giving a verdict requires the current commit. Preflight produces a plain-data
+mutation before the executor claims the key; dispatch sends it once after the
+claim. Each action dispatches one provider write. A lost write
 response remains outcome-unknown and is never sent again by the executor.
 Durable records retain digests and an empty success result, never review text.
 
@@ -325,6 +330,13 @@ The client's branch PR state is `useGitHubPrStatusStore`, a provider-neutral sto
 - Repo parser supports scp, `ssh://`, and `https://` remotes for any host, including GitHub Enterprise; `getOctokitOrNull(host)` pairs each Enterprise host with that host's gh token. Remotes on hosts the server never authenticated with are refused before any token is looked up ("Host trust" above), so a gitlab.com (or arbitrary) remote resolves to `repo: null` instead of receiving an enterprise token.
 
 ## Decisions
+
+### Why versioned pending reviews keep their own route
+
+PR details and inline comments retain review content digests and durable retry
+keys for `/pr/review/pending`. Mapping them to the unversioned review routes
+would lose their concurrency checks and conflict with retained mutations, so
+the shared shell serves the existing contract through the GitHub provider.
 
 ### Why repository scope is confirmed by the provider
 

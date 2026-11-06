@@ -31,6 +31,12 @@ const verifiedAnswer = z.object({
 });
 const userContent = z.object({ type: z.literal('message'), role: z.literal('user'), content: z.array(z.object({ text: z.string() }).passthrough()) });
 const skillContent = z.object({ type: z.literal('skill'), name: z.string() });
+const toolBoundaryKinds = z.enum(['function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output']);
+const toolBoundary = z.object({
+  type: toolBoundaryKinds,
+  call_id: z.string().min(1),
+});
+const finishedTurn = z.object({ turn_id: z.string() });
 
 /** A positive epoch-millisecond value, or null when the field is unusable. */
 const finiteMs = (value) => (
@@ -51,7 +57,38 @@ export const createCodexTurnDetails = () => ({
   lastUserId: null,
   completedCompactions: new Set(),
   itemTimes: new Map(),
+  toolWaits: { start: null, end: null, valid: true, calls: new Map(), plans: new Map(), boundaries: new Map(), hasExecution: false },
 });
+
+/** Blocking tool returns, independent of the lifetime of a yielded command. */
+export const codexToolWaitDuration = (detail, segment) => {
+  const waits = detail?.toolWaits;
+  if (!waits?.valid || waits.start === null || waits.end === null || waits.end < waits.start
+    || (waits.hasExecution && waits.calls.size === 0)) return null;
+  const boundaries = [...waits.boundaries].sort((left, right) => left[1] - right[1]);
+  if (boundaries.some(([, time]) => time === null || time < waits.start || time > waits.end)) return null;
+  const index = boundaries.findIndex(([id]) => id === segment);
+  if (index < 0) return null;
+  const start = boundaries[index][1];
+  const end = boundaries[index + 1]?.[1] ?? waits.end;
+  if (start === null || end === null || end < start) return null;
+  const intervals = [];
+  for (const interval of [...waits.calls.values(), ...waits.plans.values()]) {
+    if (interval.start === null || interval.end === null || interval.end < interval.start
+      || interval.start < waits.start || interval.end > waits.end) return null;
+    const from = Math.max(start, interval.start);
+    const to = Math.min(end, interval.end);
+    if (to > from) intervals.push([from, to]);
+  }
+  intervals.sort((left, right) => left[0] - right[0]);
+  let duration = 0;
+  let cursor = start;
+  for (const [from, to] of intervals) {
+    duration += Math.max(0, to - Math.max(cursor, from));
+    cursor = Math.max(cursor, to);
+  }
+  return duration;
+};
 
 /** Read one app-server supplied rollout, never search another thread's files. */
 export const readCodexHistoryDetails = async (filePath, threadId) => {
@@ -59,6 +96,7 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
   if (!filePath) return turns;
   let activeTurn = null;
   const questionById = new Map();
+  const callOwners = new Map();
   const detailFor = (turnId) => {
     let detail = turns.get(turnId);
     if (!detail) {
@@ -73,7 +111,11 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
   try {
     for await (const line of lines) {
       let json;
-      try { json = JSON.parse(line); } catch { continue; } // A live writer may have an unfinished final line.
+      try { json = JSON.parse(line); } catch {
+        // A partial tail cannot prove a complete measurement.
+        if (activeTurn && detailFor(activeTurn).toolWaits.end === null) detailFor(activeTurn).toolWaits.valid = false;
+        continue;
+      }
       const parsed = entry.safeParse(json);
       if (!parsed.success) continue;
       const { type, payload } = parsed.data;
@@ -104,7 +146,13 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           const result = start.safeParse(payload);
           if (!result.success) continue;
           activeTurn = result.data.turn_id;
-          detailFor(activeTurn).contextWindow = result.data.model_context_window;
+          const detail = detailFor(activeTurn);
+          detail.contextWindow = result.data.model_context_window;
+          detail.toolWaits.start ??= lineMs;
+          detail.toolWaits.boundaries.set(activeTurn, detail.toolWaits.start);
+        } else if (kind.data.type === 'task_complete' || kind.data.type === 'turn_aborted') {
+          const result = finishedTurn.safeParse(payload);
+          if (result.success) detailFor(result.data.turn_id).toolWaits.end = lineMs;
         } else if (kind.data.type === 'item_completed') {
           const result = itemEvent.safeParse(payload);
           if (!result.success) continue;
@@ -112,6 +160,14 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           detail.lastItemId = result.data.item.id;
           const itemStart = finiteMs(result.data.started_at_ms) ?? finiteMs(result.data.completed_at_ms);
           const itemEnd = finiteMs(result.data.completed_at_ms);
+          const waits = detail.toolWaits;
+          if (result.data.item.type === 'Plan') {
+            const planStart = finiteMs(result.data.started_at_ms);
+            if (planStart === null || itemEnd === null) waits.valid = false;
+            if (!waits.plans.has(result.data.item.id)) waits.plans.set(result.data.item.id, { start: planStart, end: itemEnd });
+          } else if (['CommandExecution', 'FileChange', 'McpToolCall', 'DynamicToolCall', 'WebSearch', 'ImageView', 'CollabAgentToolCall'].includes(result.data.item.type)) {
+            waits.hasExecution = true;
+          }
           if (itemStart !== null || itemEnd !== null) {
             const previous = detail.itemTimes.get(result.data.item.id);
             // A completed item is immutable; duplicate records must not erase it.
@@ -125,6 +181,7 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           if (result.data.item.type === 'UserMessage') {
             detail.lastUserId = result.data.item.id;
             if (detail.hasAssistant) detail.segment = result.data.item.id;
+            if (!waits.boundaries.has(detail.segment)) waits.boundaries.set(detail.segment, itemStart ?? lineMs);
             detail.hasAssistant = false;
             const content = z.array(z.unknown()).safeParse(result.data.item.content);
             if (itemStart !== null && content.success) {
@@ -138,6 +195,7 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           } else if (result.data.item.type === 'ContextCompaction') {
             detail.completedCompactions.add(result.data.item.id);
             detail.segment = result.data.item.id;
+            waits.boundaries.set(detail.segment, itemStart ?? lineMs);
             detail.hasAssistant = false;
             detail.usage.lastTotal = null;
           } else {
@@ -155,6 +213,26 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
         }
       } else if (type === 'response_item' && activeTurn) {
         const detail = detailFor(activeTurn);
+        const boundary = toolBoundary.safeParse(payload);
+        if (!boundary.success && toolBoundaryKinds.options.includes(event.safeParse(payload).data?.type)) detail.toolWaits.valid = false;
+        if (boundary.success) {
+          const { type: kind, call_id: id } = boundary.data;
+          const custom = kind.startsWith('custom_');
+          if (kind === 'function_call' || kind === 'custom_tool_call') {
+            const owner = callOwners.get(id);
+            if (!owner) {
+              detail.toolWaits.calls.set(id, { start: lineMs, end: null, custom });
+              callOwners.set(id, detail);
+            } else if (owner !== detail || owner.toolWaits.calls.get(id).start !== lineMs || owner.toolWaits.calls.get(id).custom !== custom) {
+              detail.toolWaits.valid = false;
+            }
+          } else {
+            const owner = callOwners.get(id);
+            const interval = owner?.toolWaits.calls.get(id);
+            if (!interval || interval.custom !== custom) detail.toolWaits.valid = false;
+            else interval.end ??= lineMs;
+          }
+        }
         const call = functionCall.safeParse(payload);
         if (call.success) {
           let args;

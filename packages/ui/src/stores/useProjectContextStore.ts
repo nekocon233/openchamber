@@ -69,12 +69,13 @@ interface ProjectContextActions {
   createNote: (
     project: ProjectRef,
     value: { body: string; source?: ProjectNoteSource; origin?: { sessionId: string; messageId?: string } },
+    expectedRuntimeKey?: string,
   ) => Promise<ProjectNote | null>;
-  saveNoteBody: (project: ProjectRef, noteId: string, body: string) => Promise<boolean>;
+  saveNoteBody: (project: ProjectRef, noteId: string, body: string, expectedRuntimeKey?: string) => Promise<boolean>;
   setNotePinned: (project: ProjectRef, noteId: string, pinned: boolean) => Promise<boolean>;
   deleteNote: (project: ProjectRef, noteId: string) => Promise<boolean>;
-  createPlan: (project: ProjectRef, value: { title: string; body: string }) => Promise<ProjectPlanLink | null>;
-  savePlan: (project: ProjectRef, planId: string, raw: string) => Promise<boolean>;
+  createPlan: (project: ProjectRef, value: { title: string; body: string }, expectedRuntimeKey?: string) => Promise<ProjectPlanLink | null>;
+  savePlan: (project: ProjectRef, planId: string, raw: string, expectedRuntimeKey?: string) => Promise<boolean>;
   setPlanPinned: (project: ProjectRef, planId: string, pinned: boolean) => Promise<boolean>;
   deletePlan: (project: ProjectRef, planId: string) => Promise<boolean>;
   /** Move a plan into the team's shared folder, or back; the plan gets a new id. */
@@ -294,7 +295,10 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
      * so the committed list is adopted wholesale rather than spliced into a
      * possibly-empty local one.
      */
-    createNote: async (project, value) => {
+    createNote: async (project, value, expectedRuntimeKey = getRuntimeKey()) => {
+      const epoch = generation;
+      const isCurrent = () => epoch === generation && expectedRuntimeKey === getRuntimeKey();
+      if (!isCurrent()) return null;
       const projectId = resolveProjectContextId(project);
       const body = value.body.trim();
       if (!projectId || !body) return null;
@@ -306,19 +310,22 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
         const { note, context } = await enqueueWrite(
           projectId,
           'notes',
-          () => createProjectNote(project, { ...value, body }),
+          () => { if (!isCurrent()) throw new Error('Project context runtime changed'); return createProjectNote(project, { ...value, body }); },
         );
-        patchEntry(projectId, { notes: context.notes, loaded: true, error: null });
+        if (isCurrent()) patchEntry(projectId, { notes: context.notes, loaded: true, error: null });
         return note;
       } catch (error) {
-        patchEntry(projectId, { error: errorMessage(error, 'Failed to create note') });
+        if (isCurrent()) patchEntry(projectId, { error: errorMessage(error, 'Failed to create note') });
         return null;
       } finally {
         flags.notes = false;
       }
     },
 
-    saveNoteBody: async (project, noteId, body) => {
+    saveNoteBody: async (project, noteId, body, expectedRuntimeKey = getRuntimeKey()) => {
+      const epoch = generation;
+      const isCurrent = () => epoch === generation && expectedRuntimeKey === getRuntimeKey();
+      if (!isCurrent()) return false;
       const projectId = resolveProjectContextId(project);
       const trimmed = body.trim();
       if (!projectId || !trimmed) return false;
@@ -333,7 +340,8 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
       flags.notes = true;
 
       try {
-        const saved = await enqueueWrite(projectId, 'notes', () => updateProjectNote(project, noteId, { body: trimmed }));
+        const saved = await enqueueWrite(projectId, 'notes', () => { if (!isCurrent()) throw new Error('Project context runtime changed'); return updateProjectNote(project, noteId, { body: trimmed }); });
+        if (!isCurrent()) return Boolean(saved);
         if (!saved) {
           patchEntry(projectId, { notes: currentEntry(projectId).notes.filter((note) => note.id !== noteId) });
           return false;
@@ -343,7 +351,7 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
         });
         return true;
       } catch (error) {
-        patchEntry(projectId, { notes: previous, error: errorMessage(error, 'Failed to save note') });
+        if (isCurrent()) patchEntry(projectId, { notes: previous, error: errorMessage(error, 'Failed to save note') });
         return false;
       } finally {
         flags.notes = false;
@@ -409,7 +417,10 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
      * server, and a placeholder row that cannot be opened is worse than a
      * short wait.
      */
-    createPlan: async (project, value) => {
+    createPlan: async (project, value, expectedRuntimeKey = getRuntimeKey()) => {
+      const epoch = generation;
+      const isCurrent = () => epoch === generation && expectedRuntimeKey === getRuntimeKey();
+      if (!isCurrent()) return null;
       const projectId = resolveProjectContextId(project);
       if (!projectId) return null;
 
@@ -417,11 +428,11 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
       flags.plans = true;
 
       try {
-        const { plan, context } = await enqueueWrite(projectId, 'plans', () => createProjectPlan(project, value));
-        patchEntry(projectId, { plans: context.plans, loaded: true, error: null });
+        const { plan, context } = await enqueueWrite(projectId, 'plans', () => { if (!isCurrent()) throw new Error('Project context runtime changed'); return createProjectPlan(project, value); });
+        if (isCurrent()) patchEntry(projectId, { plans: context.plans, loaded: true, error: null });
         return plan;
       } catch (error) {
-        patchEntry(projectId, { error: errorMessage(error, 'Failed to create plan') });
+        if (isCurrent()) patchEntry(projectId, { error: errorMessage(error, 'Failed to create plan') });
         return null;
       } finally {
         flags.plans = false;
@@ -433,7 +444,10 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
      * so renaming a plan's heading in the editor is reflected in the panel
      * without a reload. Resolves false when the plan is gone.
      */
-    savePlan: async (project, planId, raw) => {
+    savePlan: async (project, planId, raw, expectedRuntimeKey = getRuntimeKey()) => {
+      const epoch = generation;
+      const isCurrent = () => epoch === generation && expectedRuntimeKey === getRuntimeKey();
+      if (!isCurrent()) return false;
       const projectId = resolveProjectContextId(project);
       if (!projectId) return false;
 
@@ -441,7 +455,8 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
       flags.plans = true;
 
       try {
-        const result = await enqueueWrite(projectId, 'plans', () => updateProjectPlan(project, planId, raw));
+        const result = await enqueueWrite(projectId, 'plans', () => { if (!isCurrent()) throw new Error('Project context runtime changed'); return updateProjectPlan(project, planId, raw); });
+        if (!isCurrent()) return Boolean(result);
         if (!result) {
           patchEntry(projectId, {
             plans: currentEntry(projectId).plans.filter((plan) => plan.id !== planId),
@@ -454,7 +469,7 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
         });
         return true;
       } catch (error) {
-        patchEntry(projectId, { error: errorMessage(error, 'Failed to save plan') });
+        if (isCurrent()) patchEntry(projectId, { error: errorMessage(error, 'Failed to save plan') });
         return false;
       } finally {
         flags.plans = false;

@@ -86,6 +86,15 @@ export const agySubagentReferences = (info) => (info?.subagents ?? []).filter(
   (agent) => z.string().uuid().safeParse(agent.conversation_id).success,
 );
 
+/** Conversation messages have a UUID sender; task and system notices do not. */
+export const agyConversationMessage = (content = '') => {
+  const match = /(?:^|\r?\n)<SYSTEM_MESSAGE>\r?\n\[Message\] timestamp=\S+ sender=(\S+) priority=\S+ content=([\s\S]*)$/.exec(content);
+  if (!match || !z.string().uuid().safeParse(match[1]).success) return null;
+  // Native full logs can omit the closing tag on a long conversation message.
+  const text = match[2].replace(/\r?\n<\/SYSTEM_MESSAGE>\s*$/, '').trim();
+  return text ? { sender: match[1], content: text } : null;
+};
+
 const transcriptToolCall = z.object({
   name: z.string().min(1),
   args: z.record(z.string(), z.json()).default({}),
@@ -97,6 +106,7 @@ const transcriptStep = z.object({
   status: z.string().optional(),
   source: z.string().optional(),
   content: z.string().optional(),
+  thinking: z.string().optional(),
   error: z.string().optional(),
   created_at: z.string().optional(),
   tool_calls: z.array(transcriptToolCall).default([]),

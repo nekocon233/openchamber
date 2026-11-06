@@ -15,6 +15,10 @@ import { conversationTitlePreview, createConversationAutoTitles } from './auto-t
 import { antigravityChecklistSnapshot } from '../antigravity/checklist.js';
 
 const namespaceSchema = z.record(z.string(), z.json()).catch({});
+const telemetryCorrection = z.object({
+  messageID: z.string().min(1),
+  patch: z.object({ telemetry: z.object({ toolWaitDurationMs: z.number().nonnegative() }).strict() }).strict(),
+});
 const lifecycleSchema = z.record(nativeBackendSchema, z.object({
   stop: z.function(), retire: z.function(), delete: z.boolean(), compact: z.boolean(),
 }));
@@ -213,6 +217,29 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     });
     return history;
   };
+  const publishRetainedTelemetry = (owner, source, correction) => locked(owner.id, async () => {
+    const manifest = get(owner.id);
+    const segment = manifest.segments.find((entry) => entry.id === owner.segmentId && entry.sessionId === source);
+    if (!segment) return;
+    const history = await readConversationSegment(native, manifest, segment);
+    const messageID = conversationMessageId(manifest.id, segment, correction.messageID);
+    const ids = history.records.map((record) => conversationMessageId(manifest.id, segment, record.info.id));
+    const index = ids.indexOf(messageID);
+    let cut = ids.length;
+    if (manifest.cut) {
+      const localCut = ids.indexOf(manifest.cut);
+      if (localCut >= 0) cut = localCut;
+      else {
+        const cutSegment = manifest.segments.findIndex((entry) => entry.sends.some((send) => (
+          conversationMessageId(manifest.id, entry, send.nativeMessageId) === manifest.cut
+        )));
+        // An unmapped external prompt cannot prove that this segment is kept.
+        if (cutSegment <= manifest.segments.indexOf(segment)) return;
+      }
+    }
+    if (index < 0 || index >= cut) return;
+    emit(manifest, 'message.patched', { sessionID: manifest.id, messageID, patch: correction.patch });
+  });
   const stop = async (manifest) => {
     let delegationError;
     try { await native.cancelDelegations?.(manifest.id); }
@@ -929,7 +956,13 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       }
       const manifest = store.peek(owner.id);
       const segment = manifest?.segments.find((entry) => entry.id === owner.segmentId);
-      if (!manifest || !segment || manifest.active !== segment.id && questionOwner?.id !== manifest.id) return;
+      if (!manifest || !segment) return;
+      if (manifest.active !== segment.id && questionOwner?.id !== manifest.id) {
+        const correction = payload.type === 'message.patched' && segment.backend === 'codex'
+          ? telemetryCorrection.safeParse(properties) : null;
+        if (correction?.success) void publishRetainedTelemetry(owner, source, correction.data).catch(() => undefined);
+        return;
+      }
       if (payload.type === 'question.asked') questionOwners.set(properties.id, { id: manifest.id, selection: manifest.selection, plan: properties.kind?.endsWith('-plan-exit') === true });
       if (payload.type === 'message.updated' && segment.timeOffset === undefined && !clocks.has(segment.sessionId)) {
         const offset = Math.max(0, segment.createdAt - properties.info.time.created);
@@ -963,6 +996,9 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       if (payload.type === 'message.part.updated') {
         const part = properties.part;
         projected.part = projectConversationPart(manifest.id, projection, part);
+      }
+      if (payload.type === 'message.parts.replaced') {
+        projected.parts = properties.parts.map((part) => projectConversationPart(manifest.id, projection, part));
       }
       if (properties.messageID) projected.messageID = conversationMessageId(manifest.id, segment, properties.messageID);
       if (properties.partID) projected.partID = conversationPartId(manifest.id, segment, properties.partID, properties.messageID);

@@ -155,7 +155,7 @@ export async function readGitHubPendingReview({ octokit, project, number, provid
   const cursors = new Set();
   while (true) {
     const result = resultSchema.parse(await octokit.graphql(query, { owner: project.owner, repo: project.name, number, after }));
-    if (`github.com#${result.viewer.databaseId}` !== providerAccountId) throw fail('GitHub account changed', 'SOURCE_CONTROL_ACCOUNT_UNAVAILABLE', 401);
+    if (`${octokit.openChamberHost || 'github.com'}#${result.viewer.databaseId}` !== providerAccountId) throw fail('GitHub account changed', 'SOURCE_CONTROL_ACCOUNT_UNAVAILABLE', 401);
     const pull = result.repository?.pullRequest;
     if (!pull || pull.number !== number) throw fail('Pull request is unavailable', 'SOURCE_CONTROL_MUTATION_TARGET_INVALID', 404);
     const matches = pull.reviews.nodes.filter(review => review.author?.databaseId === result.viewer.databaseId);
@@ -176,7 +176,7 @@ export async function readGitHubPendingReview({ octokit, project, number, provid
 }
 
 /** Preflight establishes ownership before the durable executor can dispatch a write. */
-export async function preparePendingReviewAction({ octokit, project, number, headSha, providerAccountId, action, idempotencyKey }) {
+export async function preparePendingReviewMutation({ octokit, project, number, headSha, providerAccountId, action, idempotencyKey }) {
   const { pullRequestId, state } = await readGitHubPendingReview({ octokit, project, number, providerAccountId });
   if (state.headSha !== headSha) throw fail('Pull request changed; refresh the diff before commenting');
   const review = state.review;
@@ -194,27 +194,37 @@ export async function preparePendingReviewAction({ octokit, project, number, hea
   if (action.kind === 'submit' && state.ownPull && action.verdict !== 'comment') {
     throw fail('You cannot approve or request changes on your own pull request', 'SOURCE_CONTROL_MUTATION_REJECTED', 422);
   }
+  if (action.kind === 'submit' && action.verdict !== 'comment' && review.headSha !== headSha) {
+    throw fail('This review draft was started on an older commit. Send it as a comment, then give your verdict.');
+  }
 
-  const mutate = async (name, input) => {
-    const type = `${name[0].toUpperCase()}${name.slice(1)}Input`;
-    const payload = await octokit.graphql(`mutation($input: ${type}!) { ${name}(input: $input) { clientMutationId } }`, {
-      input: { ...input, clientMutationId: idempotencyKey },
-    });
-    z.object({ [name]: z.object({ clientMutationId: z.literal(idempotencyKey) }) }).parse(payload);
-    return {};
-  };
+  const mutation = (name, input) => ({ name, input: { ...input, clientMutationId: idempotencyKey } });
   if (action.kind === 'comment') {
     const thread = { body: action.body, path: action.path, line: action.line, side: action.side };
     if (action.startLine !== undefined) { thread.startLine = action.startLine; thread.startSide = action.side; }
-    return () => review
-      ? mutate('addPullRequestReviewThread', { ...thread, pullRequestReviewId: review.id })
-      : mutate('addPullRequestReview', { pullRequestId, commitOID: headSha, threads: [thread] });
+    return review
+      ? mutation('addPullRequestReviewThread', { ...thread, pullRequestReviewId: review.id })
+      : mutation('addPullRequestReview', { pullRequestId, commitOID: headSha, threads: [thread] });
   }
-  if (action.kind === 'edit') return () => mutate('updatePullRequestReviewComment', { pullRequestReviewCommentId: action.commentId, body: action.body });
-  if (action.kind === 'delete') return () => mutate('deletePullRequestReviewComment', { id: action.commentId });
-  if (action.kind === 'discard') return () => mutate('deletePullRequestReview', { pullRequestReviewId: review.id });
+  if (action.kind === 'edit') return mutation('updatePullRequestReviewComment', { pullRequestReviewCommentId: action.commentId, body: action.body });
+  if (action.kind === 'delete') return mutation('deletePullRequestReviewComment', { id: action.commentId });
+  if (action.kind === 'discard') return mutation('deletePullRequestReview', { pullRequestReviewId: review.id });
   const event = { comment: 'COMMENT', approve: 'APPROVE', 'request-changes': 'REQUEST_CHANGES' }[action.verdict];
   const input = { pullRequestReviewId: review.id, event };
   if (action.body !== undefined) input.body = action.body;
-  return () => mutate('submitPullRequestReview', input);
+  return mutation('submitPullRequestReview', input);
+}
+
+/** Dispatch only after the durable executor has claimed the preflighted action. */
+export async function performPendingReviewMutation(octokit, { name, input }) {
+  const type = `${name[0].toUpperCase()}${name.slice(1)}Input`;
+  const payload = await octokit.graphql(`mutation($input: ${type}!) { ${name}(input: $input) { clientMutationId } }`, { input });
+  z.object({ [name]: z.object({ clientMutationId: z.literal(input.clientMutationId) }) }).parse(payload);
+  return {};
+}
+
+/** The pre-shell route keeps its callable preflight contract. */
+export async function preparePendingReviewAction(input) {
+  const mutation = await preparePendingReviewMutation(input);
+  return () => performPendingReviewMutation(input.octokit, mutation);
 }

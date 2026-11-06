@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './zh-TW.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['zh-TW'],
   "agents.combinations.loadFailed": "無法載入組合，請重新開啟設定後重試。",
   "agents.combinations.saveFailed": "無法儲存組合，請重試。",
   "agents.combinations.group": "組合",
@@ -3902,7 +3904,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': '經過時間',
   'chat.workStatus.telemetry.elapsedDescription': '從第一則使用者訊息到助理最終回覆的實際耗時。包含等待模型、工具執行、壓縮與其他間隔。',
   'chat.workStatus.telemetry.llmDuration': '模型耗時',
-  'chat.workStatus.telemetry.llmDurationDescription': "所有模型步驟的耗時，包括等待回答的時間。已扣除工具執行時間，超過 5 分鐘的停頓按閒置處理，並不只是生成文字的時間。",
+  'chat.workStatus.telemetry.llmDurationDescription': "模型步驟的耗時，包括等待回答的時間。已扣除等待工具傳回結果的時間和超過 5 分鐘的停頓。背景工具可以與模型同時執行。",
   'chat.workStatus.telemetry.toolDuration': '工具耗時',
   'chat.workStatus.telemetry.toolDurationDescription': '工具執行所用的時間，包括失敗的呼叫。多個工具同時執行的時間只計算一次，不重複相加。',
   'chat.workStatus.telemetry.ttft': '平均首字延遲',
@@ -3911,7 +3913,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': '處理這則提示時呼叫模型的次數。讀取工具結果並決定下一步通常需要再次呼叫模型。',
   'chat.workStatus.telemetry.tokens': 'Token',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "目前載入的已完成輪次中，生成的 token 除以扣除工具執行和 5 分鐘以上停頓後的模型時間。向上載入更早歷史後會重新計算。",
+  'chat.workStatus.telemetry.speedDescription': "目前載入的已完成輪次中，生成的 token 除以扣除工具等待和 5 分鐘以上停頓後的模型時間。向上載入更早歷史後會重新計算。",
   'chat.workStatus.telemetry.tokensDescription': '↑ 不含快取的輸入 token：{input}。↓ 生成的 token：文字和工具呼叫 {output}，推理 {reasoning}。統計這則提示的所有步驟。',
   'chat.workStatus.telemetry.cacheHit': '平均快取命中率',
   'chat.workStatus.telemetry.cacheHitDescription': '目前載入的已完成輪次中，從提示快取重複使用的輸入 token 比例。向上載入更早歷史後會重新計算。',
@@ -4333,4 +4335,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': '對話會在專案資料夾中繼續。聊天建立的檔案保留在原處。',
   'sessions.moveChatToProject.success': '已將聊天移動到專案',
   'sessions.moveChatToProject.failed': '無法移動聊天',
+  "workspaceRestore.draftConflict": "內容已有更新。已恢復你的草稿，自動儲存已暫停。",
+  "workspaceRestore.saveDraft": "儲存恢復的草稿",
+  "workspaceRestore.useLatest": "使用最新內容",
+  "workspaceRestore.itemMissing": "此項目已不存在。你尚未儲存的文字仍保留在這裡。",
+  "workspaceRestore.commentChanged": "所選程式碼已有變更。請重新選取行以繼續這則評論。",
+  "workspaceRestore.restoreInput": "恢復未確認的輸入",
 };

@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './es.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['es'],
   "agents.combinations.loadFailed": "No se pudieron cargar las combinaciones. Vuelve a abrir los ajustes e inténtalo de nuevo.",
   "agents.combinations.saveFailed": "No se pudieron guardar las combinaciones. Inténtalo de nuevo.",
   "agents.combinations.group": "Combinaciones",
@@ -3895,7 +3897,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': 'Tiempo transcurrido',
   'chat.workStatus.telemetry.elapsedDescription': 'Tiempo de reloj desde el primer mensaje del usuario hasta la respuesta final del asistente. Incluye la espera del modelo, la ejecución de herramientas, la compactación y otros intervalos.',
   'chat.workStatus.telemetry.llmDuration': 'Modelo',
-  'chat.workStatus.telemetry.llmDurationDescription': "Tiempo de todos los pasos del modelo, incluida la espera de respuestas. Se resta la ejecución de herramientas, y las pausas de más de 5 minutos cuentan como inactividad. No es solo el tiempo de generación de texto.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Tiempo de los pasos del modelo, incluida la espera de respuestas. Se descuentan las esperas de herramientas y las pausas de más de 5 minutos. Las herramientas en segundo plano pueden ejecutarse a la vez que el modelo.",
   'chat.workStatus.telemetry.toolDuration': 'Herramientas',
   'chat.workStatus.telemetry.toolDurationDescription': 'Tiempo de ejecución de herramientas, incluidas las llamadas fallidas. Las herramientas que se ejecutan a la vez cuentan una sola vez.',
   'chat.workStatus.telemetry.ttft': 'TTFT medio',
@@ -3904,7 +3906,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': 'Cuántas veces se llamó al modelo para este prompt. Leer el resultado de una herramienta y decidir qué hacer suele requerir otro paso.',
   'chat.workStatus.telemetry.tokens': 'Tokens',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Tokens generados en los turnos completados ya cargados, divididos por el tiempo de modelo sin ejecución de herramientas y sin pausas de más de 5 minutos. Al cargar historial anterior se recalcula.",
+  'chat.workStatus.telemetry.speedDescription': "Tokens generados en los turnos completados ya cargados, divididos por el tiempo del modelo sin esperas de herramientas ni pausas de más de 5 minutos. Al cargar historial anterior se recalcula.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Entrada sin tokens en caché: {input}. ↓ Generados: {output} para texto y llamadas a herramientas, más {reasoning} de razonamiento. Totales de todos los pasos de este prompt.',
   'chat.workStatus.telemetry.cacheHit': 'Caché media',
   'chat.workStatus.telemetry.cacheHitDescription': 'Proporción de tokens de entrada reutilizados de la caché del prompt en los turnos completados ya cargados. Al cargar historial anterior se recalcula.',
@@ -4334,4 +4336,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': 'La conversación continúa en la carpeta del proyecto. Los archivos que creó el chat se quedan donde están.',
   'sessions.moveChatToProject.success': 'Chat movido al proyecto',
   'sessions.moveChatToProject.failed': 'No se pudo mover el chat',
+  "workspaceRestore.draftConflict": "Este elemento ha cambiado. Se ha restaurado tu borrador y se ha pausado el guardado automático.",
+  "workspaceRestore.saveDraft": "Guardar el borrador restaurado",
+  "workspaceRestore.useLatest": "Usar el contenido más reciente",
+  "workspaceRestore.itemMissing": "Este elemento ya no existe. El texto sin guardar sigue disponible aquí.",
+  "workspaceRestore.commentChanged": "El código seleccionado ha cambiado. Vuelve a seleccionar las líneas para continuar tu comentario.",
+  "workspaceRestore.restoreInput": "Restaurar la entrada sin confirmar",
 };

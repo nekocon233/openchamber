@@ -243,6 +243,7 @@ const MUTATION_ROUTES = [
   ['/issues/labels', 'labels'],
   ['/pr/reviewers', 'reviewers'],
   ['/pr/review', 'reviews'],
+  ['/pr/review/pending', 'reviewDrafts'],
   ['/pr/review/comment', 'reviewDrafts'],
   ['/pr/review/comment/update', 'reviewDrafts'],
   ['/pr/review/comment/delete', 'reviewDrafts'],
@@ -933,6 +934,20 @@ export function registerProviderRoutes(app, {
         session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
         project: optionalProject(req),
         number: requestIssueNumber(req.query?.number),
+      }));
+    }, {
+      validate: (req) => (!requestText(req.query?.directory) || !namesProject(req)
+        || !requestIssueNumber(req.query?.number) ? 'directory, owner, repo and number are required' : null),
+    });
+
+    // The versioned draft used by PR details and inline review comments.
+    boundRead('reviewDrafts', '/pr/review/pending', async ({ req, res, impl, directory, instance, trustedContext }) => {
+      const read = requireResource(impl, 'pendingReview');
+      const session = await sessionFor(impl, instance, trustedContext.accountId);
+      res.set('Cache-Control', 'no-store');
+      return res.json(await read({
+        session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
+        project: optionalProject(req), number: requestIssueNumber(req.query?.number),
       }));
     }, {
       validate: (req) => (!requestText(req.query?.directory) || !namesProject(req)

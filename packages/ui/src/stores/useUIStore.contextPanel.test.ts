@@ -254,12 +254,11 @@ describe('useUIStore context panel tabs', () => {
   });
 
   test('opens an agent-shown plan in the Project knowledge surface, not a plan tab', () => {
-    useUIStore.setState({ projectContextTab: 'notes', projectKnowledgePlanRequest: null });
+    useUIStore.setState({ projectKnowledgePlanRequest: null });
 
     useUIStore.getState().openProjectKnowledgePlan('/repo', 'path_repo', 'plan-1');
 
     const state = useUIStore.getState();
-    expect(state.projectContextTab).toBe('plans');
     expect(state.projectKnowledgePlanRequest).toEqual({ projectContextId: 'path_repo', planId: 'plan-1' });
     const tabs = getContextPanelTabs('/repo');
     expect(tabs.map((tab) => tab.mode)).toEqual(['notes']);

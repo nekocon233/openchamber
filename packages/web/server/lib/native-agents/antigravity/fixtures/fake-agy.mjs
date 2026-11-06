@@ -67,8 +67,13 @@ if (effort && modelEffort && effort !== modelEffort) {
   console.error(`--model ${model} conflicts with --effort=${effort}`);
   process.exit(1);
 }
-if (mode && (!args.includes('--dangerously-skip-permissions') || args.includes('--settings'))) {
+if (mode && !args.includes('--dangerously-skip-permissions')) {
   throw new Error('Conversation launched without full tool access');
+}
+let contextSettings = null;
+if (mode && option('--settings')) {
+  contextSettings = JSON.parse(fs.readFileSync(option('--settings'), 'utf8'));
+  if (Object.keys(contextSettings).join(',') !== 'customModelsConfig') throw new Error('Unexpected conversation settings');
 }
 const root = path.join(home, 'brain', conversationId, '.system_generated', 'logs');
 fs.mkdirSync(root, { recursive: true });
@@ -120,6 +125,7 @@ const outputLimitError = 'Your previous response was cut off because it exceeded
 frame({ event: 'init', conversation_id: conversationId, init: { cwd, model, permission_mode: 'always-proceed' } });
 let turns = 0;
 let active = false;
+let retainedChildId = null;
 let interruptError = 'interrupted';
 const finish = (status, response, error, extra = {}) => {
   active = false;
@@ -135,9 +141,9 @@ const finish = (status, response, error, extra = {}) => {
   } });
   if (status !== 'SUCCESS') process.exit(1);
 };
-const planner = (text, toolCalls = []) => {
+const planner = (text, toolCalls = [], thinking = undefined) => {
   const index = stepIndex++;
-  append({ step_index: index, type: 'PLANNER_RESPONSE', content: text, tool_calls: toolCalls, usage });
+  append({ step_index: index, type: 'PLANNER_RESPONSE', content: text, thinking, tool_calls: toolCalls, usage });
   frame({ event: 'step_update', step_update: {
     conversation_id: conversationId, step_index: index, state: 'DONE', step_type: 'agent_response', text_delta: text, usage,
   } });
@@ -154,9 +160,71 @@ const run = (text) => {
   frame({ event: 'step_update', step_update: {
     conversation_id: conversationId, step_index: userIndex, state: 'DONE', step_type: 'user_input',
   } });
+  if (visible === 'retained-child-followup' || visible === 'retained-child-followup-result-only') {
+    if (!retainedChildId) throw new Error('No retained fixture child');
+    const task = '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=' + conversationId
+      + ' priority=MESSAGE_PRIORITY_HIGH content=Also inspect error cases.\n</SYSTEM_MESSAGE>';
+    const childLog = path.join(home, 'brain', retainedChildId, '.system_generated', 'logs', 'transcript_full.jsonl');
+    for (const entry of [
+      { step_index: 2, type: 'SYSTEM_MESSAGE', content: task },
+      { step_index: 3, type: 'PLANNER_RESPONSE', thinking: 'Inspect the error cases.', content: 'Error cases checked.' },
+    ]) fs.appendFileSync(childLog, JSON.stringify({ created_at: new Date().toISOString(), status: 'DONE', ...entry }) + '\n');
+    if (visible !== 'retained-child-followup-result-only') {
+      frame({ event: 'step_update', step_update: { conversation_id: retainedChildId, step_index: 3, state: 'DONE',
+        step_type: 'agent_response', text_delta: 'Error cases checked.' } });
+    }
+    frame({ event: 'result', result: { conversation_id: retainedChildId, status: 'SUCCESS', response: 'Error cases checked.' } });
+    planner('Follow-up completed.\n');
+    finish('SUCCESS', 'Follow-up completed.\n');
+    return;
+  }
+  if (visible === 'retained-agent-content' || visible === 'retained-agent-no-child-frames' || visible === 'live-child-thinking') {
+    const childId = randomUUID();
+    retainedChildId = childId;
+    const message = (sender, body) => '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender='
+      + sender + ' priority=MESSAGE_PRIORITY_HIGH content=' + body + '\n</SYSTEM_MESSAGE>';
+    const task = 'Inspect fixture evidence.';
+    const report = '# Fixture report\n\nThe evidence is complete.';
+    const db = new DatabaseSync(databasePath);
+    db.prepare('insert into conversation_summaries values (?, ?, ?, ?, ?, ?)')
+      .run(childId, 'Fixture child', task, new Date().toISOString(), JSON.stringify([pathToFileURL(cwd).href]), conversationId);
+    db.close();
+    const childRoot = path.join(home, 'brain', childId, '.system_generated', 'logs');
+    fs.mkdirSync(childRoot, { recursive: true });
+    const childEntries = [
+      { step_index: 0, type: 'SYSTEM_MESSAGE', content: message(conversationId, task) },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: visible === 'live-child-thinking' ? undefined : 'Read the evidence.',
+        content: visible === 'retained-agent-no-child-frames' ? 'First progress.' : 'Evidence checked.' },
+      ...(visible === 'retained-agent-no-child-frames' ? [{ step_index: 2, type: 'PLANNER_RESPONSE', content: 'Evidence checked.' }] : []),
+    ].map((entry) => JSON.stringify({ created_at: new Date().toISOString(), status: 'DONE', ...entry })).join('\n') + '\n';
+    fs.writeFileSync(path.join(childRoot, 'transcript_full.jsonl'), childEntries);
+    append({ step_index: stepIndex++, type: 'PLANNER_RESPONSE', thinking: 'Check the saved task first.', usage });
+    planner('Waiting for the child.\n', [{ name: 'invoke_subagent', args: { Task: task } },
+      { name: 'find_by_name', args: {} }, { name: 'grep_search', args: {} }], 'Delegate the evidence check.');
+    const index = stepIndex++;
+    const subagentInfo = { subagents: [{ conversation_id: childId, type_name: 'explorer', role: 'Fixture child', initial_prompt: task }] };
+    append({ step_index: index, type: 'GENERIC', content: 'Child created', subagent_info: subagentInfo });
+    frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: index, state: 'DONE', step_type: 'subagent',
+      tool_info: { name: 'invoke_subagent', parameters: { Task: task }, output: 'Child created', error: null }, subagent_info: subagentInfo } });
+    if (visible !== 'retained-agent-no-child-frames') {
+      frame({ event: 'step_update', step_update: { conversation_id: childId, step_index: 1, state: 'DONE',
+        step_type: 'agent_response', text_delta: 'Evidence checked.' } });
+    }
+    if (visible === 'live-child-thinking') return;
+    frame({ event: 'result', result: { conversation_id: childId, status: 'SUCCESS', response: 'Evidence checked.' } });
+    for (const name of ['find_by_name', 'grep_search']) {
+      append({ step_index: stepIndex++, type: 'GENERIC', status: 'INVALID', error: 'unknown tool: ' + name, content: 'Invalid call' });
+    }
+    append({ step_index: stepIndex++, type: 'SYSTEM_MESSAGE', content: message('system', 'Hidden system notice') });
+    append({ step_index: stepIndex++, type: 'SYSTEM_MESSAGE', content: message(randomUUID(), 'Hidden unrelated sender') });
+    append({ step_index: stepIndex++, type: 'SYSTEM_MESSAGE', content: message(childId, report) });
+    planner('Report received.\n', [], 'Summarize the report.');
+    finish('SUCCESS', 'Report received.\n');
+    return;
+  }
   if (['decision-questions', 'decision-plan', 'decision-questions-output-limit', 'decision-questions-stale-output-limit'].includes(visible)) {
     const questions = visible === 'decision-plan' ? [{
-      question: '<openchamber-plan-v1>\n# Fixture implementation plan\n\n1. Preserve the API.\n2. Update the tests.',
+      question: '<openchamber-plan-v1>\n# Fixture implementation plan\n\n1. Preserve the API.\n2. Update the tests.\n</openchamber-plan-v1>',
       options: ['build', 'plan'], is_multi_select: false,
     }] : [
       { question: 'Which scope should change?', options: ['Current file', 'Whole module'], is_multi_select: false },
@@ -223,9 +291,32 @@ const run = (text) => {
     return;
   }
   if (visible === 'mode-probe') {
-    const response = JSON.stringify({ mode, model, effort, resumed, nodeEnv: process.env.NODE_ENV ?? null, pid: process.pid });
+    const response = JSON.stringify({ mode, model, effort, resumed, nodeEnv: process.env.NODE_ENV ?? null, pid: process.pid,
+      settingsFile: option('--settings'), contextBudgets: Object.fromEntries(Object.entries(contextSettings?.customModelsConfig?.customModels ?? {})
+        .map(([id, value]) => [id, value.maxTokens ?? null])) });
     planner(response);
     finish('SUCCESS', response);
+    return;
+  }
+  if (visible === 'live-thinking') {
+    const generation = stepIndex;
+    planner('Working\n', [{ name: 'run_command', args: { CommandLine: 'wait for fixture' } }]);
+    const tool = stepIndex++;
+    append({ step_index: tool, type: 'GENERIC', status: 'RUNNING', content: 'Still working' });
+    frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: tool, state: 'ACTIVE', step_type: 'tool',
+      tool_info: { name: 'run_command', parameters: { CommandLine: 'wait for fixture' }, output: '', error: null } } });
+    const release = path.join(home, 'release-thinking');
+    const watcher = fs.watch(home, () => {
+      if (!fs.existsSync(release)) return;
+      watcher.close();
+      append({ step_index: generation, type: 'PLANNER_RESPONSE', content: 'Working\n', thinking: 'Check the fixture while the turn runs.',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'wait for fixture' } }], usage });
+      append({ step_index: tool, type: 'GENERIC', content: 'Tool completed' });
+      const completed = { event: 'step_update', step_update: { conversation_id: conversationId, step_index: tool, state: 'DONE', step_type: 'tool',
+        tool_info: { name: 'run_command', parameters: { CommandLine: 'wait for fixture' }, output: 'Tool completed', error: null } } };
+      frame(completed);
+      frame(completed);
+    });
     return;
   }
   if (visible === 'stop-after-commentary' || visible === 'stop-after-output-limit') {

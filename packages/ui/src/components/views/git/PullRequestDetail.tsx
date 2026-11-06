@@ -10,6 +10,9 @@ import { usePullAttachments } from '@/components/sourceBoard/pullAttachments';
 import { useThreadActions } from '@/components/sourceBoard/threadActions';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { GitHubPullReference, GitHubPullStatus, GitHubReferenceDetail, SourceControlReadContext } from '@/lib/api/types';
+import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 /** PR actions always use the context that supplied the displayed reference. */
 export const PullRequestDetail: React.FC<{
@@ -23,7 +26,8 @@ export const PullRequestDetail: React.FC<{
   pullLinks: React.ReactNode;
 }> = ({ reference, context, githubDetail, pullStatus, now, onChanged, refreshDetail, pullLinks }) => {
   const { sourceControl } = useRuntimeAPIs();
-  const [checksOpen, setChecksOpen] = React.useState(false);
+  const owner = workspaceViewKey(getRuntimeKey(), context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
+  const [checksOpen, setChecksOpen] = useWorkspaceViewState('pullRequest', owner, 'checksOpen');
   const attachments = usePullAttachments(reference);
   const refresh = React.useCallback(async () => {
     await Promise.all([onChanged(), refreshDetail()]);
@@ -36,7 +40,7 @@ export const PullRequestDetail: React.FC<{
   const item = { source: 'github' as const, reference };
 
   return (
-    <>
+    <WorkspaceViewScope.Provider value={owner}>
       <ReferencePreview
         item={item}
         directory={context.directory}
@@ -59,6 +63,6 @@ export const PullRequestDetail: React.FC<{
         pullLinks={pullLinks}
       />
       <SourceBoardChecksDialog pull={reference} context={context} open={checksOpen} onOpenChange={setChecksOpen} onAttachFailed={attachments.attachFailedChecks} />
-    </>
+    </WorkspaceViewScope.Provider>
   );
 };

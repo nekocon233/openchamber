@@ -34,8 +34,17 @@ const nativeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.idle'), properties: sessionIdentity }),
   z.object({ type: z.literal('session.error'), properties: sessionIdentity.extend({ error: nativeMessageErrorSchema }) }),
   z.object({ type: z.literal('message.updated'), properties: z.object({ info: nativeMessageSchema }) }),
+  z.object({ type: z.literal('message.patched'), properties: sessionIdentity.extend({
+    messageID: z.string().min(1),
+    patch: z.object({ telemetry: z.object({ toolWaitDurationMs: z.number().nonnegative().nullable() }) }),
+  }) }),
   z.object({ type: z.literal('message.removed'), properties: sessionIdentity.extend({ messageID: z.string().min(1) }) }),
   z.object({ type: z.literal('message.part.updated'), properties: z.object({ part: nativePartSchema }) }),
+  z.object({ type: z.literal('message.parts.replaced'), properties: sessionIdentity.extend({
+    messageID: z.string().min(1), parts: z.array(nativePartSchema),
+  }).refine((properties) => properties.parts.every((part) => (
+    part.sessionID === properties.sessionID && part.messageID === properties.messageID
+  ))) }),
   z.object({ type: z.literal('message.part.delta'), properties: sessionIdentity.extend({
     messageID: z.string().min(1), partID: z.string().min(1), field: z.enum(['text', 'raw']), delta: z.string(),
   }) }),

@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './ar.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -51,6 +52,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['ar'],
   "agents.combinations.loadFailed": "تعذر تحميل المجموعات. أعد فتح الإعدادات وحاول مجددًا.",
   "agents.combinations.saveFailed": "تعذر حفظ المجموعات. حاول مجددًا.",
   "agents.combinations.group": "التركيبات",
@@ -3594,11 +3596,11 @@ export const dict = {
   'chat.workStatus.telemetry.responseSpeed': 'الرد',
   'chat.workStatus.telemetry.responseSpeedDescription': 'سرعة وصول النص النهائي. لا يشمل الانتظار الأولي ولا التفكير ولا استدعاءات الأدوات السابقة. هذا تقدير من الطوابع الزمنية للنص، وليس قياسًا للسرعة من الموفر.',
   'chat.workStatus.telemetry.speed': 'متوسط السرعة',
-  'chat.workStatus.telemetry.speedDescription': "الرموز المولَّدة في الدورات المكتملة المحمَّلة، مقسومة على زمن النموذج بعد طرح وقت تنفيذ الأدوات والتوقفات الأطول من 5 دقائق. يُعاد الحساب عند تحميل تاريخ أقدم.",
+  'chat.workStatus.telemetry.speedDescription': "الرموز المولَّدة في الدورات المكتملة المحمَّلة، مقسومة على زمن النموذج بعد طرح انتظار الأدوات والتوقفات الأطول من 5 دقائق. يُعاد الحساب عند تحميل تاريخ أقدم.",
   'chat.workStatus.telemetry.elapsed': 'المنقضي',
   'chat.workStatus.telemetry.elapsedDescription': 'الوقت الفعلي من أول رسالة للمستخدم حتى آخر رد من المساعد. يشمل انتظار النموذج وتنفيذ الأدوات والضغط والفجوات الأخرى.',
   'chat.workStatus.telemetry.llmDuration': 'وقت النموذج',
-  'chat.workStatus.telemetry.llmDurationDescription': "الوقت المستغرق في كل خطوات النموذج، بما فيه انتظار الردود. يُطرح وقت تنفيذ الأدوات، وتُحتسب التوقفات الأطول من 5 دقائق وقت خمول. هذا ليس وقت توليد النص فقط.",
+  'chat.workStatus.telemetry.llmDurationDescription': "وقت خطوات النموذج، بما فيه انتظار الردود. يُطرح انتظار نتائج الأدوات والتوقفات الأطول من 5 دقائق. يمكن لأدوات الخلفية العمل بالتزامن مع النموذج.",
   'chat.workStatus.telemetry.toolDuration': 'وقت الأدوات',
   'chat.workStatus.telemetry.toolDurationDescription': 'الوقت المستغرق في تشغيل الأدوات، بما فيه الاستدعاءات الفاشلة. الأدوات التي تعمل في الوقت نفسه تُحتسب مرة واحدة ولا تُجمع.',
   'chat.workStatus.telemetry.ttft': 'متوسط TTFT',
@@ -4343,4 +4345,10 @@ export const dict = {
   "nativeMemory.hostOnly": "Connect terminal CLIs on the server computer.",
   "nativeMemory.unavailable": "Memory sharing is unavailable on this runtime.",
   "nativeMemory.setupFailed": "Some CLI hooks couldn't be set up. Turn memory off and back on to try again.",
+  "workspaceRestore.draftConflict": "تغيّر هذا العنصر. تمت استعادة مسودتك وإيقاف الحفظ التلقائي مؤقتًا.",
+  "workspaceRestore.saveDraft": "حفظ المسودة المستعادة",
+  "workspaceRestore.useLatest": "استخدام أحدث محتوى",
+  "workspaceRestore.itemMissing": "لم يعد هذا العنصر موجودًا. لا يزال النص غير المحفوظ متاحًا هنا.",
+  "workspaceRestore.commentChanged": "تغيّرت الشفرة المحددة. حدّد الأسطر مجددًا لمتابعة تعليقك.",
+  "workspaceRestore.restoreInput": "استعادة الإدخال غير المؤكد",
 };

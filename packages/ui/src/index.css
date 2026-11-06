@@ -739,10 +739,12 @@ button svg,
  * response streams. The cost grows with the number of buttons on screen, so
  * Chromium runtimes no longer get the hint. `font: -apple-system-body` is a
  * value only WebKit parses, which keeps the rule where it was written for.
+ * Spinners keep their animated transform; WebKit's prefixed property would
+ * otherwise override the circular session mark's rotation inside buttons.
  */
 @supports (font: -apple-system-body) {
-  button svg:not(.animate-spin),
-  [role="button"] svg:not(.animate-spin) {
+  button svg:not(.animate-spin):not(.activity-spinner),
+  [role="button"] svg:not(.animate-spin):not(.activity-spinner) {
     transform: translateZ(0);
     -webkit-transform: translateZ(0);
   }
@@ -2669,6 +2671,17 @@ textarea[data-terminal-hidden-input="true"]::placeholder {
  */
 .waiting-dim {
   opacity: 0.4;
+}
+
+/* The user-selected original circular session indicator, at its 20 fps cadence.
+   SessionActivityIndicator pauses it through ClockPausedContext while hidden. */
+@keyframes session-activity-spin {
+  to { transform: rotate(360deg); }
+}
+
+.activity-spinner {
+  transform-origin: center;
+  animation: session-activity-spin 1.5s steps(30) infinite;
 }
 
 /*

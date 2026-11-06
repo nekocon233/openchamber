@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './he.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
@@ -51,6 +52,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  ...diffFileFilterI18n['he'],
   "agents.combinations.loadFailed": "לא ניתן לטעון שילובים. יש לפתוח את ההגדרות מחדש ולנסות שוב.",
   "agents.combinations.saveFailed": "לא ניתן לשמור שילובים. יש לנסות שוב.",
   "agents.combinations.group": "שילובים",
@@ -3594,11 +3596,11 @@ export const dict = {
   'chat.workStatus.telemetry.responseSpeed': 'תגובה',
   'chat.workStatus.telemetry.responseSpeedDescription': 'באיזו מהירות הגיע הטקסט הסופי. לא כולל את ההמתנה הראשונית, החשיבה וקריאות קודמות לכלים. הערכה לפי חותמות הזמן של הטקסט, לא מדידת מהירות של הספק.',
   'chat.workStatus.telemetry.speed': 'מהירות ממוצעת',
-  'chat.workStatus.telemetry.speedDescription': "הטוקנים שנוצרו בתורים שהושלמו ונטענו, חלקי זמן המודל בלי הרצת כלים ובלי הפוגות ארוכות מ-5 דקות. טעינת היסטוריה ישנה יותר מחשבת מחדש.",
+  'chat.workStatus.telemetry.speedDescription': "הטוקנים שנוצרו בתורים שהושלמו ונטענו, חלקי זמן המודל בלי המתנה לכלים ובלי הפוגות ארוכות מ-5 דקות. טעינת היסטוריה ישנה יותר מחשבת מחדש.",
   'chat.workStatus.telemetry.elapsed': 'זמן שחלף',
   'chat.workStatus.telemetry.elapsedDescription': 'הזמן בפועל מהודעת המשתמש הראשונה ועד התגובה הסופית של העוזר. כולל המתנה למודל, הרצת כלים, דחיסה ופערים אחרים.',
   'chat.workStatus.telemetry.llmDuration': 'זמן המודל',
-  'chat.workStatus.telemetry.llmDurationDescription': "הזמן שנדרש לכל שלבי המודל, כולל ההמתנה לתגובות. זמן הרצת הכלים והפוגות ארוכות מ-5 דקות לא נכללים. זה לא רק הזמן שבו נוצר טקסט.",
+  'chat.workStatus.telemetry.llmDurationDescription': "זמן שלבי המודל, כולל המתנה לתגובות. ההמתנה לתוצאות כלים והפוגות ארוכות מ-5 דקות מנוכות. כלים ברקע יכולים לפעול במקביל למודל.",
   'chat.workStatus.telemetry.toolDuration': 'זמן הכלים',
   'chat.workStatus.telemetry.toolDurationDescription': 'הזמן שבו רצו כלים, כולל קריאות שנכשלו. כלים שרצים במקביל נספרים פעם אחת ולא מתווספים זה לזה.',
   'chat.workStatus.telemetry.ttft': 'TTFT ממוצע',
@@ -4343,4 +4345,10 @@ export const dict = {
   "nativeMemory.hostOnly": "Connect terminal CLIs on the server computer.",
   "nativeMemory.unavailable": "Memory sharing is unavailable on this runtime.",
   "nativeMemory.setupFailed": "Some CLI hooks couldn't be set up. Turn memory off and back on to try again.",
+  "workspaceRestore.draftConflict": "הפריט השתנה. הטיוטה שלך שוחזרה והשמירה האוטומטית הושהתה.",
+  "workspaceRestore.saveDraft": "שמירת הטיוטה ששוחזרה",
+  "workspaceRestore.useLatest": "שימוש בתוכן העדכני",
+  "workspaceRestore.itemMissing": "הפריט הזה כבר לא קיים. הטקסט שלא נשמר עדיין זמין כאן.",
+  "workspaceRestore.commentChanged": "הקוד שנבחר השתנה. יש לבחור שוב את השורות כדי להמשיך את התגובה.",
+  "workspaceRestore.restoreInput": "שחזור קלט שטרם אושר",
 };

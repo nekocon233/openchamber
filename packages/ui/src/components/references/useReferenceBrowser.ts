@@ -12,6 +12,7 @@ import { handleDropdownNavigationKey } from '@/components/ui/dropdown-navigation
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import type { GitHubPullStatus, GitHubReference, GitHubReferenceKind, RepositoryReferenceFilter } from '@/lib/api/types';
 import { isIMECompositionEvent } from '@/lib/ime';
+import { useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 
 import type { CachedValue } from './referenceCache';
 import {
@@ -49,6 +50,7 @@ export const IDLE_PULL_STATUS: CachedValue<GitHubPullStatus | null> = { status: 
 export type ReferenceBrowserOptions = {
     /** Project PRs have independent filters, a single repository, and an explicit detail selection. */
     mode?: 'references' | 'project-pulls';
+    projectPullsState?: { owner: string | null; preferences: string | null };
     active?: boolean;
     source: ReferencePickerSource;
     /** The project GitHub or GitLab items come from. */
@@ -66,6 +68,7 @@ export type ReferenceBrowserOptions = {
 
 export function useReferenceBrowser({
     mode = 'references',
+    projectPullsState,
     active = true,
     source,
     directory,
@@ -77,9 +80,14 @@ export function useReferenceBrowser({
 }: ReferenceBrowserOptions) {
     const projectPulls = mode === 'project-pulls';
     const [githubKind, setGitHubKind] = React.useState<GitHubReferenceKind>(projectPulls ? 'pull' : initialGitHubKind ?? lastGitHubKind);
-    const [githubFilter, setGitHubFilter] = React.useState<RepositoryReferenceFilter>(projectPulls ? PROJECT_PULL_FILTER : lastGitHubFilter.get(initialGitHubKind ?? lastGitHubKind) ?? DEFAULT_REPOSITORY_FILTER);
+    const [localGitHubFilter, setGitHubFilter] = React.useState<RepositoryReferenceFilter>(lastGitHubFilter.get(initialGitHubKind ?? lastGitHubKind) ?? DEFAULT_REPOSITORY_FILTER);
+    const [projectPeople, setProjectPeople] = useWorkspaceViewState('pullRequest', projectPulls ? projectPullsState?.preferences ?? null : null, 'people');
+    const githubFilter: RepositoryReferenceFilter = projectPulls ? { ...PROJECT_PULL_FILTER, people: projectPeople } : localGitHubFilter;
     const [linearFilter, setLinearFilter] = React.useState<LinearReferenceFilter>(lastLinearFilter);
-    const [query, setQueryState] = React.useState('');
+    const stateOwner = projectPulls ? projectPullsState?.owner ?? null : null;
+    const [query, setQueryState] = useWorkspaceViewState('pullRequest', stateOwner, 'query');
+    const [selectionUrl, setSelectionUrl] = useWorkspaceViewState('pullRequest', stateOwner, 'selectedUrl');
+    const [loadedCount, setLoadedCount] = useWorkspaceViewState('pullRequest', stateOwner, 'loadedCount');
     const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
     const [highlightedKey, setHighlightedKey] = React.useState<string | null>(null);
     const [mobilePreviewKey, setMobilePreviewKey] = React.useState<string | null>(null);
@@ -174,7 +182,10 @@ export function useReferenceBrowser({
             if (filter.people === 'assigned') filter.people = 'any';
         }
         if (!projectPulls) lastGitHubFilter.set(githubKind, filter);
-        setGitHubFilter(filter);
+        if (projectPulls) {
+            setProjectPeople(filter.people === 'assigned' ? 'any' : filter.people);
+            setLoadedCount(0);
+        } else setGitHubFilter(filter);
         setHighlightedKey(null);
     };
     /** Changes one part of the Linear filter, keeping the others. */
@@ -186,8 +197,9 @@ export function useReferenceBrowser({
     };
     const setQuery = React.useCallback((value: string) => {
         setQueryState(value);
+        setLoadedCount(0);
         setHighlightedKey(null);
-    }, []);
+    }, [setLoadedCount, setQueryState]);
 
     const moveHighlight = React.useCallback((direction: 1 | -1) => {
         if (items.length === 0) return;
@@ -210,7 +222,11 @@ export function useReferenceBrowser({
     /** A row click: highlights on desktop, opens the preview in place on mobile. */
     const showItem = (key: string) => {
         // A resumed list may refresh its first page while a later-page PR is still being read.
-        if (projectPulls) setOpenedItem(findItem(key));
+        if (projectPulls) {
+            const item = findItem(key);
+            setOpenedItem(item);
+            if (item?.source === 'github') setSelectionUrl(item.reference.url);
+        }
         if (isMobile || projectPulls) {
             setHighlightedKey(key);
             setMobilePreviewKey(key);
@@ -225,6 +241,7 @@ export function useReferenceBrowser({
         setOpenedItem(item);
         const key = referencePickerItemKey(item);
         if (projectPulls) {
+            if (item.source === 'github') setSelectionUrl(item.reference.url);
             setHighlightedKey(key);
             setMobilePreviewKey(key);
         } else showItem(key);
@@ -239,6 +256,9 @@ export function useReferenceBrowser({
         sourceStatus,
         githubKind,
         githubFilter,
+        selectionUrl,
+        loadedCount,
+        setLoadedCount,
         linearFilter,
         query,
         debouncedQuery,
@@ -254,7 +274,7 @@ export function useReferenceBrowser({
         previewKey,
         previewItem,
         mobilePreviewKey,
-        closeMobilePreview: () => setMobilePreviewKey(null),
+        closeMobilePreview: () => { setMobilePreviewKey(null); setSelectionUrl(null); },
         linearDetail,
         githubDetail,
         refreshGithubDetail,

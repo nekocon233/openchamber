@@ -9,7 +9,7 @@ import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
 import { useChangeRequestDiffServing, useChangeRequestTerm, useSourceControlProviderServing } from '@/lib/source-control/providers/registry';
 import { useRepositoryHost } from '@/components/references/referenceSources';
 import { useGitStore } from '@/stores/useGitStore';
-import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
+import { getPullRequestRequestAuthority, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { getSourceControlAuthKey, getSourceControlReadContextAuthState, useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import {
   getFreshestSourceControlStatusForBranch,
@@ -18,6 +18,8 @@ import {
 } from '@/stores/useGitHubPrStatusStore';
 import { useRuntimeAPIs } from './useRuntimeAPIs';
 import { useDebouncedValue } from './useDebouncedValue';
+import { useWorkspaceViewState } from './useWorkspaceViewState';
+import { useWorkspaceViewStateStore, workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
 import { joinProjectPath } from '@/lib/source-control/projectPath';
 
 type PullRequestList =
@@ -109,13 +111,35 @@ export function usePullRequestComparison(
   const provider = context?.provider ?? hostProvider ?? null;
   const changeRequestTerm = useChangeRequestTerm(provider);
   // A rebind to another repository must not carry a selection across.
-  const selectionKey = JSON.stringify([runtimeKey, directory, branch, context?.repositoryId ?? null]);
-  const selection = usePullRequestSelectionStore((state) => state.selections.get(selectionKey) ?? null);
-  const selectedSource = selection?.source ?? null;
-  const saveSelection = usePullRequestSelectionStore((state) => state.select);
+  const identity = context ? workspaceRepositoryIdentity(context) : null;
+  const selectionKey = JSON.stringify([runtimeKey, directory, branch, identity]);
+  const selection = usePullRequestSelectionStore((state) => context ? state.selections.get(selectionKey) ?? null : null);
+  const [savedSource, setSavedSource] = useWorkspaceViewState('changes', directory && context ? selectionKey : null, 'pullRequest');
+  const selectedSource = selection?.source ?? savedSource;
+  const selectSource = usePullRequestSelectionStore((state) => state.select);
+  const persistSelection = useCallback((source: PullRequestSource) => {
+    const context = contextRef.current;
+    if (!context || !source.sourceRepo || !directory || context.directory !== directory || workspaceRepositoryIdentity(context) !== identity) return;
+    const next = { ...source, sourceRepo: source.sourceRepo };
+    const same = (previous: typeof next | null) => previous?.number === next.number
+      && previous.sourceRepo.owner === next.sourceRepo.owner && previous.sourceRepo.repo === next.sourceRepo.repo;
+    setSavedSource(previous => same(previous) ? previous : next);
+    const owner = workspaceViewKey(runtimeKey, directory, 'pr-navigation');
+    const authority = workspaceRepositoryIdentity(context);
+    if (owner) useWorkspaceViewStateStore.getState().update('changes', owner, previous =>
+      previous.pullRequestIdentity === authority && same(previous.pullRequest) ? previous
+        : { ...previous, pullRequest: next, pullRequestIdentity: authority });
+  }, [directory, identity, runtimeKey, setSavedSource]);
+  const saveSelection = useCallback((key: string, source: PullRequestSource) => {
+    selectSource(key, source);
+    if (key === selectionKey) persistSelection(source);
+  }, [persistSelection, selectSource, selectionKey]);
   const acceptHandoff = usePullRequestSelectionStore((state) => state.acceptHandoff);
-  const pendingPreference = preferredSource && selection?.handoff !== preferredSource
-    ? preferredSource : null;
+  const requestedAuthority = preferredSource ? getPullRequestRequestAuthority(preferredSource) : undefined;
+  const unresolved = preferredSource && requestedAuthority?.identity === null && requestedAuthority.runtimeKey === runtimeKey;
+  const preferred = preferredSource && context && (!requestedAuthority || (requestedAuthority.runtimeKey === runtimeKey
+    && requestedAuthority.identity === identity)) ? preferredSource : undefined;
+  const pendingPreference = preferred && selection?.handoff !== preferred ? preferred : null;
   const [query, setQuery] = useState('');
   const search = useDebouncedValue(query, 350).trim();
   const key = JSON.stringify([selectionKey, search, contextKey]);
@@ -138,7 +162,7 @@ export function usePullRequestComparison(
   // The status store dedupes by signature and throttles by TTL.
   useEffect(() => {
     const context = contextRef.current;
-    if (!enabled || !context || !branch || selectedSource || !auth.authChecked || !auth.connected) return;
+    if (!enabled || !context || !branch || selectedSource || unresolved || !auth.authChecked || !auth.connected) return;
     const statusKey = getSourceControlStatusKey(context, branch);
     ensurePrStatusEntry(statusKey);
     setPrStatusParams(statusKey, {
@@ -153,19 +177,28 @@ export function usePullRequestComparison(
       connected: auth.connected,
     });
     void refreshPrStatusTargets([{ context, branch }]);
-  }, [auth.authChecked, auth.connected, branch, contextKey, enabled, ensurePrStatusEntry, refreshPrStatusTargets, selectedSource, setPrStatusParams, sourceControl]);
+  }, [auth.authChecked, auth.connected, branch, contextKey, enabled, ensurePrStatusEntry, refreshPrStatusTargets, selectedSource, setPrStatusParams, sourceControl, unresolved]);
 
   const branchPr = branchStatus?.changeRequest ?? branchStatus?.pr ?? null;
   const branchProject = branchStatus?.project ?? null;
   useEffect(() => {
-    if (!enabled || !auth.connected || !branchPr || !branchProject || usePullRequestSelectionStore.getState().selections.has(selectionKey)) return;
+    if (!enabled || !auth.connected || !branchPr || !branchProject || selectedSource || unresolved || usePullRequestSelectionStore.getState().selections.has(selectionKey)) return;
     saveSelection(selectionKey, { kind: 'pr', number: branchPr.number,
       sourceRepo: { owner: branchProject.owner, repo: branchProject.name } });
-  }, [auth.connected, branchPr, branchProject, enabled, saveSelection, selectionKey]);
+  }, [auth.connected, branchPr, branchProject, enabled, saveSelection, selectedSource, selectionKey, unresolved]);
 
   useEffect(() => {
-    if (preferredSource) acceptHandoff(selectionKey, preferredSource);
-  }, [acceptHandoff, preferredSource, selectionKey]);
+    if (enabled && unresolved && preferredSource && requestedAuthority && context) {
+      usePullRequestSelectionStore.getState().bindDiffRequest(requestedAuthority.directory, preferredSource, context);
+    }
+  }, [context, enabled, preferredSource, requestedAuthority, unresolved]);
+
+  useEffect(() => {
+    if (preferred) {
+      acceptHandoff(selectionKey, preferred);
+      persistSelection(preferred);
+    }
+  }, [acceptHandoff, persistSelection, preferred, selectionKey]);
 
   const refresh = useCallback(async (previous?: ReadyList) => {
     if (!directory || !enabled || providersUnknown || owner.current.key !== key || !owner.current.enabled) return;

@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { spawnCliProcess, signalCliProcess } from '../process.js';
 import { encodeAgyPrompt, parseAgyStreamFrame } from './protocol.js';
 
-export const agyProcessArgs = ({ cwd, model = null, conversationId = null, agent = 'build', effort = null }) => [
+export const agyProcessArgs = ({ cwd, model = null, conversationId = null, agent = 'build', effort = null, settingsFile = null }) => [
   '--input-format', 'stream-json',
   '--output-format', 'stream-json',
   '--add-dir', cwd,
@@ -16,6 +16,7 @@ export const agyProcessArgs = ({ cwd, model = null, conversationId = null, agent
   ...(agent ? ['--dangerously-skip-permissions'] : []),
   ...(model ? ['--model', model] : []),
   ...(effort ? ['--effort', effort] : []),
+  ...(settingsFile ? ['--settings', settingsFile] : []),
   ...(conversationId ? ['--conversation', conversationId] : []),
 ];
 

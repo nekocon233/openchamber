@@ -1,3 +1,5 @@
+import { WorkspaceViewVisible } from '@/hooks/useWorkspaceViewState';
+import { createPierreViewState, PersistentFileDiff, PersistentVirtualizedFileDiff } from './pierreViewState';
 import React, { useMemo, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -89,6 +91,7 @@ const HIDE_COLUMN_SCROLLBAR_CSS = `
 const LARGE_CONTENT_BYTES = 500_000;
 
 interface PierreDiffViewerProps {
+  persistenceOwner?: string | null;
   original: string;
   modified: string;
   fileDiff?: FileDiffMetadata;
@@ -1029,6 +1032,7 @@ const PierreDiffViewerBody: React.FC<
   review,
   reviewHeadSha,
   hunkActions,
+  persistenceOwner = null,
   onExpandContextRequest,
   pendingContextExpansion = null,
   contextLoading = false,
@@ -1682,8 +1686,24 @@ const PierreDiffViewerBody: React.FC<
   // Rows exist only once the library has rendered them, so find marks set
   // before that (a viewer registered while its diff was still loading) are
   // painted here, and again after every re-render that replaced the rows.
+  const persistenceVisible = React.useContext(WorkspaceViewVisible);
+  const persistenceRef = useRef<ReturnType<typeof createPierreViewState<DiffAnnotation>> | null>(null);
+  useEffect(() => {
+    if (!persistenceOwner || !persistenceVisible) return;
+    const controller = createPierreViewState<DiffAnnotation>(persistenceOwner);
+    persistenceRef.current = controller;
+    const instance = diffInstanceRef.current;
+    const container = diffContainerRef.current;
+    if (instance && container) controller.rendered(container, instance);
+    return () => {
+      controller.dispose();
+      if (persistenceRef.current === controller) persistenceRef.current = null;
+    };
+  }, [persistenceOwner, persistenceVisible]);
+
   const hasHunkAnchors = hunkAnchors.length > 0;
   const handlePostRender = useCallback<NonNullable<FileDiffOptions<DiffAnnotation, undefined>['onPostRender']>>((node, instance, phase) => {
+    if (phase !== 'unmount') persistenceRef.current?.rendered(node, instance);
     if (hasHunkAnchors) captureHunkTargets(node, instance, phase);
     if (phase !== 'unmount' && findMatchesRef.current.length > 0) applyFindHighlights();
     const typing = typingFieldRef.current;
@@ -1836,13 +1856,13 @@ const PierreDiffViewerBody: React.FC<
       : false;
     if (!instance) {
       instance = sharedVirtualizer
-        ? new VirtualizedFileDiff<DiffAnnotation>(
+        ? new PersistentVirtualizedFileDiff<DiffAnnotation>(
             options,
             sharedVirtualizer.virtualizer,
             VIRTUAL_METRICS,
             workerPool,
           )
-        : new PierreFileDiff(options, workerPool);
+        : new PersistentFileDiff<DiffAnnotation>(options, workerPool);
       diffInstanceRef.current = instance;
       lastAppliedSelectionRef.current = null;
     } else {
@@ -2074,23 +2094,30 @@ const PierreDiffViewerBody: React.FC<
     const container = diffContainerRef.current;
     if (!container) return;
 
-    return waitForDiffReady(container, () => {
+    let cancelled = false;
+    const release = waitForDiffReady(container, () => {
       const instance = diffInstanceRef.current;
       if (!instance || instance.fileDiff !== fileDiff) return;
       if (appliedContextExpansionRef.current === pendingContextExpansion) return;
-      appliedContextExpansionRef.current = pendingContextExpansion;
-      if (pendingContextExpansion.gap === 'after-last-hunk') {
-        // Pierre keys the region after the last hunk by the hunk count and
-        // grows it from its start, which is the 'up' direction.
-        instance.expandHunk(fileDiff.hunks.length, 'up');
-        return;
-      }
-      const hunkIndex = fileDiff.hunks.findIndex((hunk) =>
-        hunk.additionStart <= pendingContextExpansion.additionStart
-        && pendingContextExpansion.additionStart < hunk.additionStart + Math.max(hunk.additionCount, 1));
-      if (hunkIndex < 0) return;
-      instance.expandHunk(hunkIndex, pendingContextExpansion.direction);
+      void (async () => {
+        // A restored region already includes the initial expansion request.
+        // Waiting for its content check prevents expanding it twice on reload.
+        const restored = await (persistenceRef.current?.whenRestored(fileDiff) ?? Promise.resolve(false));
+        if (cancelled || diffInstanceRef.current !== instance || instance.fileDiff !== fileDiff
+          || appliedContextExpansionRef.current === pendingContextExpansion) return;
+        appliedContextExpansionRef.current = pendingContextExpansion;
+        if (restored) return;
+        if (pendingContextExpansion.gap === 'after-last-hunk') {
+          instance.expandHunk(fileDiff.hunks.length, 'up');
+          return;
+        }
+        const hunkIndex = fileDiff.hunks.findIndex((hunk) =>
+          hunk.additionStart <= pendingContextExpansion.additionStart
+          && pendingContextExpansion.additionStart < hunk.additionStart + Math.max(hunk.additionCount, 1));
+        if (hunkIndex >= 0) instance.expandHunk(hunkIndex, pendingContextExpansion.direction);
+      })();
     });
+    return () => { cancelled = true; release(); };
   }, [fileDiff, pendingContextExpansion]);
 
   if (typeof window === 'undefined') {

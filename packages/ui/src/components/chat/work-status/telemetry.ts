@@ -1,6 +1,11 @@
 import type { Message, Part, ToolPart } from '@/lib/opencode/model';
 import { isConversationRole } from '@/lib/opencode/model';
 import { computeCacheHitRate } from '@/stores/utils/tokenUtils';
+import { z } from 'zod';
+
+const codexToolWaitMeasurement = z.object({ openchamber: z.object({
+  telemetry: z.object({ toolWaitDurationMs: z.number().nonnegative() }),
+}) });
 
 type SessionMessageRecord = {
   info: Message;
@@ -9,6 +14,7 @@ type SessionMessageRecord = {
 
 type CompletedStepStats = {
   toolDurationMs: number | null;
+  toolWaitDurationMs: number | null;
   ttftMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -211,6 +217,12 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
   }
 
   const toolDurationMs = validTools ? nonnegative(sumIntervalsDuration(mergeTimeIntervals(rawToolIntervals))) : null;
+  // Codex command items can outlive the tool call that yielded them. Only
+  // the native call/return ledger measures how long the model was blocked.
+  const measuredWait = codexToolWaitMeasurement.safeParse(info.metadata).data?.openchamber.telemetry.toolWaitDurationMs;
+  const toolWaitDurationMs = info.providerID === 'codex-native'
+    ? measuredWait !== undefined && validWindow && measuredWait <= completed - created ? measuredWait : null
+    : toolDurationMs;
 
   // Wait until the first text or reasoning part that starts after the step
   // was created. A start equal to `created` is the creation stamp copied onto
@@ -237,6 +249,7 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
 
   return {
     toolDurationMs,
+    toolWaitDurationMs,
     ttftMs,
     inputTokens,
     outputTokens,
@@ -366,6 +379,7 @@ function calculateTurnStats(
   if (stepStatsList.length === 0) return null;
 
   let totalToolDurationMs: number | null = 0;
+  let totalToolWaitDurationMs: number | null = 0;
   let totalInputTokens: number | null = 0;
   let totalOutputTokens: number | null = 0;
   let totalReasoningTokens: number | null = 0;
@@ -376,6 +390,7 @@ function calculateTurnStats(
 
   for (const step of stepStatsList) {
     totalToolDurationMs = add(totalToolDurationMs, step.toolDurationMs);
+    totalToolWaitDurationMs = add(totalToolWaitDurationMs, step.toolWaitDurationMs);
     totalInputTokens = add(totalInputTokens, step.inputTokens);
     totalOutputTokens = add(totalOutputTokens, step.outputTokens);
     totalReasoningTokens = add(totalReasoningTokens, step.reasoningTokens);
@@ -395,8 +410,8 @@ function calculateTurnStats(
   const idleDurationMs = turnStartMs !== null && turnEndMs !== null
     ? calculateIdleDurationMs(collectStepActivity(records, turnStartIdx, lastCompletedAssistantIdx), turnStartMs, turnEndMs)
     : 0;
-  const totalLlmDurationMs = elapsedDurationMs !== null && totalToolDurationMs !== null
-    ? nonnegative(elapsedDurationMs - totalToolDurationMs - idleDurationMs)
+  const totalLlmDurationMs = elapsedDurationMs !== null && totalToolWaitDurationMs !== null
+    ? nonnegative(elapsedDurationMs - totalToolWaitDurationMs - idleDurationMs)
     : null;
 
   const totalGeneratedTokens = add(totalOutputTokens, totalReasoningTokens);
@@ -457,15 +472,15 @@ export function getCompletedTurnAverages(
   let currentComplete = true;
   const flush = () => {
     if (!current || !currentComplete || current.length === 0) return;
-    const toolDurationMs = current.reduce<number | null>((total, step) => add(total, step.toolDurationMs), 0);
+    const toolWaitDurationMs = current.reduce<number | null>((total, step) => add(total, step.toolWaitDurationMs), 0);
     const elapsedDurationMs = currentStart !== null && currentEnd !== null
       ? nonnegative(currentEnd - currentStart)
       : null;
     const idleDurationMs = currentStart !== null && currentEnd !== null
       ? calculateIdleDurationMs(currentActivity, currentStart, currentEnd)
       : 0;
-    const llmDurationMs = elapsedDurationMs !== null && toolDurationMs !== null
-      ? nonnegative(elapsedDurationMs - toolDurationMs - idleDurationMs)
+    const llmDurationMs = elapsedDurationMs !== null && toolWaitDurationMs !== null
+      ? nonnegative(elapsedDurationMs - toolWaitDurationMs - idleDurationMs)
       : null;
     turns.push({ steps: current, llmDurationMs });
   };

@@ -278,6 +278,7 @@ export function createProvider({
       }),
       referenceDetail: resources.referenceDetail,
       reviewState: resources.reviewState,
+      pendingReview: resources.pendingReview,
       referenceStatuses: resources.referenceStatuses,
       readChangeRequestHead: resources.readChangeRequestHead,
       resolveChangeRequestSource: resources.resolveChangeRequestSource,

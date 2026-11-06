@@ -7,6 +7,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { cn } from '@/lib/utils';
+import { useWorkspaceChildKey, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
 
 import { ReferenceMarkdownRewriteContext } from './gitlabUploads';
 import { REFERENCE_META_TEXT, relativeTimeOf } from './referencePickerItems';
@@ -58,9 +60,12 @@ const ThreadRest: React.FC<{
     onAttachComment?: (comment: ReferenceCommentItem) => void;
 }> = ({ comment, thread, now, actions, onAttachComment }) => {
     const { t } = useI18n();
-    const [open, setOpen] = React.useState(!thread.resolved);
-    const [replying, setReplying] = React.useState(false);
-    const [text, setText] = React.useState('');
+    const owner = useWorkspaceChildKey('thread', thread.id);
+    const [savedOpen, setOpen] = useWorkspaceViewState('thread', owner, 'open');
+    const open = savedOpen ?? !thread.resolved;
+    const [replying, setReplying] = useWorkspaceViewState('thread', owner, 'replying');
+    const input = useWorkspaceDraft(useWorkspaceChildKey('thread-input', thread.id));
+    const { value: text, setValue: setText } = input;
     const [busy, setBusy] = React.useState<'reply' | 'resolve' | null>(null);
     // Resolving folds the thread, reopening unfolds it, as the host shows it.
     const [shownResolved, setShownResolved] = React.useState(thread.resolved);
@@ -99,7 +104,7 @@ const ThreadRest: React.FC<{
         setBusy('reply');
         try {
             if (await actions.reply(thread.id, body)) {
-                setText('');
+                input.acknowledge(text);
                 setReplying(false);
             }
         } finally {

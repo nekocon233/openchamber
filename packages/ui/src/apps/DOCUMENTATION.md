@@ -22,10 +22,16 @@
 - The Settings root supplies no selected directory to the shared sync provider. It does not start global session polling, selected-directory session bootstrap or background queue delivery/cleanup, and seeing it never marks a chat as viewed. Settings pages resolve their own project through `useSettingsDirectory`; catalog updates still use the shared sync context.
 - Its runtime shortcut hook registers Settings actions only and requires no chat sync context. Chat, model and session shortcuts remain with chat roots, so a key pressed in Settings cannot create an unseen draft or change a session selection there. Escape reaches an input or menu before the tab's close handler.
 - On mobile, a request for the Settings dialog opens the fullscreen Settings surface and clears the dialog flag (`mobileSettingsNavigation.ts`). It lands on the requested page when the phone shows that page, otherwise on the page list. Entry points keep calling `setSettingsDialogOpen` and need no mobile branch.
+- Mobile Changes shares the device-local project file type filter with the desktop Changes view. Working, last-turn and comparison lists apply the same exclusions; hidden paths are excluded from detail reads and diff prefetch. Complete status remains the source for commit counts, Git mutations and walkthrough targets. Fully filtered working changes keep the commit footer and show Restore all in the list.
+- The mobile root loads source-control provider descriptors and account status on connection and runtime switches, and refreshes both after a native resume with the same connection. It mounts `useSourceControlProviderSync` once for provider changes and control-stream reconnects. The shared registry owns runtime isolation, retained snapshots and retry behavior.
 - Settings uses the existing persistence and broadcast protocol. Moving its host changes no stored format, registry key or runtime availability.
 - Notification commands and initial session tabs in VS Code use the shared session opener, so a `/btw` fork opens its parent and expands the panel mounted in the shared composer. Notification commands also reveal the chat view.
 
 ## Decisions
+
+### Why mobile loads source-control capabilities in the root
+
+PR comparisons wait for the server's provider descriptors before reading a list or diff. Loading them with account status in the root lets a fresh PWA or native client open Changes without first visiting another surface or inheriting a desktop cache.
 
 ### Why mobile proxy headers bind to an address and not every transport
 

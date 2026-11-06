@@ -69,8 +69,8 @@ and a dragged-wide one behave the same) notes, plans and memory switch to
 `KnowledgeSplit`: the list in a 380px column on the start side, the open entry
 beside it, the selected card marked. Nothing replaces the list, so there is no
 back control and no position to restore; Escape closes the entry and leaves a
-quiet hint ("Select a note…"). Nothing opens on its own: a panel that has just
-opened must not put a caret in someone's note. The search bar floats over the
+quiet hint ("Select a note…"). A panel with no saved selection opens no entry. A remembered entry is restored
+without focusing its editor or enabling a save. The search bar floats over the
 list column there, so it never covers the entry's toolbar.
 
 Opened notes and memories keep a readable line length (`max-w-3xl`) at any
@@ -223,8 +223,9 @@ the surface they were browsing.
 The editor is `PlanView`, lazily imported — it is a large view and most panel
 visits never open one. It scrolls itself, so the content column stops scrolling
 while a plan is open; two scrollbars for one document is what nesting them gives.
-Leaving the section or the project closes it, so its editor never sits over a
-list it no longer matches. Hosts that own a fullscreen plan surface (mobile)
+Leaving a section closes its entry. Each project retains its own open entry
+and reading position, so switching owners restores the destination project
+without carrying the outgoing editor over its list. Hosts that own a fullscreen plan surface (mobile)
 still pass `onOpenPlan` and keep theirs.
 
 A plan an agent shows (`knowledge.show`) opens the same way. The desktop layout
@@ -408,8 +409,11 @@ tabs there is exactly one scroller: the section body. The host
 (`RightSidebarTabs`) therefore sets `overflow-hidden`; putting a scroller there
 again would nest one inside the other.
 
-The active section persists in `useUIStore` so switching surfaces or remounting
-the panel returns to where the user was.
+The active section, search visibility/query, open entry, memory scope, todo
+expansion/edit state and reading positions persist per runtime and project in
+the workspace view store. The command palette and agent plan-open requests
+select that same state owner. A panel remount or app restart restores it without
+opening every other project or starting background reads.
 
 ## Search
 
@@ -422,8 +426,32 @@ list and the user has to guess which tab to try.
 
 Filtering is display-only: every mutation still acts on the full list, so
 reordering or clearing completed todos while a filter is active cannot drop
-hidden items. The query resets when the project changes, since a query that
-matched the old project would silently hide everything in the new one.
+hidden items. Each project restores its own query and search visibility. Hydrating that query
+does not repeat automatic section selection and override a saved manual choice;
+subsequent search edits retain the usual cross-section behavior.
+
+## Restored input
+
+New-entry fields, todo edits, notes, memory and plan editors keep their unfinished
+text locally. A submitted new entry remains a separate pending input until its
+request succeeds, alongside any next text. Failed or interrupted additions can be
+restored without replacing newer typing, and restoration never posts them again.
+A todo removed elsewhere keeps its draft in a read-only recovery field while
+other todos remain usable. A recovered buffer does not trigger autosave, blur-save or a
+close-time write until the person edits it or explicitly resumes it. A fresh
+read matching the saved baseline permits normal editing; a different value
+shows the restored draft and pauses saving until the person chooses Save
+restored draft or Use latest content. Read failures keep the recovery target.
+A confirmed deletion leaves unsaved text readable and unsaveable instead of
+recreating the deleted item. Save acknowledgement is tied to the exact text and
+owner, preserving newer input after slow responses and rollback.
+
+### Why recovery keeps a confirmed baseline
+
+An optimistic note or todo may temporarily equal its draft before the server
+rejects the write. Treating that display value as confirmation drops the input
+on rollback. Only a successful owning write acknowledges it; a restored buffer
+is compared with an authoritative load before any automatic save is allowed.
 
 ## Invariants
 

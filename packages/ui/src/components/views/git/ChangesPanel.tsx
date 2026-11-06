@@ -58,6 +58,8 @@ interface ChangesPanelProps {
   /** Reverts every changed path across all groups; rendered once for the panel. */
   onRevertAll?: (paths: string[]) => Promise<void> | void;
   onRevertDirectory?: (paths: string[]) => Promise<void> | void;
+  /** Presentation only; bulk actions still receive the full group's paths. */
+  isFileVisible?: (path: string) => boolean;
 }
 
 const CHANGE_LIST_VIRTUALIZE_THRESHOLD = 1000;
@@ -89,13 +91,14 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
   onVisiblePathsChange,
   onRevertAll,
   onRevertDirectory,
+  isFileVisible,
 }) => {
   const { t } = useI18n();
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const gitChangesViewMode = useUIStore((state) => state.gitChangesViewMode);
   const isTreeView = gitChangesViewMode === 'tree';
 
-  const visibleGroups = React.useMemo(() => groups.filter((group) => group.entries.length > 0), [groups]);
+  const visibleGroups = React.useMemo(() => groups.filter((group) => group.entries.some((file) => !isFileVisible || isFileVisible(file.path))), [groups, isFileVisible]);
 
   const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set());
   const [expandedDirectories, setExpandedDirectories] = React.useState<Set<string>>(new Set());
@@ -170,6 +173,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
         const treeRows = flattenChangesTree(trees[groupIndex], expandedForGroup);
         treeRows.forEach((row: FlattenedTreeRow) => {
           if (row.kind === 'file') {
+            if (isFileVisible && !isFileVisible(row.file.path)) return;
             result.push({
               type: 'file',
               key: `${group.id}:${row.key}`,
@@ -178,6 +182,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
               depth: row.depth,
             });
           } else {
+            if (isFileVisible && !row.directory.files.some((file) => isFileVisible(file.path))) return;
             result.push({
               type: 'directory',
               key: `${group.id}:${row.key}`,
@@ -192,6 +197,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
       }
 
       group.entries.forEach((file) => {
+        if (isFileVisible && !isFileVisible(file.path)) return;
         result.push({
           type: 'file',
           key: `${group.id}:file:${file.path}`,
@@ -209,7 +215,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
     }
 
     return result;
-  }, [collapsedGroups, expandedDirectories, isTreeView, onRevertAll, trees, visibleGroups]);
+  }, [collapsedGroups, expandedDirectories, isFileVisible, isTreeView, onRevertAll, trees, visibleGroups]);
 
   const rowCount = rows.length;
   const shouldVirtualize = rowCount >= CHANGE_LIST_VIRTUALIZE_THRESHOLD;
@@ -300,9 +306,9 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
   // both, so dedupe). One revert-all discards all working-tree changes at once.
   const allChangePaths = React.useMemo(() => {
     const seen = new Set<string>();
-    visibleGroups.forEach((group) => group.entries.forEach((entry) => seen.add(entry.path)));
+    groups.forEach((group) => group.entries.forEach((entry) => seen.add(entry.path)));
     return Array.from(seen);
-  }, [visibleGroups]);
+  }, [groups]);
   const revertAllCount = allChangePaths.length;
   const isPendingDirectoryReverting = pendingDirectoryRevert
     ? isRevertingAll || pendingDirectoryRevert.paths.some((path) => revertingPaths.has(path))

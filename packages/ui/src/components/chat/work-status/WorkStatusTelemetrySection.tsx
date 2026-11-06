@@ -118,9 +118,7 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
   }, [scope, revertMessageID, expanded, current]);
   const stats = current?.stats ?? null;
   const averages = current?.averages ?? null;
-  const summaryRate = stats
-    ? stats.responseTokensPerSecond ?? averages?.tokensPerSecond ?? null
-    : null;
+  const summaryRate = averages?.tokensPerSecond ?? null;
   const summary = summaryRate !== null ? formatThroughputRate(summaryRate) : undefined;
 
   useReportWorkStatusPresence('telemetry', Boolean(sessionId));
@@ -137,13 +135,6 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     >
       {stats ? (
         <>
-          {stats.responseTokensPerSecond !== null ? (
-            <TelemetryRow
-              label={t('chat.workStatus.telemetry.responseSpeed')}
-              description={t('chat.workStatus.telemetry.responseSpeedDescription')}
-              value={<WorkStatusValue>{formatThroughputRate(stats.responseTokensPerSecond)}</WorkStatusValue>}
-            />
-          ) : null}
           {averages && averages.tokensPerSecond !== null ? (
             <TelemetryRow
               label={t('chat.workStatus.telemetry.speed')}

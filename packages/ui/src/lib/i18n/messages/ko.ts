@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './ko.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['ko'],
   "agents.combinations.loadFailed": "조합을 불러오지 못했습니다. 설정을 다시 열고 재시도하세요.",
   "agents.combinations.saveFailed": "조합을 저장하지 못했습니다. 다시 시도하세요.",
   "agents.combinations.group": "조합",
@@ -3903,7 +3905,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': '경과 시간',
   'chat.workStatus.telemetry.elapsedDescription': '첫 사용자 메시지부터 최종 어시스턴트 응답까지의 실제 경과 시간입니다. 모델 대기, 도구 실행, 압축 및 기타 공백을 포함합니다.',
   'chat.workStatus.telemetry.llmDuration': '모델 시간',
-  'chat.workStatus.telemetry.llmDurationDescription': "응답 대기를 포함한 모든 모델 단계의 시간입니다. 도구 실행 시간과 5분이 넘는 멈춤은 뺍니다. 텍스트 생성 시간만을 뜻하지는 않습니다.",
+  'chat.workStatus.telemetry.llmDurationDescription': "응답 대기를 포함한 모델 단계의 시간입니다. 도구 결과를 기다리는 시간과 5분이 넘는 멈춤은 뺍니다. 백그라운드 도구는 모델과 동시에 실행될 수 있습니다.",
   'chat.workStatus.telemetry.toolDuration': '도구 시간',
   'chat.workStatus.telemetry.toolDurationDescription': '실패한 호출을 포함한 도구 실행 시간입니다. 동시에 실행된 도구의 시간은 중복해서 더하지 않습니다.',
   'chat.workStatus.telemetry.ttft': '평균 TTFT',
@@ -3912,7 +3914,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': '이 프롬프트에서 모델을 호출한 횟수입니다. 도구 결과를 읽고 다음 작업을 결정하려면 보통 한 단계가 더 필요합니다.',
   'chat.workStatus.telemetry.tokens': '토큰',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "불러온 완료된 턴의 생성 토큰 수를 도구 실행과 5분이 넘는 멈춤을 뺀 모델 시간으로 나눈 평균입니다. 이전 기록을 더 불러오면 다시 계산됩니다.",
+  'chat.workStatus.telemetry.speedDescription': "불러온 완료된 턴의 생성 토큰 수를 도구 대기와 5분이 넘는 멈춤을 뺀 모델 시간으로 나눈 평균입니다. 이전 기록을 더 불러오면 다시 계산됩니다.",
   'chat.workStatus.telemetry.tokensDescription': '↑ 캐시를 제외한 입력 토큰: {input}. ↓ 생성 토큰: 텍스트와 도구 호출 {output}, 추론 {reasoning}. 이 프롬프트의 모든 단계 합계입니다.',
   'chat.workStatus.telemetry.cacheHit': '평균 캐시율',
   'chat.workStatus.telemetry.cacheHitDescription': '불러온 완료된 턴에서 프롬프트 캐시로 재사용한 입력 토큰 비율입니다. 이전 기록을 더 불러오면 다시 계산됩니다.',
@@ -4333,4 +4335,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': '대화는 프로젝트 폴더에서 이어집니다. 채팅이 만든 파일은 그대로 남습니다.',
   'sessions.moveChatToProject.success': '채팅을 프로젝트로 옮겼습니다',
   'sessions.moveChatToProject.failed': '채팅을 옮길 수 없습니다',
+  "workspaceRestore.draftConflict": "내용이 변경되었습니다. 초안이 복원되었으며 자동 저장이 일시 중지되었습니다.",
+  "workspaceRestore.saveDraft": "복원된 초안 저장",
+  "workspaceRestore.useLatest": "최신 내용 사용",
+  "workspaceRestore.itemMissing": "이 항목은 더 이상 존재하지 않습니다. 저장하지 않은 텍스트는 여기에 남아 있습니다.",
+  "workspaceRestore.commentChanged": "선택한 코드가 변경되었습니다. 줄을 다시 선택하여 댓글을 이어서 작성하세요.",
+  "workspaceRestore.restoreInput": "확인되지 않은 입력 복원",
 };

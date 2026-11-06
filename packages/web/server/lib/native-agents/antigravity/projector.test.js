@@ -5,11 +5,176 @@ import { createNativeEventPublisher } from '../publisher.js';
 import { antigravityPromptFingerprint } from '../prompt-parts.js';
 
 const NATIVE_ID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
-const project = (steps, bindings = new Map()) => projectAntigravityHistory({
+const project = (steps, bindings = new Map(), relationships = {}) => projectAntigravityHistory({
+  ...relationships,
   sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo', bindings,
   entries: parseAgyTranscript(`${steps.map((step) => JSON.stringify({ status: 'DONE', created_at: '2026-10-31T02:00:00Z', ...step })).join('\n')}\n`).entries,
 });
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
+
+describe('Antigravity retained thinking and conversation messages', () => {
+  it('enriches observed live generations without changing activity or running tools', async () => {
+    const events = [];
+    const projection = createAntigravityLiveProjection({
+      sessionId: 'nag_' + NATIVE_ID, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      request: { messageID: 'live-user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Working' }, 2, async () => {});
+    await projection.applyStep({ step_index: 2, step_type: 'tool', state: 'ACTIVE', tool_info: {
+      name: 'run_command', parameters: { CommandLine: 'work' }, output: '', error: null,
+    } }, 3, async () => {});
+    const info = structuredClone(projection.records()[1].info);
+    const entries = [{ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', thinking: 'Shortened', truncated_fields: ['thinking'] },
+      { step_index: 99, type: 'PLANNER_RESPONSE', status: 'DONE', thinking: 'Unobserved generation' }];
+    projection.restoreReasoning(entries);
+    expect(projection.records()).toHaveLength(2);
+    const live = projection.records()[1];
+    expect(live.info).toEqual(info);
+    expect(live.parts.map((part) => part.type)).toEqual(['reasoning', 'text', 'tool']);
+    expect(live.parts.at(-1).state.status).toBe('running');
+    expect(live.parts[0].metadata.nativeOutputTruncated).toBe(true);
+    const id = live.parts[0].id;
+    const time = live.parts[0].time;
+    projection.restoreReasoning([{ ...entries[0], thinking: 'Complete thinking', truncated_fields: [] }]);
+    expect(live.parts[0]).toMatchObject({ id, time, text: 'Complete thinking' });
+    expect(live.parts[0].metadata).toBeUndefined();
+    const published = events.length;
+    projection.restoreReasoning(entries);
+    expect(events).toHaveLength(published);
+    expect(live.parts[0].text).toBe('Complete thinking');
+  });
+
+  it('upgrades live shortened reasoning during final history recovery', async () => {
+    const projection = createAntigravityLiveProjection({
+      sessionId: 'nag_' + NATIVE_ID, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: 'live-user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Answer' }, 2, async () => {});
+    projection.restoreReasoning([{ step_index: 1, status: 'DONE', thinking: 'Shortened', truncated_fields: ['thinking'] }]);
+    const before = projection.records()[1].parts[0];
+    projection.finish({ outcome: 'success', response: 'Answer', error: '', time: 3 });
+    projection.restoreMissingHistory(project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Work' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Full retained thinking', content: 'Answer' },
+    ], new Map([[0, { messageId: 'live-user', providerID: 'antigravity-native', modelID: 'test', agent: 'build' }]])));
+    expect(projection.records()[1].parts[0]).toMatchObject({ id: before.id, time: before.time, text: 'Full retained thinking' });
+    expect(projection.records()[1].parts[0].metadata).toBeUndefined();
+  });
+
+  const CHILD_ID = '410d8822-277d-48ee-a2eb-42b5c19688dc';
+  const message = (sender, text) => 'The following is a <SYSTEM_MESSAGE> not actually sent by the user. It is provided by the system as important information to pay attention to.\n\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender='
+    + sender + ' priority=MESSAGE_PRIORITY_HIGH content=' + text + '\n</SYSTEM_MESSAGE>';
+
+  it('keeps thinking-only steps and orders reasoning before visible text and tools', () => {
+    const records = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Investigate' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: '  Check the inputs.\n\n' },
+      { step_index: 2, type: 'PLANNER_RESPONSE', thinking: 'Inspect the file.', content: 'Reading now', tool_calls: [{ name: 'read_file', args: { Path: '/repo/a.txt' } }] },
+      { step_index: 3, type: 'GENERIC', content: 'File contents' },
+    ]);
+    expect(records[1].parts).toEqual([expect.objectContaining({
+      id: 'nag_p_' + NATIVE_ID.replaceAll('-', '') + '_1_reasoning',
+      messageID: records[1].info.id, sessionID: 'nag_' + NATIVE_ID, type: 'reasoning', text: 'Check the inputs.',
+    })]);
+    expect(records[1].parts[0].time.start).toBe(records[1].parts[0].time.end);
+    expect(records[2].parts.map((part) => part.type)).toEqual(['reasoning', 'text', 'tool']);
+  });
+
+  it.each([undefined, '', ' \n\t '])('omits empty thinking %j', (thinking) => {
+    const record = project([{ step_index: 0, type: 'PLANNER_RESPONSE', thinking, content: 'Answer' }]).at(-1);
+    expect(record.parts.map((part) => part.type)).toEqual(['text']);
+  });
+
+  it('preserves thinking truncation independently of visible text', () => {
+    const record = project([{ step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Shortened thinking', content: 'Complete answer',
+      truncated_fields: ['thinking'] }]).at(-1);
+    expect(record.parts[0]).toMatchObject({ type: 'reasoning', metadata: { nativeOutputTruncated: true } });
+    expect(record.parts[1].metadata).toBeUndefined();
+  });
+
+  it('replaces a child context placeholder with its parent task and keeps subsequent parent messages as turns', () => {
+    const records = project([
+      { step_index: 0, type: 'SYSTEM_MESSAGE', content: message(CHILD_ID, 'Inspect the tests.\n\nKeep the report factual.\n<openchamber-instructions>Hidden rules</openchamber-instructions>') },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Check fixtures.', content: 'Starting' },
+      { step_index: 2, type: 'SYSTEM_MESSAGE', content: message(CHILD_ID, 'Also inspect CI.') },
+      { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Continuing' },
+    ], new Map(), { parentSessionId: 'nag_' + CHILD_ID });
+    expect(records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(records[0].info.id).toBe('nag_u_' + NATIVE_ID.replaceAll('-', '') + '_context');
+    expect(records[0].parts[0].text).toBe('Inspect the tests.\n\nKeep the report factual.');
+    expect(records[1].info.parentID).toBe(records[0].info.id);
+    expect(records[2].parts[0].text).toBe('Also inspect CI.');
+    expect(records[3].info.parentID).toBe(records[2].info.id);
+  });
+
+  it.each([true, false])('retains a known direct child report with closing tag %s', (closed) => {
+    const report = '# Findings\n\n' + 'Evidence from the tests.\n'.repeat(2000);
+    const records = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Investigate' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', content: 'Waiting for the child' },
+      { step_index: 2, type: 'SYSTEM_MESSAGE', content: closed ? message(CHILD_ID, report) : message(CHILD_ID, report).replace(/\n<\/SYSTEM_MESSAGE>$/, '') },
+      { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Checking the report' },
+    ], new Map(), { childSessionIds: ['nag_' + CHILD_ID] });
+    expect(records).toHaveLength(4);
+    expect(records[2].info).toMatchObject({ role: 'assistant', parentID: records[0].info.id, finish: 'stop' });
+    expect(records[2].parts[0]).toMatchObject({ type: 'text', text: report.trim(),
+      metadata: { nativeSubagentMessage: true, nativeSubagentSessionID: 'nag_' + CHILD_ID } });
+    expect(records[1].info.time.created).toBeLessThan(records[2].info.time.created);
+    expect(records[2].info.time.created).toBeLessThan(records[3].info.time.created);
+  });
+
+  it('hides system notices, task notifications, unknown senders and malformed message envelopes', () => {
+    const records = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Investigate' },
+      ...['system', NATIVE_ID + '/task-2', CHILD_ID, NATIVE_ID, 'not-a-uuid'].map((sender, index) => ({
+        step_index: index + 1, type: 'SYSTEM_MESSAGE', content: message(sender, 'Must remain hidden'),
+      })),
+      { step_index: 6, type: 'SYSTEM_MESSAGE', content: 'sender=' + CHILD_ID + ' content=Not an envelope' },
+    ]);
+    expect(records).toHaveLength(1);
+  });
+
+  it('marks INVALID tool results as errors using the native error text', () => {
+    const records = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Search' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'find_by_name' }, { name: 'grep_search' }] },
+      { step_index: 2, type: 'GENERIC', status: 'INVALID', content: 'Formatted result', error: 'unknown tool: find_by_name' },
+      { step_index: 3, type: 'GENERIC', status: 'INVALID', content: '', error: 'unknown tool: grep_search' },
+    ]);
+    expect(records[1].parts.map((part) => part.state)).toEqual([
+      expect.objectContaining({ status: 'error', error: 'unknown tool: find_by_name' }),
+      expect.objectContaining({ status: 'error', error: 'unknown tool: grep_search' }),
+    ]);
+  });
+
+  it('publishes missing reasoning and child reports at completion once, in historical part order', async () => {
+    const events = [];
+    const projection = createAntigravityLiveProjection({
+      sessionId: 'nag_' + NATIVE_ID, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      request: { messageID: 'accepted', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'test' },
+        agent: 'build', parts: [{ type: 'text', text: 'Investigate' }] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Working' }, 2, async () => {});
+    projection.finish({ outcome: 'success', response: 'Working', error: '', time: 3 });
+    const history = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Investigate' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Inspect first.', content: 'Working' },
+      { step_index: 2, type: 'SYSTEM_MESSAGE', content: message(CHILD_ID, 'Report') },
+    ], new Map([[0, { messageId: 'accepted', providerID: 'antigravity-native', modelID: 'test', agent: 'build' }]]),
+    { childSessionIds: ['nag_' + CHILD_ID] });
+    projection.restoreMissingHistory(history);
+    expect(projection.records()[1].parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+    expect(projection.records()[2]).toEqual(history[2]);
+    // Completed messages can also hold plan-answer parts owned by interactions.
+    expect(events.some((event) => event.payload.type === 'message.parts.replaced')).toBe(false);
+    const published = events.length;
+    projection.restoreMissingHistory(history);
+    expect(events).toHaveLength(published);
+  });
+});
 
 it('separates agy output from thinking without double-counting generated tokens', () => {
   expect(agyTokenUsage({ input_tokens: 10415, output_tokens: 657, thinking_tokens: 616, cache_read_tokens: 8113, total_tokens: 11072 }))

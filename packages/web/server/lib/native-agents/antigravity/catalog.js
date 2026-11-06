@@ -23,7 +23,7 @@ export const parseAntigravityModels = (output) => {
     let model = models.get(id);
     if (!model) {
       model = {
-        id, name, contextWindow: null, outputLimit: null,
+        id, name, contextWindow: 1_000_000, outputLimit: null,
         efforts: [], defaultEffort: null, fast: false,
         input: { image: false, pdf: false },
         aliases: [],

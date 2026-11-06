@@ -38,6 +38,7 @@ import {
   searchGitHubReferencesAcross,
 } from './reference-search.js';
 import { fetchReviewState } from './review-draft.js';
+import { readGitHubPendingReview } from './pending-reviews.js';
 
 /**
  * GitHub's bound reads behind the shared route shell: change request status,
@@ -863,6 +864,22 @@ export function createGitHubResources({
       if (!repo) throw notInProject();
       return fetchReviewState({ octokit, owner: repo.owner, repo: repo.repo, number });
     }),
+
+    pendingReview: async ({ session, directory, remote, project, number }) => {
+      const { octokit } = accountOf(session);
+      const repo = await resolveRepoForRequest(octokit, directory, { owner: project.owner, repo: project.name }, remote);
+      if (!repo) throw responseError(409, { error: 'Pull request is outside the bound repository network' });
+      try {
+        const { state } = await readGitHubPendingReview({
+          octokit, project: { owner: repo.owner, name: repo.repo }, number, providerAccountId: session.providerUserId,
+        });
+        return state;
+      } catch (error) {
+        if (error?.status === 401) throw error;
+        const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 502;
+        throw responseError(status, { error: 'Could not load the pending review', ...(error?.code ? { code: error.code } : {}) });
+      }
+    },
 
     /**
      * What colours the PRs a picker page shows, from the sidebar's summaries.

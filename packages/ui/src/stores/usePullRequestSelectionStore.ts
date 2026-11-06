@@ -5,6 +5,11 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { normalizePath } from '@/lib/pathNormalization';
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import type { BoardLinkFailureBehavior } from './useSourceBoardStore';
+import type { NavigationReturn } from '@/sync/navigation-return';
+import { useWorkspaceViewStateStore, workspaceRepositoryIdentity, workspaceViewKey } from './useWorkspaceViewStateStore';
+
+const diffRequestAuthorities = new WeakMap<PullRequestSource, { runtimeKey: string; directory: string; identity: string | null }>();
+export const getPullRequestRequestAuthority = (source: PullRequestSource) => diffRequestAuthorities.get(source);
 
 export interface PullRequestOpenRequest {
   runtimeKey: string;
@@ -22,6 +27,7 @@ type PullRequestDiffOrigin = PullRequestReturnLocation & {
   reference: GitHubPullReference;
   context: SourceControlReadContext;
   restoreWorkspace?: () => void;
+  navigationReturn?: NavigationReturn | null;
 };
 
 type PullRequestReturnTarget = PullRequestDiffOrigin & {
@@ -61,10 +67,11 @@ interface PullRequestSelectionState {
   select: (key: string, source: PullRequestSource) => void;
   acceptHandoff: (key: string, source: PullRequestSource) => void;
   /** Each call is a new request, so asking for the same PR again shows it again. */
-  requestDiff: (directory: string, source: PullRequestSource, originOrRepository?: PullRequestDiffOrigin | string | null) => void;
+  requestDiff: (directory: string, source: PullRequestSource, originOrRepository?: PullRequestDiffOrigin | string | null, authority?: SourceControlReadContext) => void;
   clearChangesRepository: (directory: string) => void;
   /** Drops `source` once Changes has taken it, so it never comes back on another branch. */
   settleDiffRequest: (directory: string, source: PullRequestSource) => void;
+  bindDiffRequest: (directory: string, source: PullRequestSource, context: SourceControlReadContext) => void;
   requestReturn: (target: PullRequestReturnTarget) => boolean;
   settleReturnRequest: (target: PullRequestReturnTarget) => void;
 }
@@ -115,10 +122,28 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
   // A retained request is consumed once even if the walkthrough tab remounts.
   acceptHandoff: (key, source) => set((state) => state.selections.get(key)?.handoff === source
     ? state : remember(state, key, { source, handoff: source })),
-  requestDiff: (directory, source, originOrRepository) => set((state) => {
+  requestDiff: (directory, source, originOrRepository, authority) => set((state) => {
     const diffRequests = new Map(state.diffRequests);
     const request = { ...source };
+    const context = originOrRepository && typeof originOrRepository === 'object' ? originOrRepository.context : authority;
+    const identity = context ? workspaceRepositoryIdentity(context) : null;
+    diffRequestAuthorities.set(request, { runtimeKey: getRuntimeKey(), directory, identity });
     diffRequests.set(directory, request);
+    const owner = workspaceViewKey(getRuntimeKey(), directory, 'pr-navigation');
+    if (owner) useWorkspaceViewStateStore.getState().update('changes', owner, previous => ({
+      ...previous,
+      pullRequest: identity && source.sourceRepo ? { ...source, sourceRepo: source.sourceRepo } : null,
+      pullRequestIdentity: identity,
+      returnTo: originOrRepository && typeof originOrRepository === 'object' && source.sourceRepo ? {
+        workspaceDirectory: originOrRepository.workspaceDirectory,
+        sourceDirectory: originOrRepository.context.directory,
+        tab: originOrRepository.tab,
+        url: originOrRepository.reference.url,
+        repositoryIdentity: workspaceRepositoryIdentity(originOrRepository.context),
+        source: { ...source, sourceRepo: source.sourceRepo },
+        navigation: originOrRepository.navigationReturn ?? null,
+      } : null,
+    }));
     if (typeof originOrRepository === 'string' || originOrRepository === null) {
       if (!originOrRepository && !state.changesRepositories.has(directory)) return { diffRequests };
       const changesRepositories = new Map(state.changesRepositories);
@@ -147,9 +172,21 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     diffRequests.delete(directory);
     return { diffRequests };
   }),
+  // An external URL starts as intent, not a choice for an unknown account.
+  // Resolve it once; replacing the object makes a later rebind reject it.
+  bindDiffRequest: (directory, source, context) => set(state => {
+    const authority = diffRequestAuthorities.get(source);
+    if (!authority || authority.runtimeKey !== getRuntimeKey() || authority.identity !== null
+      || state.diffRequests.get(directory) !== source) return state;
+    const bound = { ...source };
+    diffRequestAuthorities.set(bound, { ...authority, identity: workspaceRepositoryIdentity(context) });
+    const diffRequests = new Map(state.diffRequests); diffRequests.set(directory, bound); return { diffRequests };
+  }),
   requestReturn: (target) => {
     const key = pullRequestNavigationKey(target.runtimeKey, target.directory);
     if (target.runtimeKey !== getRuntimeKey() || get().diffReturnTargets.get(key) !== target) return false;
+    const owner = workspaceViewKey(target.runtimeKey, target.directory, 'pr-navigation');
+    if (owner) useWorkspaceViewStateStore.getState().update('changes', owner, previous => ({ ...previous, returnTo: null }));
     set(state => {
       const diffReturnTargets = new Map(state.diffReturnTargets);
       diffReturnTargets.delete(key);

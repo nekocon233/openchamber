@@ -347,6 +347,8 @@ export interface ProviderImplementation {
     referenceDetail?(input: ReadInput & { project: ProjectSelector; number: number; host: string; kind: 'item' | 'discussion' }): Promise<Json>;
     /** Capability `reviewDrafts`: the viewer's draft and the open threads with their lines. */
     reviewState?(input: ReadInput & { project: ProjectSelector; number: number }): Promise<Json>;
+    /** Versioned pending review, including owned comments; omitted by hosts without this draft contract. */
+    pendingReview?(input: ReadInput & { project: ProjectSelector; number: number }): Promise<Json>;
     /** Statuses of listed change requests (`owner/repo#n[@host]`, comma separated); read with each host's account, so no session. */
     referenceStatuses?(input: Omit<ReadInput, 'session'> & { pulls: string }): Promise<Json>;
   };

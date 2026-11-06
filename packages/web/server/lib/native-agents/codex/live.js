@@ -135,6 +135,7 @@ export const createCodexLiveThreads = ({
   request,
   // Given to Codex as developer instructions each time a thread loads.
   readGlobalInstructions = async () => null,
+  readTurnDetails = async () => null,
   publisher,
   questions,
   onTurnFinished = () => {},
@@ -149,26 +150,26 @@ export const createCodexLiveThreads = ({
   // with the process, and a reconnect resets the reader's authority with them.
   let todoRevision = 0;
 
-  const project = (live) => {
-    if (!live.turn) return [];
+  const project = (live, turn = live.turn, detail = turn?.detail) => {
+    if (!turn) return [];
     const records = projectCodexTurns({
       sessionId: live.sessionId,
       threadId: live.threadId,
       cwd: live.directory,
       turns: [{
-        id: live.turn.id,
-        items: live.turn.order.map((id) => live.turn.items.get(id)),
-        status: live.turn.status,
-        error: live.turn.error,
-        startedAt: live.turn.startedAt,
-        completedAt: live.turn.completedAt,
+        id: turn.id,
+        items: turn.order.map((id) => turn.items.get(id)),
+        status: turn.status,
+        error: turn.error,
+        startedAt: turn.startedAt,
+        completedAt: turn.completedAt,
       }],
       threadModel: live.config?.model ?? '',
       sendRecordFor: (messageId) => live.sends.get(messageId) ?? null,
-      itemTimes: live.turn.itemTimes,
-      details: new Map([[live.turn.id, live.turn.detail]]),
+      itemTimes: turn.itemTimes,
+      details: new Map([[turn.id, detail]]),
     });
-    live.messageOfPart = new Map(records.flatMap((record) => record.parts.map((part) => [part.id, record.info.id])));
+    if (turn === live.turn) live.messageOfPart = new Map(records.flatMap((record) => record.parts.map((part) => [part.id, record.info.id])));
     return records;
   };
 
@@ -258,6 +259,7 @@ export const createCodexLiveThreads = ({
         idleWaiters: [],
         todos: null,
         pendingSkills: [],
+        telemetryRevision: 0,
       };
       threads.set(threadId, live);
       live.todos = createCodexPlanTodos({
@@ -268,14 +270,30 @@ export const createCodexLiveThreads = ({
     return live;
   };
 
-  const settleTurn = (live, turn) => {
+  const settleTurn = (live, turn, withTelemetry = false) => {
     for (const entry of live.turn.detail.extraItems) {
       if (entry.item.type === 'openchamberQuestion' && entry.item.resolution === 'pending') entry.item.resolution = 'interrupted';
     }
     live.turn.status = turn.status;
     live.turn.error = turn.error ?? null;
     live.turn.completedAt = turn.completedAt ?? Math.floor(now() / 1000);
-    publishTurn(live);
+    const completedTurn = live.turn;
+    const completedRecords = project(live);
+    publisher.records(live.directory, live.sessionId, completedRecords);
+    const revision = live.telemetryRevision;
+    if (withTelemetry && completedRecords.some((record) => record.info.role === 'assistant')) void readTurnDetails(live.sessionId, completedTurn.id).then((detail) => {
+      if (!detail || threads.get(live.threadId) !== live || live.telemetryRevision !== revision) return;
+      const completedIds = new Set(completedRecords.map((record) => record.info.id));
+      for (const record of project(live, completedTurn, detail)) {
+        if (record.info.role !== 'assistant' || !completedIds.has(record.info.id)) continue;
+        const telemetry = record.info.metadata.openchamber.telemetry;
+        if (telemetry.toolWaitDurationMs === null) continue;
+        // A metadata patch cannot overwrite a history refresh's usage/model.
+        publisher.emit(live.directory, 'message.patched', {
+          sessionID: live.sessionId, messageID: record.info.id, patch: { telemetry },
+        });
+      }
+    }).catch(() => undefined); // An unreadable rollout leaves timing unknown.
     const error = turn.status === 'failed'
       ? unknownError(turn.error?.message ?? 'Codex turn failed')
       : turn.status === 'interrupted' ? stoppedError() : null;
@@ -461,7 +479,7 @@ export const createCodexLiveThreads = ({
           break;
         }
       }
-      settleTurn(live, parsed.data.turn);
+      settleTurn(live, parsed.data.turn, true);
       if (proposal) onPlanReady(proposal);
       onTurnFinished(live.sessionId, live.directory, { id: parsed.data.turn.id, status: parsed.data.turn.status, summary });
     },
@@ -708,6 +726,8 @@ export const createCodexLiveThreads = ({
      * rewind.
      */
     async revertThread(sessionId, beforeTurnId) {
+      const live = threads.get(threadFor(sessionId));
+      if (live) live.telemetryRevision += 1;
       try {
         await request('thread/revert', { threadId: threadFor(sessionId), beforeTurnId });
       } catch (error) {

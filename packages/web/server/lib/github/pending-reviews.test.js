@@ -128,6 +128,14 @@ describe('GitHub pending reviews', () => {
     await expect(f.read()).rejects.toThrow('Network unavailable');
   });
 
+  it('verifies the viewer against the exact GitHub instance', async () => {
+    const f = fixture();
+    f.octokit.openChamberHost = 'github.example.com';
+    await expect(f.read()).rejects.toMatchObject({ status: 401 });
+    f.input.providerAccountId = 'github.example.com#7';
+    expect((await f.read()).state.review.id).toBe('REVIEW1');
+  });
+
   it('changes the review version when a comment changes', async () => {
     const f = fixture();
     const first = (await f.read()).state.review.version;

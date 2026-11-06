@@ -14,6 +14,9 @@ import type { ReviewChangeRequestInput, ReviewVerdict } from '@/lib/source-contr
 import { newMutationKey } from './mutationKey';
 import { usePendingReview } from './usePendingReview';
 import { PendingReviewSection } from './PendingReviewSection';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { workspaceReplyDraftKey } from '@/stores/useWorkspaceDraftStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 type Busy = 'comment' | 'thread' | ReviewVerdict | null;
 
@@ -35,7 +38,8 @@ export const SourceBoardReply: React.FC<{
 }> = ({ reference, context, onRefresh, active = true }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
-    const [text, setText] = React.useState('');
+    const replyInput = useWorkspaceDraft(workspaceReplyDraftKey(getRuntimeKey(), context, reference));
+    const { value: text, setValue: setText } = replyInput;
     const [busy, setBusy] = React.useState<Busy>(null);
 
     const label = referenceNumberLabel(reference);
@@ -55,7 +59,7 @@ export const SourceBoardReply: React.FC<{
             const payload = { ...context, idempotencyKey: newMutationKey(), target: { project, number: reference.number }, body };
             if (reference.kind === 'pull') await sourceControl.changeRequestComment(payload);
             else await sourceControl.issueComment(payload);
-            setText('');
+            replyInput.acknowledge(text);
             toast.success(t('sourceBoard.reply.toast.commented', { reference: label }));
             onRefresh();
         } catch (error) {
@@ -70,7 +74,7 @@ export const SourceBoardReply: React.FC<{
         setBusy('thread');
         try {
             await sourceControl.changeRequestStartThread({ ...context, idempotencyKey: newMutationKey(), target: { project, number: reference.number }, body });
-            setText('');
+            replyInput.acknowledge(text);
             toast.success(t('sourceBoard.reply.toast.threadStarted', { reference: label }));
             onRefresh();
         } catch (error) {
@@ -99,7 +103,7 @@ export const SourceBoardReply: React.FC<{
                 // stands, the text stays here to post again.
                 toast.warning(t(doneKey, { reference: label }), { description: t('sourceBoard.reply.toast.textNotPosted') });
             } else {
-                setText('');
+                replyInput.acknowledge(text);
                 toast.success(t(doneKey, { reference: label }));
             }
             onRefresh();

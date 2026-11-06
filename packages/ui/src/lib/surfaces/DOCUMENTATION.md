@@ -314,7 +314,7 @@ memory's tab goes with its tool.
 ## Panel header
 
 The panel has one header row. A single-instance surface with its own toolbar
-(terminal, diff, walkthrough, git's branch and sync controls, the notes
+(terminal, walkthrough, git's branch and sync controls, the notes
 search, the context surface's session title) renders that toolbar through
 `ContextPanelHeaderToolbar` (`components/layout/contextPanelHeaderSlot.tsx`)
 instead of stacking a second row under the header: the toolbar replaces the
@@ -331,6 +331,13 @@ The directory in editor layout uses that same slot for its Files title, compact
 search field and existing file actions. The search grows between the label and
 actions without adding a row above the tree. The classic
 multi-instance file strip keeps its own header and inline directory toolbar.
+
+Changes uses `ContextPanelHeaderToolbar` with `preserveTitle` for its compact
+return and file type actions. This variant retains the mode label and hugs its
+controls instead of replacing the title with a full-width toolbar. Comparison
+controls stay above the diff content. In editor layout the file list receives
+its zone's header slot explicitly. Hidden or inactive lists release
+their titlebar actions, and a host without a slot keeps its inline toolbar.
 
 No new header buttons: the rail, `openContextSurface`, the composer +
 menu (`contributes.attach`), and New Worktree's guest icons are the entry

@@ -39,6 +39,7 @@ const FROZEN = {
   githubReviewApprove: '28deb8fd6560413fe85aaf7bc82fb69542b6190ac2d60c09721c68d277fa5a13',
   githubReviewRequestChanges: 'f0ebd3fb413a7e9c1d2c7baab40668eb17f3f5ac3ec8cfeee68fb6505debd762',
   githubReviewApproveNoBody: '10545115bfda6624c3262370ed9f67535b2cc0166d35141fc155a89a57dcc451',
+  githubPendingReviewApprove: '6ee707d38df63698c16f71154a7122f295de75912c464991baa9f45748b2d2bb',
   gitlabReviewApprove: '34d3eada3fe0e1f6a84ef54b1c8c8e96db68d9903d6750ab544a469bbf52f370',
   gitlabReviewRequestChanges: '39a2cf4b2a8791e18a3931c3f65eca808698ff98772460cb9ed2b5d2920a34b0',
   giteaReviewApprove: 'a1581e82d4df9ed62961f829fd3e870b87f39b6ef3676070c25630c91c9044ba',
@@ -220,6 +221,13 @@ describe('persisted mutation digests', () => {
       .toEqual(review(FROZEN.githubReviewRequestChanges));
     expect(reviewOf(github, { verdict: 'approve' }, ghReviewTarget, ghActor, ghCredential))
       .toEqual(review(FROZEN.githubReviewApproveNoBody));
+    const pending = github({
+      route: '/pr/review/pending',
+      input: { action: { kind: 'submit', reviewId: 'REVIEW1', version: 'version-one', verdict: 'approve' } },
+      context: { primaryRemote: 'origin', target: ghReviewTarget }, actor: ghActor, credential: ghCredential,
+    });
+    expect({ kind: pending.kind, digest: pending.digest(ghReviewTarget) })
+      .toEqual({ kind: 'change-request-pending-review', digest: FROZEN.githubPendingReviewApprove });
 
     const reviewTarget = { ...glTarget, number: 5, headSha: 'a'.repeat(40) };
     delete reviewTarget.head;

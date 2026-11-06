@@ -134,6 +134,52 @@ const failWith = (message: string) => async (): Promise<never> => {
   throw new Error(message);
 };
 
+describe('draft write ownership', () => {
+  test('queued note saves cannot use a new runtime or replace its cache', async () => {
+    handlers.fetch = async () => ({ ...emptyPayload(), notes: [note({ body: 'Original' })] });
+    await store().load(PROJECT);
+    const gate = deferred<{ note: NotePayload; context: ContextPayload }>();
+    handlers.createNote = () => gate.promise;
+    const creating = store().createNote(PROJECT, { body: 'Created in original runtime' });
+    await Promise.resolve();
+    const queued = store().saveNoteBody(PROJECT, 'n1', 'Queued text');
+    store().reset();
+    handlers.fetch = async () => ({ ...emptyPayload(), notes: [note({ body: 'New runtime' })] });
+    await store().load(PROJECT);
+    gate.resolve({ note: note({ body: 'Created in original runtime' }), context: { ...emptyPayload(), notes: [note({ body: 'Old result' })] } });
+    expect(await creating).not.toBeNull();
+    expect(await queued).toBe(false);
+    expect(calls.updateNote).toBe(0);
+    expect(entry().notes[0].body).toBe('New runtime');
+  });
+
+  test('queued plan saves cannot use a new runtime or replace its cache', async () => {
+    handlers.fetch = async () => ({ ...emptyPayload(), plans: [planLink()] });
+    await store().load(PROJECT);
+    const gate = deferred<{ plan: ContextPayload['plans'][number]; context: ContextPayload }>();
+    handlers.create = () => gate.promise;
+    const creating = store().createPlan(PROJECT, { title: 'Original', body: '' });
+    await Promise.resolve();
+    const queued = store().savePlan(PROJECT, 'p1', '# Queued text');
+    store().reset();
+    handlers.fetch = async () => ({ ...emptyPayload(), plans: [planLink({ title: 'New runtime' })] });
+    await store().load(PROJECT);
+    gate.resolve({ plan: planLink(), context: { ...emptyPayload(), plans: [planLink({ title: 'Old result' })] } });
+    expect(await creating).not.toBeNull();
+    expect(await queued).toBe(false);
+    expect(calls.update).toBe(0);
+    expect(entry().plans[0].title).toBe('New runtime');
+  });
+
+  test('a stale editor cannot start optimistic or remote writes on the active host', async () => {
+    expect(await store().createNote(PROJECT, { body: 'Old input' }, 'another-runtime')).toBeNull();
+    expect(await store().saveNoteBody(PROJECT, 'n1', 'Old input', 'another-runtime')).toBe(false);
+    expect(await store().createPlan(PROJECT, { title: 'Old input', body: '' }, 'another-runtime')).toBeNull();
+    expect(await store().savePlan(PROJECT, 'p1', '# Old input', 'another-runtime')).toBe(false);
+    expect(calls.createNote + calls.updateNote + calls.create + calls.update).toBe(0);
+  });
+});
+
 beforeEach(() => {
   store().reset();
   calls.fetch = 0;

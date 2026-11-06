@@ -13,6 +13,18 @@ const question = {
 };
 
 describe('native records in the shared v2 domain', () => {
+  test('keeps recovered reasoning in authoritative part order and rejects mixed message snapshots', () => {
+    const messageID = 'ncl_a_thinking';
+    const parts = [
+      { id: 'reasoning', sessionID, messageID, type: 'reasoning', text: 'Recovered thinking', time: { start: 1, end: 1 } },
+      { id: 'text', sessionID, messageID, type: 'text', text: 'Working', time: { start: 2, end: 3 } },
+    ];
+    const event = { type: 'message.parts.replaced', properties: { sessionID, messageID, parts } };
+    expect(translateNativeEvent(event)).toEqual(event);
+    expect(translateNativeEvent({ ...event, properties: { ...event.properties, messageID: 'another-message' } })).toBeNull();
+    expect(translateNativeEvent({ ...event, properties: { ...event.properties, parts: [{ ...parts[0], sessionID: 'ncl_other' }] } })).toBeNull();
+  });
+
   test('accepts native model catalog invalidation without admitting OpenCode catalog kinds', () => {
     const event = { type: 'catalog.updated', properties: { kind: 'native-model' } };
     expect(translateNativeEvent(event)).toEqual(event);

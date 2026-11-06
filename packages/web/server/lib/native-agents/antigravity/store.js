@@ -310,9 +310,14 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       const { bindings, sends } = await resolveAntigravityBindings({
         sessionId, entries: transcript.entries, registry,
       });
+      // A damaged child index must not discard the parent's readable history.
+      let children;
+      try { children = childrenOf(nativeId, session); }
+      catch { children = { childSessions: [], complete: false }; }
       const records = projectAntigravityHistory({
         sessionId, nativeId, directory: session.directory,
-        entries: transcript.entries, bindings, now,
+        entries: transcript.entries, bindings, parentSessionId: session.parentID,
+        childSessionIds: children.childSessions.map((child) => child.id), now,
       });
       restoreAntigravityMeasurements(records, sends);
       const interactionHistory = !session.parentID && session.time.archived == null ? agyInteractionHistory({
@@ -324,10 +329,6 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       for (const interaction of interactionHistory.proposals) {
         owners.get(interaction.messageID)?.parts.push(interaction.part);
       }
-      // A damaged child index must not discard the parent's readable history.
-      let children;
-      try { children = childrenOf(nativeId, session); }
-      catch { children = { childSessions: [], complete: false }; }
       return {
         records,
         interactionProposal: interactionSourceComplete ? interactionHistory.latest?.proposal ?? null : null,
@@ -335,6 +336,12 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
         childSessions: children.childSessions,
         ...(transcript.malformed > 0 || transcript.unknownTypes.length > 0 || !children.complete ? { metadataComplete: false } : {}),
       };
+    },
+
+    completedReasoning(nativeId) {
+      if (!hasTranscript(nativeId)) return [];
+      return readTranscript(nativeId).entries.filter((entry) => entry.type === 'PLANNER_RESPONSE'
+        && entry.status === 'DONE' && (entry.thinking ?? '').trim() !== '');
     },
 
     /** Final identity and text; only SUCCESS may retain a shortened content step. */

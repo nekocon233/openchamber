@@ -1,3 +1,4 @@
+import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './uk.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -53,6 +54,7 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  ...diffFileFilterI18n['uk'],
   "agents.combinations.loadFailed": "Не вдалося завантажити комбінації. Відкрийте налаштування знову та повторіть спробу.",
   "agents.combinations.saveFailed": "Не вдалося зберегти комбінації. Повторіть спробу.",
   "agents.combinations.group": "Комбінації",
@@ -3895,7 +3897,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.elapsed': 'Час, що минув',
   'chat.workStatus.telemetry.elapsedDescription': 'Фактичний час від першого повідомлення користувача до фінальної відповіді асистента. Включає очікування моделі, виконання інструментів, компакцію та інші проміжки.',
   'chat.workStatus.telemetry.llmDuration': 'Час моделі',
-  'chat.workStatus.telemetry.llmDurationDescription': "Час усіх кроків моделі, включно з очікуванням відповідей. Час виконання інструментів і паузи, довші за 5 хвилин, віднято. Це не лише час генерації тексту.",
+  'chat.workStatus.telemetry.llmDurationDescription': "Час кроків моделі, включно з очікуванням відповідей. Очікування інструментів і паузи довші за 5 хвилин віднято. Фонові інструменти можуть працювати одночасно з моделлю.",
   'chat.workStatus.telemetry.toolDuration': 'Час інструментів',
   'chat.workStatus.telemetry.toolDurationDescription': 'Час виконання інструментів, включно з невдалими викликами. Паралельне виконання рахується один раз, а не додається кілька разів.',
   'chat.workStatus.telemetry.ttft': 'Середній TTFT',
@@ -3904,7 +3906,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.telemetry.stepsDescription': 'Скільки разів зверталися до моделі для цього промпту. Прочитати результат інструмента й вирішити, що робити далі, зазвичай означає ще один крок.',
   'chat.workStatus.telemetry.tokens': 'Токени',
   'chat.workStatus.telemetry.tokens.inOut': '{input} ↑ · {output} ↓',
-  'chat.workStatus.telemetry.speedDescription': "Згенеровані токени в завантажених завершених ходах, поділені на час моделі без виконання інструментів і без пауз, довших за 5 хвилин. Після завантаження давнішої історії значення перераховується.",
+  'chat.workStatus.telemetry.speedDescription': "Згенеровані токени в завантажених завершених ходах, поділені на час моделі без очікування інструментів і без пауз, довших за 5 хвилин. Після завантаження давнішої історії значення перераховується.",
   'chat.workStatus.telemetry.tokensDescription': '↑ Вхідні токени без кешованих: {input}. ↓ Згенеровані: {output} для тексту й викликів інструментів та {reasoning} для міркувань. Суми охоплюють усі кроки цього промпту.',
   'chat.workStatus.telemetry.cacheHit': 'Сер. кеш',
   'chat.workStatus.telemetry.cacheHitDescription': 'Частка вхідних токенів, повторно використаних із кешу промпту в завантажених завершених ходах. Після завантаження давнішої історії значення перераховується.',
@@ -4334,4 +4336,10 @@ export const dict: Record<I18nKey, string> = {
   'sessions.moveChatToProject.description': 'Розмова продовжиться в теці проєкту. Файли, які створив чат, лишаться там, де є.',
   'sessions.moveChatToProject.success': 'Чат перенесено в проєкт',
   'sessions.moveChatToProject.failed': 'Не вдалося перенести чат',
+  "workspaceRestore.draftConflict": "Цей запис змінився. Вашу чернетку відновлено, автоматичне збереження призупинено.",
+  "workspaceRestore.saveDraft": "Зберегти відновлену чернетку",
+  "workspaceRestore.useLatest": "Використати останній вміст",
+  "workspaceRestore.itemMissing": "Цього запису більше немає. Незбережений текст залишається доступним тут.",
+  "workspaceRestore.commentChanged": "Вибраний код змінився. Виберіть рядки знову, щоб продовжити коментар.",
+  "workspaceRestore.restoreInput": "Відновити непідтверджений ввід",
 };

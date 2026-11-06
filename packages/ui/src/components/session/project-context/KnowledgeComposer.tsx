@@ -7,6 +7,13 @@ import { isIMECompositionEvent } from '@/lib/ime';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/useUIStore';
 import { KNOWLEDGE_ICON_BUTTON_CLASS } from './knowledgeRowStyle';
+import { useWorkspaceChildKey } from '@/hooks/useWorkspaceViewState';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
+import { useWorkspaceDraftStore, type PendingWorkspaceInput } from '@/stores/useWorkspaceDraftStore';
+import { useI18n } from '@/lib/i18n';
+import { Button } from '@/components/ui/button';
+
+const NO_PENDING_INPUTS: PendingWorkspaceInput[] = [];
 
 /** The counter appears only once the text gets close to the limit. */
 const COUNTER_THRESHOLD = 0.8;
@@ -32,12 +39,23 @@ export const KnowledgeComposer: React.FC<{
   onSubmit: (text: string) => Promise<boolean> | boolean;
   /** Extra controls before the add button, such as an import action. */
   extraActions?: React.ReactNode;
-}> = ({ placeholder, addLabel, maxLength, multiline = false, dictation = true, disabled = false, onSubmit, extraActions }) => {
-  const [text, setText] = React.useState('');
+  draftId: string;
+}> = ({ placeholder, addLabel, maxLength, multiline = false, dictation = true, disabled = false, onSubmit, extraActions, draftId }) => {
+  const { t } = useI18n();
+  const owner = useWorkspaceChildKey('new', draftId);
+  const input = useWorkspaceDraft(owner);
+  const { value: text, setValue: setText } = input;
   const fieldRef = React.useRef<HTMLTextAreaElement>(null);
   const emojiPicker = useEmojiPicker(fieldRef);
   const isMobile = useUIStore((state) => state.isMobile);
   const [submitting, setSubmitting] = React.useState(false);
+  const submittingRef = React.useRef(false);
+  const [submissionId, setSubmissionId] = React.useState<string | null>(null);
+  const pending = useWorkspaceDraftStore(state => owner ? state.pendingInputs[owner] ?? NO_PENDING_INPUTS : NO_PENDING_INPUTS);
+  const recoverable = pending.filter(item => item.id !== submissionId);
+  React.useEffect(() => {
+    if (owner && !submittingRef.current && !text && recoverable[0]) useWorkspaceDraftStore.getState().restoreInput(owner, recoverable[0].id);
+  }, [owner, recoverable, text]);
 
   const normalize = React.useCallback((value: string) => (
     (multiline ? value : value.replace(/\r?\n/g, ' ')).slice(0, maxLength)
@@ -45,19 +63,30 @@ export const KnowledgeComposer: React.FC<{
 
   const submit = React.useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || submittingRef.current) return;
     // Cleared at once so the next entry can be typed while this one saves; a
     // failed add puts the text back unless something new was typed meanwhile.
-    setText('');
+    submittingRef.current = true;
+    const ticket = owner ? useWorkspaceDraftStore.getState().stageInput(owner, text) : null;
+    setSubmissionId(ticket);
+    if (!owner) setText('');
     setSubmitting(true);
     try {
-      if (!await onSubmit(trimmed)) {
-        setText((current) => (current.trim() ? current : trimmed));
-      }
+      const saved = await onSubmit(trimmed);
+      if (owner && ticket) {
+        const store = useWorkspaceDraftStore.getState();
+        if (saved) store.confirmInput(owner, ticket);
+        else if (!store.drafts[owner]?.value) store.restoreInput(owner, ticket);
+      } else if (!saved) setText(current => current.trim() ? current : text);
+    } catch {
+      if (owner && ticket && !useWorkspaceDraftStore.getState().drafts[owner]?.value) useWorkspaceDraftStore.getState().restoreInput(owner, ticket);
+      else if (!owner) setText(current => current.trim() ? current : text);
     } finally {
+      submittingRef.current = false;
+      setSubmissionId(null);
       setSubmitting(false);
     }
-  }, [onSubmit, submitting, text]);
+  }, [onSubmit, owner, setText, text]);
 
   const showCounter = text.length >= maxLength * COUNTER_THRESHOLD;
   // The field itself stays enabled while an entry saves: disabling it would
@@ -65,6 +94,7 @@ export const KnowledgeComposer: React.FC<{
   const blocked = disabled || submitting;
 
   return (
+    <>
     <div
       className={cn(
         'oc-surface-elevated flex items-end gap-1 rounded-lg bg-[var(--surface-elevated)] py-1 pe-1 ps-3',
@@ -124,5 +154,13 @@ export const KnowledgeComposer: React.FC<{
         <Icon name="add" className="h-4 w-4" />
       </button>
     </div>
+    {owner && recoverable.map(item => (
+      <Button key={item.id} variant="ghost" size="sm" className="max-w-full justify-start text-start"
+        title={t('workspaceRestore.restoreInput')} aria-label={t('workspaceRestore.restoreInput')}
+        onClick={() => useWorkspaceDraftStore.getState().restoreInput(owner, item.id)}>
+        <span className="truncate">{item.value}</span>
+      </Button>
+    ))}
+    </>
   );
 };

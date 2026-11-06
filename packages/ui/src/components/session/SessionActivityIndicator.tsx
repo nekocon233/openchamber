@@ -3,6 +3,7 @@ import { Icon } from '@/components/icon/Icon';
 import type { IconName } from '@/components/icon/icons';
 import { useI18n } from '@/lib/i18n';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { ClockPausedContext } from '@/hooks/clockPausedContext';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { cn } from '@/lib/utils';
 
@@ -29,8 +30,8 @@ const PRESENTATION = {
  * own static icon, so a row says why it is busy without motion; motion lives
  * in the 1 Hz elapsed counter (see faa9c243). The opt-in
  * `animatedActivityIndicators` preference replaces every running kind with a
- * `loader-4` spinner stepped to 20 fps (`.activity-spinner`, VS Code's
- * steps() throttling); the unread icon stays.
+ * original circular loader at 20 frames per second; the unread icon stays.
+ * Hidden surfaces pause it through the same context as the shared clock.
  */
 export const SessionActivityIndicator: React.FC<{
   state: SessionActivityIndicatorState;
@@ -45,6 +46,7 @@ export const SessionActivityIndicator: React.FC<{
 }> = ({ state, className, runningClassName, tooltip = false }) => {
   const { t } = useI18n();
   const animated = useSessionDisplayStore((s) => s.animatedActivityIndicators);
+  const paused = React.useContext(ClockPausedContext);
   const presentation = PRESENTATION[state];
   const label = t(presentation.labelKey);
   const running = state !== 'unread';
@@ -57,7 +59,8 @@ export const SessionActivityIndicator: React.FC<{
       data-session-activity-indicator={state}
     >
       {running && animated ? (
-        <Icon name="loader-4" className="activity-spinner h-3 w-3 text-status-info" />
+        <Icon name="loader-4" data-spinner="" className="activity-spinner h-3 w-3 text-status-info"
+          style={{ animationPlayState: paused ? 'paused' : 'running' }} />
       ) : (
         <Icon
           name={presentation.icon}

@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { devtools, persist } from 'zustand/middleware';
 import type { SidebarSection } from '@/constants/sidebar';
 import { createDeferredSafeJSONStorage } from './utils/safeStorage';
+import { useWorkspaceViewStateStore, workspaceViewKey } from './useWorkspaceViewStateStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey } from '@/lib/typography';
 import type { ShortcutCombo } from '@/lib/shortcuts';
 import type { DraftStarterRef } from '@/lib/draftStarters';
@@ -52,6 +54,15 @@ import {
 import { validEditorSplitRatio } from '@/lib/workspace/editorSplit';
 import { getEditorDiffTabState, type EditorDiffTabState } from '@/lib/workspace/editorTabs';
 import type { WorkspaceLayout } from '@/lib/workspace/sidebarGeometry';
+
+const parseDiffFileLayouts = (value: unknown): Record<string, 'inline' | 'side-by-side'> => {
+  const result: Record<string, 'inline' | 'side-by-side'> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  for (const [path, layout] of Object.entries(value)) {
+    if (layout === 'inline' || layout === 'side-by-side') result[path] = layout;
+  }
+  return result;
+};
 
 const persistedWorkspaceLayoutSchema = z.object({
   workspaceLayout: z.enum(['classic', 'editor']).catch('classic').optional(),
@@ -1231,8 +1242,6 @@ interface UIStore {
    * new/changed badges; there is no stored review state.
    */
   agentMemoryViewedAt: Record<string, number>;
-  /** Active tab of the project context panel (notes/todos/plans). */
-  projectContextTab: string;
   /**
    * A saved plan an agent asked to show, waiting for the Project knowledge
    * panel of its project to open it in place. Not persisted.
@@ -1524,7 +1533,6 @@ interface UIStore {
   setRoutingFeatureAvailable: (value: boolean) => void;
   setOverviewFeatureAvailable: (value: boolean) => void;
   markAgentMemoryViewed: (key: string, viewedAt: number) => void;
-  setProjectContextTab: (value: string) => void;
   openProjectKnowledgePlan: (directory: string, projectContextId: string, planId: string) => void;
   clearProjectKnowledgePlanRequest: () => void;
   setInputSpellcheckEnabled: (value: boolean) => void;
@@ -1782,7 +1790,6 @@ export const useUIStore = create<UIStore>()(
         routingFeatureAvailable: false,
         overviewFeatureAvailable: false,
         agentMemoryViewedAt: {},
-        projectContextTab: 'notes',
         projectKnowledgePlanRequest: null,
         inputSpellcheckEnabled: false,
         largeTextPasteBehavior: DEFAULT_LARGE_TEXT_PASTE_BEHAVIOR,
@@ -1961,6 +1968,12 @@ export const useUIStore = create<UIStore>()(
             && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
           const residentDiff = nextTab.mode === 'diff'
             && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
+
+          const diffOwner = workspaceViewKey(getRuntimeKey(), normalizedDirectory);
+          if (diffOwner && nextTab.mode === 'diff' && nextTab.targetPath?.trim() && options?.reveal !== false) {
+            useWorkspaceViewStateStore.getState().requestDiffNavigation(diffOwner, nextTab.targetPath.trim(),
+              normalizePendingDiffScope(nextTab.diffScope) ?? (nextTab.stagedDiff ? 'staged' : 'working'));
+          }
 
           set((state) => {
             const prev = state.contextPanelByDirectory[normalizedDirectory];
@@ -3596,11 +3609,8 @@ export const useUIStore = create<UIStore>()(
               : state.agentMemoryViewedAt,
           }));
         },
-        setProjectContextTab: (value) => {
-          set({ projectContextTab: value });
-        },
         openProjectKnowledgePlan: (directory, projectContextId, planId) => {
-          set({ projectContextTab: 'plans', projectKnowledgePlanRequest: { projectContextId, planId } });
+          set({ projectKnowledgePlanRequest: { projectContextId, planId } });
           get().openContextPanelTab(directory, { mode: 'notes' });
         },
         clearProjectKnowledgePlanRequest: () => {
@@ -3744,6 +3754,7 @@ export const useUIStore = create<UIStore>()(
           const placement = zonePlacementSchema.parse(merged.contextSurfaceZones);
           return {
             ...merged,
+            diffFileLayout: parseDiffFileLayouts(merged.diffFileLayout),
             favoriteAgentCombinations: favoriteAgentCombinationIdsSchema.safeParse(merged.favoriteAgentCombinations).data ?? currentState.favoriteAgentCombinations,
             favoritePickerOrder: z.array(z.string()).safeParse(merged.favoritePickerOrder).data ?? currentState.favoritePickerOrder,
             agentCombinationOrder: favoriteAgentCombinationIdsSchema.safeParse(merged.agentCombinationOrder).data ?? currentState.agentCombinationOrder,
@@ -4128,6 +4139,7 @@ export const useUIStore = create<UIStore>()(
           recentEfforts: state.recentEfforts,
           lastUsedEfforts: state.lastUsedEfforts,
           diffLayoutPreference: state.diffLayoutPreference,
+          diffFileLayout: state.diffFileLayout,
           diffWrapLines: state.diffWrapLines,
           diffHideWhitespace: state.diffHideWhitespace,
           diffFileListMode: state.diffFileListMode,

@@ -7,6 +7,7 @@ import { createQuestionRegistry } from '../questions.js';
 import { createCodexLiveThreads } from './live.js';
 import { projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
+import { createCodexTurnDetails } from './history-details.js';
 
 const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -19,7 +20,7 @@ const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' }
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
-const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, onPlanReady, onSessionClosed, instructions = null, resumeResponse = {}, now, toolConfiguration } = {}) => {
+const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, onPlanReady, onSessionClosed, instructions = null, resumeResponse = {}, now, toolConfiguration, readTurnDetails } = {}) => {
   const events = [];
   const requests = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -37,7 +38,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, o
     }
     return { turn: { id: TURN_ID, status: 'inProgress', items: [] } };
   };
-  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, onPlanReady, onSessionClosed, readGlobalInstructions: async () => instructions, now, toolConfiguration });
+  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, onPlanReady, onSessionClosed, readGlobalInstructions: async () => instructions, now, toolConfiguration, readTurnDetails });
   return { live, events, requests, questions };
 };
 
@@ -60,6 +61,83 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
   config: CONFIG,
   send: { modelID: 'gpt-5.5', variant: 'low', agent: 'build' },
   ...overrides,
+});
+
+describe('Codex completed tool-wait telemetry', () => {
+  const finishWithReply = (live) => {
+    live.handleNotification('item/completed', { threadId: THREAD_ID, turnId: TURN_ID, startedAtMs: 1200, completedAtMs: 1500,
+      item: { type: 'agentMessage', id: 'answer', text: 'Done' } });
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', completedAt: 20 } });
+  };
+  const completedDetails = () => {
+    const detail = createCodexTurnDetails();
+    Object.assign(detail.toolWaits, { start: 1000, end: 20000 });
+    detail.toolWaits.boundaries.set(TURN_ID, 1000);
+    detail.toolWaits.calls.set('call', { start: 2000, end: 2100 });
+    return detail;
+  };
+
+  it('publishes measured metadata through the native event boundary without replaying parts', async () => {
+    const reads = [];
+    const { live, events } = createHarness({ replay: false, now: () => 1000, readTurnDetails: async (...args) => {
+      reads.push(args);
+      return completedDetails();
+    } });
+    await sendPrompt(live);
+    finishWithReply(live);
+    const before = events.length;
+    await Promise.resolve();
+    expect(reads).toEqual([[SESSION_ID, TURN_ID]]);
+    const updates = events.slice(before);
+    expect(updates).toHaveLength(1);
+    const event = translateNativeEvent(updates[0].payload);
+    expect(event).toMatchObject({ type: 'message.patched', properties: { sessionID: SESSION_ID,
+      patch: { telemetry: { toolWaitDurationMs: 100 } } } });
+    expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+  });
+
+  it('enriches only the finished message while a new turn runs', async () => {
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const { live, events } = createHarness({ replay: false, now: () => 1000, readTurnDetails: () => pending });
+    await sendPrompt(live);
+    finishWithReply(live);
+    live.handleNotification('turn/started', { threadId: THREAD_ID, turn: { id: 'next', status: 'inProgress', startedAt: 21 } });
+    live.handleNotification('item/started', { threadId: THREAD_ID, turnId: 'next', startedAtMs: 22000,
+      item: { type: 'agentMessage', id: 'new-answer', text: 'Still working' } });
+    const running = live.liveRecords(SESSION_ID);
+    const before = events.length;
+    resolve(completedDetails());
+    await Promise.resolve();
+    expect(events.slice(before).map(event => event.payload.type)).toEqual(['message.patched']);
+    expect(live.liveRecords(SESSION_ID)).toEqual(running);
+    expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
+  });
+
+  it.each(['revert', 'forget'])('discards a delayed reading after %s', async (action) => {
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const { live, events } = createHarness({ replay: false, now: () => 1000, readTurnDetails: () => pending });
+    await sendPrompt(live);
+    finishWithReply(live);
+    if (action === 'revert') await live.revertThread(SESSION_ID, TURN_ID);
+    else live.forget(SESSION_ID);
+    const before = events.length;
+    resolve(completedDetails());
+    await Promise.resolve();
+    expect(events).toHaveLength(before);
+  });
+
+  it('keeps failed completion reads unknown without losing the final reply', async () => {
+    const { live, events } = createHarness({ replay: false, now: () => 1000, readTurnDetails: async () => { throw Error('unavailable'); } });
+    await sendPrompt(live);
+    finishWithReply(live);
+    await Promise.resolve();
+    const latest = payloads(events, 'message.updated').at(-1).properties.info;
+    expect(latest.metadata.openchamber.telemetry.toolWaitDurationMs).toBeNull();
+    expect(latest.time.completed).toBe(20000);
+    expect(payloads(events, 'message.part.updated').at(-1).properties.part.text).toBe('Done');
+  });
 });
 
 describe('Codex proposed plans', () => {

@@ -13,6 +13,7 @@ import {
   buildCompactionMessage,
   buildCompactionPart,
   buildFilePart,
+  buildReasoningPart,
   buildTextPart,
   buildToolPart,
   buildUserMessage,
@@ -23,6 +24,7 @@ import {
   agyTime,
   agyTokenUsage,
   agySubagentReferences,
+  agyConversationMessage,
   agyPermissionError,
 } from './protocol.js';
 import { agyBackgroundResults } from './tasks.js';
@@ -129,12 +131,23 @@ const userRecord = ({ sessionId, id, created, send, text }) => {
   return record;
 };
 
+const reasoningPart = ({ sessionId, nativeId, entry, time }) => {
+  const text = entry.thinking?.trim();
+  if (!text) return null;
+  const part = buildReasoningPart({
+    id: partId(nativeId, entry.step_index, 'reasoning'), sessionID: sessionId,
+    messageID: assistantId(nativeId, entry.step_index), text, start: time, end: time,
+  });
+  if (entry.truncated_fields?.includes('thinking')) part.metadata = { nativeOutputTruncated: true };
+  return part;
+};
+
 const toolPart = ({ sessionId, nativeId, stepIndex, call, output, created, end, status, error, truncated = false, inputTruncated = false, subagents }) => {
   const mapped = mapAgyTool(call);
   const name = call.name;
   const exit = name === 'run_command' && output !== undefined ? commandExitCode(output) : null;
   const missing = output === undefined || status === 'RUNNING';
-  const failed = status === 'ERROR' || (exit !== null && exit !== 0);
+  const failed = status === 'ERROR' || status === 'INVALID' || (exit !== null && exit !== 0);
   const result = missing
     ? { status: 'error', error: MISSING_TOOL_RESULT, end }
     : failed
@@ -156,7 +169,9 @@ const toolPart = ({ sessionId, nativeId, stepIndex, call, output, created, end, 
 };
 
 /** Projects agy's own transcript, keeping tool results beside their planner step. */
-export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entries, bindings, now = Date.now }) => {
+export const projectAntigravityHistory = ({
+  sessionId, nativeId, directory, entries, bindings, parentSessionId = null, childSessionIds = [], now = Date.now,
+}) => {
   const records = [];
   let parentID = null;
   let parentSend = null;
@@ -169,6 +184,7 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
     return lastCreated;
   };
   const byStep = new Map(entries.map((entry) => [entry.step_index, entry]));
+  const children = new Set(childSessionIds);
   const taskResults = agyBackgroundResults(entries, nativeId);
   const settlePermissionDenial = () => {
     const denial = parentSend?.antigravity?.denial;
@@ -203,18 +219,42 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
   };
 
   for (const entry of entries) {
-    if (entry.type === 'USER_INPUT') {
+    const message = entry.type === 'SYSTEM_MESSAGE' ? agyConversationMessage(entry.content) : null;
+    const senderSessionId = message ? encodeAntigravitySessionId(message.sender) : null;
+    const parentTask = message !== null && senderSessionId === parentSessionId;
+    if (entry.type === 'USER_INPUT' || parentTask) {
       settlePermissionDenial();
-      const send = bindings.get(entry.step_index);
-      const id = send?.messageId ?? userId(nativeId, entry.step_index);
+      const send = parentTask ? null : bindings.get(entry.step_index);
+      const id = send?.messageId ?? userId(nativeId, parentTask && parentID === null ? 'context' : entry.step_index);
       parentID = id;
       parentSend = send ?? null;
       parentStep = entry.step_index;
       lastAssistant = null;
       records.push(userRecord({
         sessionId, id, created: created(entry, send?.sentAt), send,
-        text: antigravityVisiblePromptText(entry.content ?? '', send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined),
+        text: antigravityVisiblePromptText(parentTask ? message.content : entry.content ?? '', send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined),
       }));
+      continue;
+    }
+    if (message && children.has(senderSessionId)) {
+      const time = created(entry);
+      ensureParent(time - 1);
+      const id = assistantId(nativeId, entry.step_index);
+      const part = buildTextPart({
+        id: partId(nativeId, entry.step_index, 'text'), sessionID: sessionId,
+        messageID: id, text: message.content, start: time, end: time,
+      });
+      part.metadata = {
+        nativeSubagentMessage: true, nativeSubagentSessionID: senderSessionId,
+      };
+      if (entry.truncated_fields?.includes('content')) part.metadata.nativeOutputTruncated = true;
+      records.push({
+        info: buildAssistantMessage({
+          id, sessionID: sessionId, parentID, created: time, completed: time,
+          ...selectionForStep(entry.step_index, bindings), cwd: directory, finish: 'stop',
+        }),
+        parts: [part],
+      });
       continue;
     }
     if (entry.type === 'CHECKPOINT') {
@@ -259,6 +299,8 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
     ensureParent(time - 1);
     const id = assistantId(nativeId, entry.step_index);
     const parts = [];
+    const reasoning = reasoningPart({ sessionId, nativeId, entry, time });
+    if (reasoning) parts.push(reasoning);
     if ((entry.content ?? '') !== '') {
       const textPart = buildTextPart({
         id: partId(nativeId, entry.step_index, 'text'), sessionID: sessionId,
@@ -414,16 +456,44 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       return [...records.values()];
     },
 
-    restoreMissingHistory(history) {
+    restoreReasoning(entries) {
+      for (const entry of entries) {
+        const record = records.get(assistantId(nativeId, entry.step_index));
+        if (!record) continue;
+        const part = reasoningPart({ sessionId, nativeId, entry, time: record.info.time.created });
+        if (!part) continue;
+        const index = record.parts.findIndex((held) => held.id === part.id);
+        if (index === -1) record.parts.unshift(part);
+        else {
+          const held = record.parts[index];
+          if (!held.metadata?.nativeOutputTruncated || part.metadata?.nativeOutputTruncated) continue;
+          record.parts[index] = { ...part, time: held.time };
+        }
+        publish(record);
+        if (index === -1) publisher.emit(directory, 'message.parts.replaced', { sessionID: sessionId, messageID: record.info.id, parts: record.parts });
+      }
+    },
+
+    restoreMissingHistory(history, { scope = 'turn' } = {}) {
       const start = history.findIndex((record) => record.info.id === request.messageID);
-      if (start === -1) return;
-      for (const historical of history.slice(start + 1)) {
-        if (historical.info.role === 'user') break;
+      if (start === -1 && scope !== 'session') return;
+      for (const historical of scope === 'session' ? history : history.slice(start + 1)) {
+        if (historical.info.role === 'user' && scope === 'turn') break;
         const live = records.get(historical.info.id);
         if (!live) {
           records.set(historical.info.id, historical);
           historical.parts.forEach(rememberHistoricalTool);
           publish(historical);
+          continue;
+        }
+        // Child tasks have no accepted send. Native history owns their text,
+        // timestamps and turn boundaries, including later parent assignments.
+        if (historical.info.role === 'user' && live.info.role === 'user') {
+          if (JSON.stringify(live) !== JSON.stringify(historical)) {
+            live.info = historical.info;
+            live.parts = historical.parts;
+            publish(live);
+          }
           continue;
         }
         if (historical.info.role === 'compaction' && live.info.role === 'compaction') {
@@ -439,11 +509,29 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
           && !(part.state.status === 'error' && part.state.error === MISSING_TOOL_RESULT);
         const known = new Set(historical.parts.map((part) => part.id));
         let changed = false;
+        if (live.info.role === 'assistant' && historical.info.role === 'assistant'
+          && live.info.parentID !== historical.info.parentID) {
+          live.info.parentID = historical.info.parentID;
+          changed = true;
+        }
         // The stream first exposes an assistant after generation has started.
         // Native generation starts also enclose tools recovered from history.
         if (live.info.role === 'assistant' && historical.info.role === 'assistant'
-          && historical.info.time.created < live.info.time.created) {
+          && (scope === 'session' ? historical.info.time.created !== live.info.time.created
+            : historical.info.time.created < live.info.time.created)) {
           live.info.time.created = historical.info.time.created;
+          // A parent assignment missing from the stream can share a native
+          // millisecond with its reply. Keep measured intervals after that task.
+          if (scope === 'session') {
+            for (const part of live.parts) {
+              const time = part.type === 'tool' ? part.state.time : part.time;
+              if (!time || time.start >= live.info.time.created) continue;
+              const offset = live.info.time.created - time.start;
+              time.start += offset;
+              if (time.end !== undefined) time.end += offset;
+              if (live.info.time.completed !== undefined) live.info.time.completed = Math.max(live.info.time.completed, time.end ?? time.start);
+            }
+          }
           changed = true;
         }
         // Some generation frames omit usage even though the completed native
@@ -462,6 +550,11 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
             return part;
           }
           if (!held) { changed = true; rememberHistoricalTool(part); return part; }
+          if (part.type === 'reasoning' && held.type === 'reasoning'
+            && held.metadata?.nativeOutputTruncated && !part.metadata?.nativeOutputTruncated) {
+            changed = true;
+            return { ...part, time: held.time };
+          }
           if (part.type === 'tool' && held.type === 'tool' && !part.state.metadata?.nativeInputTruncated) {
             const input = held.tool !== part.tool ? part.state.input : { ...held.state.input, ...part.state.input };
             const metadata = { ...held.state.metadata, nativeBackend: 'antigravity' };

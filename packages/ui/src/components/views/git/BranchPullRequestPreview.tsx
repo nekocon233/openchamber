@@ -15,6 +15,9 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { GitHubPullReference, SourceControlReadContext } from '@/lib/api/types';
 import type { ChangeRequest } from '@/lib/source-control/types';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
+import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 /**
  * Labels and the comment count the branch status does not carry: GitHub
@@ -58,7 +61,8 @@ export const BranchPullRequestPreview: React.FC<{
     const rootDirectory = useEffectiveDirectory();
     const activeProjectId = useProjectsStore((state) => state.activeProjectId);
     const [revision, setRevision] = React.useState(0);
-    const [checksOpen, setChecksOpen] = React.useState(false);
+    const owner = workspaceViewKey(getRuntimeKey(), directory, 'branch-pull-detail', workspaceRepositoryIdentity(context), changeRequest.project.owner, changeRequest.project.name, changeRequest.number);
+    const [checksOpen, setChecksOpen] = useWorkspaceViewState('pullRequest', owner, 'checksOpen');
     const [now] = React.useState(() => Date.now());
 
     const listed = useListedPull(context, changeRequest.number, revision);
@@ -81,7 +85,7 @@ export const BranchPullRequestPreview: React.FC<{
     const linksDirectory = rootDirectory ?? directory;
 
     return (
-        <>
+        <WorkspaceViewScope.Provider value={owner}>
             <ReferencePreview
                 item={item}
                 directory={directory}
@@ -119,6 +123,6 @@ export const BranchPullRequestPreview: React.FC<{
                 onOpenChange={setChecksOpen}
                 onAttachFailed={attachments.attachFailedChecks}
             />
-        </>
+        </WorkspaceViewScope.Provider>
     );
 };

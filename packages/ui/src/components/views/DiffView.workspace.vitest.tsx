@@ -65,14 +65,15 @@ test('the workspace list reveals retained details without reading hidden file pa
   } };
   const container = document.createElement('div');
   const listHost = document.createElement('div');
-  document.body.append(container, listHost);
+  const headerSlot = document.createElement('div');
+  document.body.append(container, listHost, headerSlot);
   const root = createRoot(container);
   const onSelect = () => { detailsVisible = true; };
   const render = () => act(async () => {
     root.render(<I18nProvider><RuntimeAPIContext.Provider value={apis}>
       <SyncProvider sdk={opencodeClient.getSdkClient()} directory={directory}>
         <DiffView visible={detailsVisible} diffScope="working" stackedDefaultCollapsedAll
-          fileListHost={{ host: listHost, visible: listVisible, onSelect }} />
+          fileListHost={{ host: listHost, headerSlot, visible: listVisible, onSelect }} />
       </SyncProvider>
     </RuntimeAPIContext.Provider></I18nProvider>);
   });
@@ -81,8 +82,11 @@ test('the workspace list reveals retained details without reading hidden file pa
     expect(statusReads).toBe(1);
     expect(patchReads).toBe(0);
     expect(listHost.textContent).toContain('test.bin');
-    const item = listHost.querySelector<HTMLButtonElement>('button');
-    expect(item).not.toBeNull();
+    expect(headerSlot.querySelector('[data-diff-file-filter]')).not.toBeNull();
+    expect(headerSlot.querySelector('[data-context-panel-toolbar]')).toBeNull();
+    expect(listHost.querySelector('[data-diff-file-filter]')).toBeNull();
+    const item = [...listHost.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('test.bin'));
+    expect(item).toBeDefined();
     await act(async () => item?.click());
     expect(detailsVisible).toBe(true);
     await render();
@@ -98,6 +102,7 @@ test('the workspace list reveals retained details without reading hidden file pa
     detailsVisible = true;
     await render();
     expect(listHost.querySelector('[data-editor-diff-list]')?.classList.contains('hidden')).toBe(true);
+    expect(headerSlot.querySelector('[data-diff-file-filter]')).toBeNull();
     expect(container.querySelector('[data-diff-virtual-content]')).toBe(content);
     expect(patchReads).toBe(1);
     expect(statusReads).toBe(1);

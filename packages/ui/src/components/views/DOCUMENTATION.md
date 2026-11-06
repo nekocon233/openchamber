@@ -1,12 +1,37 @@
 # Retained context views
 
+## File type filtering in Changes
+
+Changes keeps a device-local exclusion set per runtime and owning project.
+`useDiffFileFilter` resolves that owner from the viewed directory through the
+existing project/worktree registry; unregistered directories use their own path.
+Branches and registered worktrees of one project share the choice. A separate
+registered nested project keeps its own choice. Web, Electron, VS Code, hosted
+mobile and Capacitor use the same rule in their own browser or app storage.
+
+The filter uses the final, lower-case extension. Leading-dot files without
+another dot and names such as Makefile share the extensionless type. Menu
+options include saved exclusions absent from the current changeset so they can
+always be restored. Filtering every file shows an explicit filtered state with
+Restore all, and the menu stays available. A hidden external navigation target
+offers to restore its type instead of bypassing the filter.
+
+### Why exclusions belong to presentation
+
+The complete changeset remains authoritative for scope counts, review and
+walkthrough targets and every Git mutation. Lists, tree rows, keyboard navigation
+and mounted diffs consume the filtered list. Mobile's ChangesPanel filters its
+rows while retaining complete group and directory paths for bulk actions;
+passing a filtered status to its action handlers would change what gets staged
+or discarded.
+
 ## Project pull requests
 
-On GitHub projects, `PullRequestView` opens on Project PRs, with Current branch
-as a second tab for the existing branch preview and creation flow. Project PRs
+On GitHub projects, `PullRequestView` remembers Project PRs or Current branch
+per project, defaulting to Project PRs. Current branch is the second tab for the existing branch preview and creation flow. Project PRs
 uses the bound primary repository alone, across all branches, and only lists
 open PRs ordered by latest update. Its category tabs are Awaiting my review,
-Created by me, and All, using the bound GitHub account. Awaiting my review is selected initially;
+Created by me, and All, using the bound GitHub account. The project's saved category is selected, with Awaiting my review as the default;
 the existing search applies within that category. It needs no checkout branch or comparison base. GitLab keeps
 its existing branch view; VS Code reports repository browsing as unsupported.
 The hosted and native mobile navigation stays unchanged.
@@ -61,19 +86,29 @@ even if a refreshed first page no longer contains it. Switching projects changes
 visibility, while cached data follows normal revalidation. Removing a PR tab
 releases only that view. A runtime switch clears the visited set; changing an
 account or binding resets the affected view's authority.
-This retention lasts for the open workspace; it does not persist PR content
-or reply drafts across a browser reload.
+A reload restores the saved columns, query, selected PR, reading position and
+unfinished input from device-local workspace state. Selected PRs are looked up
+again through the current binding, independently of pagination. Lists load only
+to their saved depth while visible; a failed lookup stays retryable. No saved PR
+body, status or binding grants authority to a new read or action.
 
 Changes opened from a PR panel keeps a return target for that PR, its original
-project workspace and tab. Classic shows Back to PR above the changed files;
-editor layout shows it above the Changes file list, or above the document content
-when that list is closed. Returning restores the exact project PR preview even
+project workspace and tab. Classic and editor layout put Back to PR and the
+file type filter in the Changes window's titlebar. With the editor list closed,
+the document toolbar keeps these actions available. Returning restores the exact project PR preview even
 when it is absent from the loaded page. The existing query, category, list
 position and reply draft stay in the retained PR pane. The comparison's
 repository/account context and PR identity must still match the return target.
 Nested repositories keep the workspace destination separate from the repository
 whose diff is read. A new request without a PR origin clears the old return
 target. Mobile keeps its existing navigation.
+
+The titlebar retains the Changes label and shows compact return and filter
+controls beside the window actions. The comparison scope and view controls
+stay above the diff content. A list's header slot follows its owning zone
+independently of the details' host, so moving or hiding the list cannot put
+its buttons in another window. Hosts without a header slot render the actions
+inline. Return tooltips and accessible labels retain the full PR identity.
 
 Linked previews register that same origin, with their original open request as
 the `linked` destination. Back to PR returns to the exact retained linked view,
@@ -123,6 +158,27 @@ request for the report's fixed window; independent source medians are not
 averaged. Runtime changes abort and discard pending reports and tools.
 
 ## Context panel retention
+
+PR, Changes and Project knowledge reading state survives window remounts and
+app restarts through the workspace view store. Changes restores the selected
+file, tree folders and expanded files under the exact workspace/branch/source.
+Pending explicit file navigation has priority and is consumed once. The target
+path retained on a tab is an initial fallback, so it cannot override a later
+saved selection after a reload. Successful listings reconcile removed paths;
+loading and failed reads do not erase the saved state. Scroll restoration waits
+for visible content and follows its size changes until the person interacts.
+
+### Why expanded context follows exact file contents
+
+The typed Pierre adapters snapshot the renderer's context regions and horizontal
+position. They apply them only to matching object IDs or a full-content
+fingerprint and matching hunk boundaries, since hunk indices from an older file are not positions in a new
+revision. Only expanded, mounted, visible files load full context; restoring
+metadata cannot read every remembered diff. The large-file display choice is
+also remembered for that file and comparison. A restored context region already
+includes the initiating expansion; its replay waits for the restore check to
+avoid expanding the same gap again on each restart.
+
 
 `ContextPanel` keeps file, diff and walkthrough views mounted to preserve
 navigation, expanded sections and editor state. Its `visible` prop combines
