@@ -17,7 +17,7 @@ import { MobileSessionSwitcher } from './MobileSessionSwitcher';
 
 export const MobileHeader: React.FC<{
   onOpenSessions: () => void;
-  /** Opens the right workspace drawer (Changes / Files / Terminal / Notes / Tasks / MCP). */
+  /** Opens the right workspace drawer (Changes / PR / Files / Terminal / Notes / Tasks / MCP). */
   onOpenWorkspace: () => void;
   /** Opens the work-status sheet directly from the header. */
   onOpenWorkStatus: () => void;

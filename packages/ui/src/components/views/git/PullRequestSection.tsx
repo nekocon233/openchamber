@@ -232,6 +232,7 @@ function useDetectedUpstreamRepo(
 
 export const PullRequestSection: React.FC<{
   directory: string;
+  workspaceDirectory: string;
   branch: string;
   baseBranch: string;
   trackingBranch?: string;
@@ -239,7 +240,7 @@ export const PullRequestSection: React.FC<{
   ahead?: number;
   remoteBranches?: string[];
   onGeneratedDescription?: () => void;
-}> = ({ directory, branch, baseBranch, trackingBranch, ahead = 0, remoteBranches = [], onGeneratedDescription }) => {
+}> = ({ directory, workspaceDirectory, branch, baseBranch, trackingBranch, ahead = 0, remoteBranches = [], onGeneratedDescription }) => {
   const { t: translate } = useI18n();
   // Named even when no account there can read the project, so a GitLab
   // project with a lapsed account asks for GitLab, not GitHub.
@@ -929,6 +930,7 @@ export const PullRequestSection: React.FC<{
     const preview = (
       <BranchPullRequestPreview
         directory={directory}
+        workspaceDirectory={workspaceDirectory}
         context={readContext}
         changeRequest={liveChangeRequest}
         onChanged={() => refresh({ force: true, silent: true, markInitialResolved: true })}

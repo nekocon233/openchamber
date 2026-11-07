@@ -364,6 +364,7 @@ const CurrentBranchPullRequestView: React.FC<{ directory: string }> = ({ directo
       >
         <PullRequestSection
           directory={gitDirectory ?? currentDirectory}
+          workspaceDirectory={currentDirectory}
           branch={currentBranch}
           baseBranch={baseBranch}
           trackingBranch={status?.tracking ?? undefined}

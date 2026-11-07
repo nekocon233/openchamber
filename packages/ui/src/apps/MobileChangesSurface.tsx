@@ -57,6 +57,7 @@ import { useBranchPullRequestRequest } from '@/hooks/useBranchPullRequestRequest
 import { useCommitComparison } from '@/hooks/useCommitComparison';
 import { usePullRequestComparison } from '@/hooks/usePullRequestComparison';
 import { PullRequestComparisonSelector } from '@/components/views/git/PullRequestComparisonSelector';
+import { PullRequestBackButton } from '@/components/views/git/PullRequestBackButton';
 import { useGitComparison, type GitComparisonSource } from '@/hooks/useGitComparison';
 import { usePendingReview, type PendingReviewController } from '@/components/sourceBoard/usePendingReview';
 import { useGitBaseBranchStore } from '@/stores/useGitBaseBranchStore';
@@ -1289,6 +1290,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
             <Icon name="close" className="size-5" />
           </button>
         ) : null}
+        {mode === 'pr' ? <PullRequestBackButton compact directory={rootDirectory || null} source={selectedPr} context={prComparison.readContext} /> : null}
         <DropdownMenu open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className={dropdownTriggerVariants({ size: 'mobile' })} data-mobile-comparison-trigger aria-label={t('diffView.scope.selectorAria')}>

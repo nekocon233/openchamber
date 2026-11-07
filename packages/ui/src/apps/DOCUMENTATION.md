@@ -6,6 +6,10 @@
 
 `MobileShell` in `MobileApp` owns the phone and tablet surfaces, Settings among them.
 
+The workspace drawer and tablet panel share a scrollable tab strip. Its PR tab
+loads the shared `PullRequestView` on first use, keyed by runtime and effective
+workspace directory. The same draft-space directory rules as Changes apply.
+
 `mobileConnections` owns saved mobile instances and their connect, password and reconnect flows. The welcome screen and Instances form share its controller. Runtime HTTP authentication remains in `lib/runtime-auth` and `lib/runtime-fetch`.
 
 ## Invariants
@@ -24,10 +28,18 @@
 - On mobile, a request for the Settings dialog opens the fullscreen Settings surface and clears the dialog flag (`mobileSettingsNavigation.ts`). It lands on the requested page when the phone shows that page, otherwise on the page list. Entry points keep calling `setSettingsDialogOpen` and need no mobile branch.
 - Mobile Changes shares the device-local project file type filter with the desktop Changes view. Working, last-turn and comparison lists apply the same exclusions; hidden paths are excluded from detail reads and diff prefetch. Complete status remains the source for commit counts, Git mutations and walkthrough targets. Fully filtered working changes keep the commit footer and show Restore all in the list.
 - The mobile root loads source-control provider descriptors and account status on connection and runtime switches, and refreshes both after a native resume with the same connection. It mounts `useSourceControlProviderSync` once for provider changes and control-stream reconnects. The shared registry owns runtime isolation, retained snapshots and retry behavior.
+- PR navigation retains the shared view while its workspace tab is hidden, with its clock paused and content effects disconnected. The shared workspace stores restore reading state and unfinished replies after a project switch or reload. PR-to-Changes keeps its existing return identity; Back to PR reveals the mobile PR tab rather than a desktop context pane.
 - Settings uses the existing persistence and broadcast protocol. Moving its host changes no stored format, registry key or runtime availability.
 - Notification commands and initial session tabs in VS Code use the shared session opener, so a `/btw` fork opens its parent and expands the panel mounted in the shared composer. Notification commands also reveal the chat view.
 
 ## Decisions
+
+### Why mobile shares the PR panel
+
+The workspace tab uses the desktop list, preview and branch workflow so provider
+authority, actions and reading-state restoration have one owner. The Changes PR
+picker remains a comparison selector. The tab strip scrolls to keep all seven
+workspace entries reachable without compressing their touch targets.
 
 ### Why mobile loads source-control capabilities in the root
 
