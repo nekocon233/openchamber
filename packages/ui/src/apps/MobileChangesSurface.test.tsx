@@ -5,9 +5,11 @@ import { OpenCode, type FileDiffInfo } from '@opencode/client';
 import { SyncProvider } from '@/sync/sync-context';
 import { opencodeClient } from '@/lib/opencode/client';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { DedicatedMobileAppProvider } from './mobileAppContext';
+import type { MobileWorkspaceTab } from './MobileWorkspaceDrawer';
 import type { GitLogEntry, GitStatus } from '@/lib/api/types';
 import type {
-  ChangeRequest, ChangeRequestStatus, PageResult, Project, SourceControlAuthStatus, SourceControlIdentity, SourceControlUser,
+  ChangeRequest, ChangeRequestStatus, PageResult, Project, SourceControlAuthStatus, SourceControlIdentity, SourceControlReadContext, SourceControlUser,
 } from '@/lib/source-control/types';
 
 // Pull requests are read through the checkout's bound GitHub context, so the
@@ -120,6 +122,10 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
   const servedGitHub = githubLikeDescriptor();
   useSourceControlProviderRegistry.setState({ ordered: [servedGitHub], byId: new Map([[servedGitHub.id, servedGitHub]]), status: 'ready', holdsList: true });
   const { MobileChangesPane } = await import('./MobileChangesSurface');
+  const { usePullRequestSelectionStore, pullRequestNavigationKey } = await import('@/stores/usePullRequestSelectionStore');
+  const { getRuntimeKey } = await import('@/lib/runtime-switch');
+  const { pullReferenceFromChangeRequest } = await import('@/components/references/gitlabReferences');
+  const openedTabs: MobileWorkspaceTab[] = [];
   const apis = createWebAPIs();
   const status: GitStatus = { current: 'feature', tracking: null, ahead: 0, behind: 0, files: [], isClean: true, diffStats: { staged: {}, working: {} } };
   const seed = (directory: string, nextStatus = status) => {
@@ -144,11 +150,14 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
   document.body.append(container);
   const root = createRoot(container);
   const render = () => act(async () => {
-    root.render(<SyncProvider sdk={SYNC_SDK} directory={directory}><I18nProvider><RuntimeAPIContext.Provider value={apis}>
+    root.render(<SyncProvider sdk={SYNC_SDK} directory={directory}><I18nProvider><RuntimeAPIContext.Provider value={apis}><DedicatedMobileAppProvider actions={{
+      openChanges: () => {}, openFiles: () => {}, openSourceBoard: () => {},
+      openWorkspaceTab: (tab) => { openedTabs.push(tab); }, openChangeRequest: () => {}, closeWorkStatusSheet: () => {},
+    }}>
       <MobileChangesPane rootDirectory={directory}
         repository={{ rootIsGitRepo: true, gitDirectory: directory, nestedRepos: null, nestedRepoSelection: null, repositoryOptions: null }}
         visible={visible} initialDiff={initialDiff} />
-    </RuntimeAPIContext.Provider></I18nProvider></SyncProvider>);
+    </DedicatedMobileAppProvider></RuntimeAPIContext.Provider></I18nProvider></SyncProvider>);
   });
   const click = async (selector: string) => {
     const element = document.querySelector<HTMLElement>(selector);
@@ -194,6 +203,7 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
     await openFile('branch.png');
     expect(container.textContent).toContain('Branch diff failed');
     expect(requests.filter((url) => url.pathname === '/api/git/file-diff')).toHaveLength(0);
+
     failBranchDiff = false;
     const retry = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Retry');
     if (!retry) throw new Error('Missing diff retry');
@@ -241,6 +251,21 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
     expect(prRequest?.searchParams.get('accountId')).toBe(ACCOUNT_ID);
     expect(prRequest?.searchParams.get('repositoryId')).toBe('repo');
     expect(requests.filter((url) => url.pathname === '/api/git/file-diff')).toHaveLength(0);
+
+    // A comparison opened from the PR pane returns to the mobile host, with
+    // the exact origin still available to its retained PR view.
+    await click('[aria-label="Back"]');
+    expect(container.querySelector('[aria-label="Back to PR #42"]')).toBeNull();
+    const context: SourceControlReadContext = { ...GITHUB, accountId: ACCOUNT_ID, repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' };
+    await act(async () => usePullRequestSelectionStore.getState().requestDiff('/repo', {
+      kind: 'pr', number: 42, sourceRepo: { owner: 'upstream', repo: 'project' },
+    }, { workspaceDirectory: '/repo', tab: 'project', reference: pullReferenceFromChangeRequest(PUBLISHED_PR), context }));
+    await click('[aria-label="Back to PR #42"]');
+    expect(openedTabs).toEqual(['pr']);
+    const returned = usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(getRuntimeKey(), '/repo'));
+    expect(returned?.context).toEqual(context);
+    expect(returned?.reference.number).toBe(42);
+    if (returned) usePullRequestSelectionStore.getState().settleReturnRequest(returned);
 
     await act(async () => { seed('/repo', { ...status, isClean: false, files: [{ path: 'working.png', index: 'M', working_dir: ' ' }] }); });
     initialDiff = { path: 'working.png', staged: true };

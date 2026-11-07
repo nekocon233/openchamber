@@ -10,7 +10,6 @@ import { SourceBoardLabels, SourceBoardReviewers } from '@/components/sourceBoar
 import { SourceBoardReply } from '@/components/sourceBoard/SourceBoardReply';
 import { usePullAttachments } from '@/components/sourceBoard/pullAttachments';
 import { useThreadActions } from '@/components/sourceBoard/threadActions';
-import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { GitHubPullReference, SourceControlReadContext } from '@/lib/api/types';
 import type { ChangeRequest } from '@/lib/source-control/types';
@@ -52,13 +51,14 @@ function useListedPull(context: SourceControlReadContext, number: number, revisi
 export const BranchPullRequestPreview: React.FC<{
     /** The repository the branch is in. */
     directory: string;
+    /** The workspace hosting the PR view, which may contain this repository. */
+    workspaceDirectory: string;
     context: SourceControlReadContext;
     changeRequest: ChangeRequest;
     /** Asks the branch status again after a change. */
     onChanged: () => void;
     statusStack?: unknown;
-}> = ({ directory, context, changeRequest, onChanged }) => {
-    const rootDirectory = useEffectiveDirectory();
+}> = ({ directory, workspaceDirectory, context, changeRequest, onChanged }) => {
     const activeProjectId = useProjectsStore((state) => state.activeProjectId);
     const [revision, setRevision] = React.useState(0);
     const owner = workspaceViewKey(getRuntimeKey(), directory, 'branch-pull-detail', workspaceRepositoryIdentity(context), changeRequest.project.owner, changeRequest.project.name, changeRequest.number);
@@ -82,7 +82,6 @@ export const BranchPullRequestPreview: React.FC<{
     const threadActions = useThreadActions(reference, context, refresh);
 
     const item = { source: 'github' as const, reference };
-    const linksDirectory = rootDirectory ?? directory;
 
     return (
         <WorkspaceViewScope.Provider value={owner}>
@@ -108,11 +107,11 @@ export const BranchPullRequestPreview: React.FC<{
                 pullLinks={(
                     <SourceBoardPullLinks
                         pull={reference}
-                        project={{ id: activeProjectId ?? '', path: linksDirectory }}
+                        project={{ id: activeProjectId ?? '', path: workspaceDirectory }}
                         context={context}
                         projectOwnsDirectory={() => true}
-                        currentDirectory={linksDirectory}
-                        returnTo={{ workspaceDirectory: linksDirectory, tab: 'branch' }}
+                        currentDirectory={workspaceDirectory}
+                        returnTo={{ workspaceDirectory, tab: 'branch' }}
                     />
                 )}
             />

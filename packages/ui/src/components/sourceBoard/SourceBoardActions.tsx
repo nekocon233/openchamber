@@ -386,7 +386,8 @@ export const SourceBoardPullLinks: React.FC<{
         if (surface === 'diff') {
             if (mobile) {
                 // The phone's Changes looks requests up by the normalized folder.
-                usePullRequestSelectionStore.getState().requestDiff(normalizePath(directory) ?? directory, source, undefined, context);
+                usePullRequestSelectionStore.getState().requestDiff(normalizePath(directory) ?? directory, source,
+                    returnTo ? { ...returnTo, reference: pull, context } : undefined, context);
                 onLeave?.();
                 mobile.openChanges();
                 return;

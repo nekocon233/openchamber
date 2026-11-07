@@ -7,6 +7,7 @@ import { McpIcon } from '@/components/icons/McpIcon';
 import { McpDropdownContent } from '@/components/mcp/McpDropdown';
 import { ProjectContextPanel } from '@/components/layout/RightSidebarTabs';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { PauseClock } from '@/components/ui/pause-clock';
 import { SortableTabsStrip, type SortableTabsStripItem } from '@/components/ui/sortable-tabs-strip';
 import { TerminalView } from '@/components/views/TerminalView';
 import { useI18n } from '@/lib/i18n';
@@ -15,6 +16,13 @@ import { cn } from '@/lib/utils';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
 import { useMcpStore } from '@/stores/useMcpStore';
+import { useGitStore } from '@/stores/useGitStore';
+import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useOnDemandComponent } from '@/hooks/useOnDemandComponent';
+import { normalizePath } from '@/lib/pathNormalization';
+import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
+import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
+import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
 
 import { MobileChangesSurface } from './MobileChangesSurface';
 import { MobileFilesSurface } from './MobileFilesSurface';
@@ -29,7 +37,22 @@ const ENTER_DELAY_MS = 16;
 const ENTER_DURATION_MS = 320;
 const DRAWER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export type MobileWorkspaceTab = 'changes' | 'files' | 'terminal' | 'notes' | 'tasks' | 'mcp';
+export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'tasks' | 'mcp';
+
+const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
+
+const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
+  const draftSpace = useDraftSpaceTarget();
+  const directory = normalizePath(panelContentDirectory(draftSpace, useEffectiveDirectory())) ?? '';
+  const runtimeKey = useGitStore((state) => state.runtimeKey);
+  const View = useOnDemandComponent(visible, loadPullRequestView, onFailure);
+  return (
+    <PauseClock paused={!visible}>
+      {draftSpace?.kind === 'preparing' ? <SpacePreparing />
+        : View ? <View key={JSON.stringify([runtimeKey, directory])} directory={directory} visible={visible} /> : null}
+    </PauseClock>
+  );
+};
 
 /** Quick MCP enable/disable toggles as a workspace pane, with its own slim
     action row (add server → settings, refresh) replacing the old fullscreen
@@ -90,7 +113,7 @@ const McpWorkspacePane: React.FC<{ onOpenMcpSettings: () => void; active: boolea
   );
 };
 
-/** The workspace surfaces as tabs (Changes / Files / Terminal / Notes / Tasks / MCP).
+/** The workspace surfaces as tabs (Changes / PR / Files / Terminal / Notes / Tasks / MCP).
 
     Two hosts, same content and same state:
      - `drawer` (default) covers the app and slides in from the right edge —
@@ -201,6 +224,7 @@ export const MobileWorkspaceDrawer: React.FC<{
 
   const tabItems: SortableTabsStripItem[] = [
     { id: 'changes', label: t('mobile.menu.git'), icon: <Icon name="git-branch" className="h-3.5 w-3.5" /> },
+    { id: 'pr', label: t('contextPanel.mode.pr'), icon: <Icon name="git-pull-request" className="h-3.5 w-3.5" /> },
     { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
     { id: 'notes', label: t('contextRail.surface.notes'), icon: <Icon name="sticky-note" className="h-3.5 w-3.5" /> },
@@ -220,11 +244,11 @@ export const MobileWorkspaceDrawer: React.FC<{
               items={tabItems}
               activeId={tab}
               onSelect={(id) => onTabChange(id as MobileWorkspaceTab)}
-              layoutMode="fit"
+              layoutMode="scrollable"
               variant="active-pill"
               nonCompositedIndicator
-              // Six tabs don't fit with labels — the active tab keeps
-              // icon + label, the rest collapse to icons.
+              // Keep touch targets wide enough; overflow scrolls instead of
+              // squeezing the icons. Only the active tab shows its label.
               inactiveTabsIconOnly
               className="h-full"
             />
@@ -257,6 +281,13 @@ export const MobileWorkspaceDrawer: React.FC<{
                 initialDiff={pendingChangesDiff}
                 onNavigatedToChat={onClose}
               />
+            </ErrorBoundary>
+          </div>
+        ) : null}
+        {visitedTabs.has('pr') ? (
+          <div className={cn('h-full', tab !== 'pr' && 'hidden')}>
+            <ErrorBoundary>
+              <MobilePullRequestPane visible={open && tab === 'pr'} onFailure={onClose} />
             </ErrorBoundary>
           </div>
         ) : null}

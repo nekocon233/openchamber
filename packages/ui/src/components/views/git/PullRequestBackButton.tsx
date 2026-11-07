@@ -1,5 +1,6 @@
 import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import React from 'react';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/icon/Icon';
 import { useI18n } from '@/lib/i18n';
@@ -22,6 +23,7 @@ export const PullRequestBackButton: React.FC<{
   compact?: boolean;
 }> = ({ directory, source, context, compact = false }) => {
   const { t } = useI18n();
+  const mobile = useMobileAppActions();
   const runtimeKey = useGitStore(state => state.runtimeKey);
   const target = usePullRequestSelectionStore(state => directory
     ? state.diffReturnTargets.get(pullRequestNavigationKey(runtimeKey, directory)) : null);
@@ -34,11 +36,15 @@ export const PullRequestBackButton: React.FC<{
   const live = target && context && hasSameSourceControlReadContext(target.context, context) && sameSource(target.source) ? target : null;
   const restored = saved && context && saved.repositoryIdentity === workspaceRepositoryIdentity(context) && sameSource(saved.source) ? saved : null;
   if ((!live && !restored) || !source || !context) return null;
+  const openPullRequest = (workspaceDirectory: string) => {
+    if (mobile) mobile.openWorkspaceTab('pr');
+    else useUIStore.getState().openContextPanelTab(workspaceDirectory, { mode: 'pr' });
+  };
   const label = t(context.provider === 'gitlab' ? 'references.projectPulls.backToMerge' : 'references.projectPulls.backToPull', { number: source.number });
   return <Button variant="ghost" size="sm" className={cn('min-w-0', compact ? 'shrink-0' : 'me-auto shrink')} title={label} aria-label={label} onClick={() => {
     if (live && usePullRequestSelectionStore.getState().requestReturn(live)) {
       live.restoreWorkspace?.();
-      useUIStore.getState().openContextPanelTab(live.workspaceDirectory, { mode: 'pr' });
+      openPullRequest(live.workspaceDirectory);
     } else if (restored) {
       if (restored.navigation) useSessionUIStore.getState().restoreNavigationReturn(restored.navigation);
       if (restored.tab === 'linked') usePullRequestSelectionStore.getState().requestOpen({
@@ -53,7 +59,7 @@ export const PullRequestBackButton: React.FC<{
         if (list && restored.tab === 'project') useWorkspaceViewStateStore.getState().update('pullRequest', list, previous => ({ ...previous, selectedUrl: restored.url }));
       }
       setSaved(null);
-      useUIStore.getState().openContextPanelTab(restored.workspaceDirectory, { mode: 'pr' });
+      openPullRequest(restored.workspaceDirectory);
     }
   }}>
     <Icon name="arrow-left" className="size-4" />

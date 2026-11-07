@@ -34,7 +34,8 @@ open PRs ordered by latest update. Its category tabs are Awaiting my review,
 Created by me, and All, using the bound GitHub account. The project's saved category is selected, with Awaiting my review as the default;
 the existing search applies within that category. It needs no checkout branch or comparison base. GitLab keeps
 its existing branch view; VS Code reports repository browsing as unsupported.
-The hosted and native mobile navigation stays unchanged.
+Hosted and native mobile expose this view through the workspace PR tab. The
+existing comparison picker remains in Changes.
 
 Desktop GitHub PR links from chat, reference chips, sidebar badges and work
 status reveal this same tool pane and preview the exact linked PR. Repeated
@@ -101,7 +102,8 @@ position and reply draft stay in the retained PR pane. The comparison's
 repository/account context and PR identity must still match the return target.
 Nested repositories keep the workspace destination separate from the repository
 whose diff is read. A new request without a PR origin clears the old return
-target. Mobile keeps its existing navigation.
+target. Mobile Changes keeps the same return identity and routes Back to PR to
+the workspace PR tab.
 
 The titlebar retains the Changes label and shows compact return and filter
 controls beside the window actions. The comparison scope and view controls
