@@ -238,11 +238,11 @@ export const createWebFilesAPI = ({ getDirectory, searchFiles = defaultSearchFil
     );
   },
 
-  async createDirectory(path: string): Promise<{ success: boolean; path: string }> {
+  async createDirectory(path: string, options): Promise<{ success: boolean; path: string }> {
     const target = normalizePath(path);
     const response = await runtimeFetch('/api/fs/mkdir', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...directoryHeaders(getDirectory, undefined, target) },
+      headers: { 'Content-Type': 'application/json', ...directoryHeaders(getDirectory, options?.directory, target) },
       body: JSON.stringify({ path: target }),
     });
 

@@ -1471,7 +1471,7 @@ export interface FilesAPI {
    * Resolves to the search outcome; rejects on a transport or server failure.
    */
   searchContents?(payload: FileContentSearchQuery): Promise<FileContentSearchOutcome>;
-  createDirectory(path: string): Promise<{ success: boolean; path: string }>;
+  createDirectory(path: string, options?: { directory?: string }): Promise<{ success: boolean; path: string }>;
   statFile?(path: string, options?: FileReadOptions): Promise<{ path: string; isFile: boolean; size: number; mtimeMs?: number }>;
   readFile?(path: string, options?: FileReadOptions): Promise<{ content: string; path: string }>;
   readFileBinary?(path: string, options?: FileReadOptions): Promise<{ dataUrl: string; path: string }>;

@@ -24,6 +24,7 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ActionToolbar, ToolbarTooltipButton, TooltipLabelWithShortcut, type ToolbarAction, type ToolbarGroup } from '@/components/ui/action-toolbar';
+import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { GoToLineDialog } from './GoToLineDialog';
@@ -398,6 +399,8 @@ interface FileRowProps {
   onOpenDialog: (type: 'createFile' | 'createFolder' | 'rename' | 'delete', data: { path: string; name?: string; type?: 'file' | 'directory' }) => void;
   canUpload: boolean;
   onPickFiles: (directory: string) => void;
+  canPickDirectory: boolean;
+  onPickDirectory: (directory: string) => void;
 }
 
 const FileRow: React.FC<FileRowProps> = ({
@@ -424,6 +427,8 @@ const FileRow: React.FC<FileRowProps> = ({
   onOpenDialog,
   canUpload,
   onPickFiles,
+  canPickDirectory,
+  onPickDirectory,
 }) => {
   const { t } = useI18n();
   const isDir = node.type === 'directory';
@@ -536,6 +541,11 @@ const FileRow: React.FC<FileRowProps> = ({
           {canUploadHere && (
             <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onPickFiles(node.path); }}>
               <Icon name="upload-2" className="me-2 size-4" /> {t('sidebarFilesTree.menu.uploadFiles')}
+            </Item>
+          )}
+          {canUploadHere && canPickDirectory && (
+            <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onPickDirectory(node.path); }}>
+              <Icon name="upload-2" className="me-2 size-4" /> {t('sidebarFilesTree.menu.uploadFolder')}
             </Item>
           )}
         </>
@@ -1402,12 +1412,29 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     await loadDirectory(normalized, true);
   }, [loadDirectory, refreshRoot]);
 
+  const refreshUploadedDirectories = React.useCallback(async (directories: string[]) => {
+    const expanded = new Set(useFilesViewTabsStore.getState().byRoot[root]?.expandedPaths ?? []);
+    const toRefresh: string[] = [];
+    for (const directory of directories) {
+      if (!loadedDirsRef.current.has(directory)) continue;
+      loadedDirsRef.current.delete(directory);
+      let ancestor = directory;
+      while (ancestor !== root && expanded.has(ancestor)) ancestor = getParentDirectoryPath(ancestor);
+      if (ancestor === root) toRefresh.push(directory);
+    }
+    for (let index = 0; index < toRefresh.length; index += 3) {
+      await Promise.all(toRefresh.slice(index, index + 3).map(refreshDirectory));
+    }
+  }, [refreshDirectory, root]);
+
   const {
     canUpload,
+    canPickDirectory,
     uploadingDirectory,
     pickFiles,
+    pickDirectory,
     uploadElements,
-  } = useFileTreeUpload({ root, refreshDirectory });
+  } = useFileTreeUpload({ root, refreshDirectories: refreshUploadedDirectories });
   const isUploading = uploadingDirectory !== null;
 
   const lastFileScopeRef = React.useRef<string>('');
@@ -2681,6 +2708,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             onOpenDialog={handleOpenDialog}
             canUpload={canUpload && !isUploading}
             onPickFiles={pickFiles}
+            canPickDirectory={canPickDirectory}
+            onPickDirectory={pickDirectory}
           />
           {isDir && isExpanded && (
             <ul className="flex flex-col">
@@ -5068,7 +5097,20 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             iconClassName="size-4"
             onClick={() => handleOpenDialog('createFolder', { path: currentDirectory, type: 'directory' })}
           />
-          {canUpload && (
+          {canUpload && canPickDirectory ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-8" disabled={!root || isUploading}
+                  aria-label={t('sidebarFilesTree.actions.uploadFilesTitle')}>
+                  {isUploading ? <Spinner /> : <Icon name="upload-2" className="size-4" />}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => pickFiles(root)}>{t('sidebarFilesTree.menu.uploadFiles')}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => pickDirectory(root)}>{t('sidebarFilesTree.menu.uploadFolder')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : canUpload ? (
             <ToolbarTooltipButton
               label={t('sidebarFilesTree.actions.uploadFilesTitle')}
               icon={isUploading ? 'loader-4' : 'upload-2'}
@@ -5077,7 +5119,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
               disabled={!root || isUploading}
               onClick={() => pickFiles(root)}
             />
-          )}
+          ) : null}
           <GitignoredToggleButton className="size-8" iconClassName="size-4" />
           <ToolbarTooltipButton
             label={t('filesView.tree.actions.refreshTitle')}

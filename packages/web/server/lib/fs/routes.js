@@ -839,29 +839,32 @@ export const registerFsRoutes = (app, dependencies) => {
         return res.status(400).json({ error: 'Path is required' });
       }
 
-      let resolvedPath = '';
       if (allowOutsideWorkspace) {
         console.warn('Rejected outside-workspace mkdir without trusted directory grant');
         return res.status(403).json({ error: 'Outside workspace directory creation requires a grant' });
-      } else {
-        const resolved = await resolveWorkspacePathFromContext({
-          fsPromises,
-          req,
-          targetPath: dirPath,
-          resolveProjectDirectory,
-          path,
-          os,
-          normalizeDirectoryPath,
-          managedRoots,
-          chatsRoots,
-        });
-        if (!resolved.ok) {
-          return res.status(400).json({ error: resolved.error });
-        }
-        resolvedPath = resolved.resolved;
       }
+      const resolved = await resolveWorkspacePathFromContext({
+        fsPromises,
+        req,
+        targetPath: dirPath,
+        resolveProjectDirectory,
+        path,
+        os,
+        normalizeDirectoryPath,
+        managedRoots,
+        chatsRoots,
+      });
+      if (!resolved.ok) {
+        return res.status(400).json({ error: resolved.error });
+      }
+      const resolvedPath = resolved.resolved;
 
-      await fsPromises.mkdir(resolvedPath, { recursive: true });
+      const canonicalBase = await canonicalDirectoryPath(resolved.base, fsPromises, path);
+      const canonicalTarget = await canonicalDirectoryPath(resolvedPath, fsPromises, path);
+      if (!isPathWithinRoot(canonicalTarget, canonicalBase, path, os)) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      await fsPromises.mkdir(canonicalTarget, { recursive: true });
       return res.json({ success: true, path: resolvedPath });
     } catch (error) {
       if (isOsPermissionError(error)) {

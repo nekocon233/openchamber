@@ -547,6 +547,39 @@ describe('fs clone', () => {
   });
 });
 
+describe('fs mkdir canonical boundaries', () => {
+  it('rejects a missing child under a symlink outside the workspace', async () => {
+    const mkdir = vi.fn();
+    const handler = registerMkdir({
+      mkdir,
+      realpath: async (targetPath) => {
+        if (targetPath === '/repo/link/new') throw Object.assign(new Error('Missing'), { code: 'ENOENT' });
+        return targetPath === '/repo/link' ? '/outside' : targetPath;
+      },
+    });
+    const res = createMockResponse();
+    await handler({ body: { path: '/repo/link/new' } }, res);
+    expect(res.statusCode).toBe(403);
+    expect(mkdir).not.toHaveBeenCalled();
+  });
+
+  it('creates missing descendants through a workspace root alias in canonical space', async () => {
+    const mkdir = vi.fn();
+    const handler = registerMkdir({
+      mkdir,
+      realpath: async (targetPath) => {
+        if (targetPath.startsWith('/repo/new')) throw Object.assign(new Error('Missing'), { code: 'ENOENT' });
+        return targetPath === '/repo' ? '/real/project' : targetPath;
+      },
+    });
+    const res = createMockResponse();
+    await handler({ body: { path: '/repo/new/nested' } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(mkdir).toHaveBeenCalledWith('/real/project/new/nested', { recursive: true });
+    expect(res.body.path).toBe('/repo/new/nested');
+  });
+});
+
 describe('fs write', () => {
   it('does not rewrite a file when content is unchanged', async () => {
     const fsPromises = {
@@ -2425,6 +2458,8 @@ describe('fs managed chats root', () => {
       fsPromises: {
         realpath: async directory => {
           if (directory === '/srv/chat-alias') return '/storage/chats';
+          if (directory === '/storage/chats') return directory;
+          if (directory.startsWith('/storage/chats/')) throw Object.assign(new Error('not found'), { code: 'ENOENT' });
           throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
         },
       },

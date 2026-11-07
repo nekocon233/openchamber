@@ -643,14 +643,38 @@ flight or not yet adopted.
 `useFileTreeUpload` owns uploads for every file browser: `FilesView`,
 `SidebarFilesTree`, and the phone browser `MobileFilesSurface` (the mobile app
 never shows `FilesView`'s tree; it only hosts `FilesView` as the editor). Files
-arrive through desktop drag-and-drop or through the system picker, which folder
-menus ("Upload Files"), the tree toolbar, and the mobile browser header open.
+and folders arrive through desktop drag-and-drop or the system picker, which
+folder menus, the tree toolbar, and the mobile browser header open.
 On mobile the header button uploads into the folder currently on screen. The
 picker keeps its selected files until the upload settles, then clears the input
 so the same file can be picked again. A single upload runs at a time, in batches of three. Existing
 names are never replaced silently: they collect into a replace-confirmation
 dialog, which is dropped when the workspace or runtime changes. The feature is
 present only when the runtime exposes `files.uploadFile`.
+
+Directory drops snapshot every browser entry during `drop`, then asynchronously
+read every directory batch, preserving the outer folder, nested paths and empty
+directories. "Upload Folder" uses `webkitdirectory` where supported; its flat
+file list reconstructs parents from `webkitRelativePath` and cannot describe
+empty directories. VS Code has no upload adapter and offers neither action.
+Directory merges retain destination contents; file conflicts name relative paths
+and only those files are retried after confirmation. File/directory type conflicts
+fail their subtree without deleting or replacing it.
+
+The hook owns the operation from selection reading through refresh and clears
+its busy state on every exit. Picker destinations capture workspace and runtime
+when opened. A scope change stops new writes, rejects old confirmations and
+cannot clear a newer operation's state; requests already sent may finish in the
+old workspace. Successful writes remain after partial failures. Changed parent
+directories are refreshed together when visible or invalidated for the next
+expansion. Directory creation and file uploads carry the same workspace header.
+
+### Why directory uploads keep individual file writes
+
+The runtime already streams binary files atomically and checks overwrite and
+workspace boundaries. Creating directories and feeding that operation three files
+at a time retains those guarantees without buffering an archive or adding a new
+upload protocol.
 
 ## Mobile file actions
 

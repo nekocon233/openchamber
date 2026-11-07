@@ -230,6 +230,18 @@ describe('createWebFilesAPI', () => {
     });
   });
 
+  it('creates upload directories in the captured workspace even when another project is selected', async () => {
+    const { createWebFilesAPI } = await import('./files');
+    const api = createWebFilesAPI({ getDirectory: () => '/other-project' });
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ success: true, path: '/workspace/assets' }));
+    await api.createDirectory('/workspace/assets', { directory: '/workspace' });
+    expect(runtimeFetchMock).toHaveBeenLastCalledWith('/api/fs/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-opencode-directory': '/workspace' },
+      body: JSON.stringify({ path: '/workspace/assets' }),
+    });
+  });
+
   it('reports a rename onto an existing name as a conflict', async () => {
     const { createWebFilesAPI } = await import('./files');
     const api = createWebFilesAPI({ urls, getDirectory: () => '/workspace' });
