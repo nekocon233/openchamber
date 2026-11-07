@@ -13,6 +13,7 @@ import {
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -181,14 +182,14 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
   useFileTreeChanges({ root, active: visible, whileInactive: 'hold', onChanges: reloadChangedDirectory });
 
   // Reload the listing only when the upload landed in the folder still on screen.
-  const refreshUploadedDirectory = React.useCallback(async (directory: string) => {
-    if (normalizePath(directory) !== normalizePath(currentDirectoryRef.current)) return;
+  const refreshUploadedDirectory = React.useCallback(async (directories: string[]) => {
+    if (!directories.some((directory) => normalizePath(directory) === normalizePath(currentDirectoryRef.current))) return;
     await loadDirectory(currentDirectoryRef.current);
   }, [loadDirectory]);
 
-  const { canUpload, uploadingDirectory, pickFiles, uploadElements } = useFileTreeUpload({
+  const { canUpload, canPickDirectory, uploadingDirectory, pickFiles, pickDirectory, uploadElements } = useFileTreeUpload({
     root,
-    refreshDirectory: refreshUploadedDirectory,
+    refreshDirectories: refreshUploadedDirectory,
   });
   const isUploading = uploadingDirectory !== null;
 
@@ -457,7 +458,20 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
         >
           <RiRefreshLine className={cn('size-5', isLoadingDirectory && 'animate-spin')} />
         </button>
-        {canUpload ? (
+        {canUpload && canPickDirectory ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-10" disabled={isUploading}
+                aria-label={t('sidebarFilesTree.actions.uploadFilesTitle')}>
+                {isUploading ? <Spinner className="size-5" /> : <Icon name="upload-2" className="size-5" />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => pickFiles(route.directory)}>{t('sidebarFilesTree.menu.uploadFiles')}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => pickDirectory(route.directory)}>{t('sidebarFilesTree.menu.uploadFolder')}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : canUpload ? (
           <button
             type="button"
             className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"

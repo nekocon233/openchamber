@@ -12,162 +12,182 @@ import {
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Button } from '@/components/ui/button';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { isFilesystemError } from '@/lib/api/files-errors';
 import { notifyFileContentInvalidated } from '@/lib/fileContentInvalidation';
 import { useI18n } from '@/lib/i18n';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { captureRuntimeInstance, getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { droppedUploadFiles, selectedUploadFiles, uploadFileTree, type UploadDropData, type UploadEntry, type UploadSelection } from './fileTreeUpload';
 
-type UploadConflicts = {
+type UploadDestination = {
   directory: string;
-  files: File[];
-  runtimeKey: string;
   workspaceRoot: string;
+  runtimeKey: string;
+  isCurrent: () => boolean;
 };
 
-type UploadOutcome = 'uploaded' | 'conflict' | 'failed';
-
-const MAX_PARALLEL_UPLOADS = 3;
-
-const joinPath = (directory: string, name: string): string => (
-  `${directory.replace(/[\\/]+$/, '')}/${name}`
-);
-
-const getUploadName = (file: File): string | null => {
-  const name = file.name;
-  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
-    return null;
-  }
-  return name;
+type UploadConflicts = UploadDestination & {
+  entries: UploadEntry[];
 };
 
 type FileTreeUploadOptions = {
   /** Normalized workspace root the tree shows; uploads are scoped to it. */
   root: string;
-  refreshDirectory: (directory: string) => Promise<void>;
+  refreshDirectories: (directories: string[]) => Promise<void>;
 };
 
 /**
  * Uploads external files into a workspace directory for a file tree:
- * drag-and-drop callers pass files directly, picker callers open the
+ * drag-and-drop callers pass the drop data, picker callers open the
  * system file chooser (gallery/camera/files on mobile). Existing names
  * are never replaced silently; they surface in a replace-confirmation
  * dialog rendered through `uploadElements`.
  */
-export const useFileTreeUpload = ({ root, refreshDirectory }: FileTreeUploadOptions) => {
+export const useFileTreeUpload = ({ root, refreshDirectories }: FileTreeUploadOptions) => {
   const { t } = useI18n();
   const { files } = useRuntimeAPIs();
-  const uploadFile = files.uploadFile;
+  const refreshDirectoriesRef = React.useRef(refreshDirectories);
+  refreshDirectoriesRef.current = refreshDirectories;
   const [uploadingDirectory, setUploadingDirectory] = React.useState<string | null>(null);
   const [uploadConflicts, setUploadConflicts] = React.useState<UploadConflicts | null>(null);
-  const uploadingRef = React.useRef(false);
-  const rootRef = React.useRef(root);
-  rootRef.current = root;
+  const activeUploadRef = React.useRef<object | null>(null);
+  const scopeRef = React.useRef({ root });
+  if (scopeRef.current.root !== root) scopeRef.current = { root };
+  const mountedRef = React.useRef(true);
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const pickerDirectoryRef = React.useRef<string | null>(null);
+  const directoryInputRef = React.useRef<HTMLInputElement>(null);
+  const pickerDestinationRef = React.useRef<UploadDestination | null>(null);
+  const [directoryPickerSupported] = React.useState(() => (
+    'webkitdirectory' in document.createElement('input')
+  ));
+  const canPickDirectory = Boolean(files.uploadFile) && directoryPickerSupported;
+
+  const resetUpload = React.useCallback(() => {
+    activeUploadRef.current = null;
+    pickerDestinationRef.current = null;
+    setUploadingDirectory(null);
+    setUploadConflicts(null);
+  }, []);
 
   React.useEffect(() => {
-    setUploadConflicts(null);
+    resetUpload();
+  }, [root, resetUpload]);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    const unsubscribe = subscribeRuntimeEndpointChanged(({ runtimeKey, previousRuntimeKey }) => {
+      if (runtimeKey !== previousRuntimeKey) resetUpload();
+    });
+    return () => {
+      mountedRef.current = false;
+      activeUploadRef.current = null;
+      unsubscribe();
+    };
+  }, [resetUpload]);
+
+  const captureDestination = React.useCallback((directory: string): UploadDestination => {
+    const scope = scopeRef.current;
+    const sameRuntime = captureRuntimeInstance();
+    return {
+      directory,
+      workspaceRoot: root,
+      runtimeKey: getRuntimeKey(),
+      isCurrent: () => mountedRef.current && scopeRef.current === scope && sameRuntime(),
+    };
   }, [root]);
 
-  const uploadFiles = React.useCallback(async (
-    directory: string,
-    selectedFiles: File[],
+  const uploadSelection = React.useCallback(async (
+    destination: UploadDestination,
+    readSelection: () => UploadSelection | Promise<UploadSelection>,
     overwrite = false,
   ) => {
-    if (!uploadFile || selectedFiles.length === 0 || uploadingRef.current || !root) return;
-
-    const operationRoot = root;
-    const operationRuntime = getRuntimeKey();
-    uploadingRef.current = true;
-    setUploadingDirectory(directory);
-    if (overwrite) setUploadConflicts(null);
-
-    const outcomes: UploadOutcome[] = [];
-    for (let index = 0; index < selectedFiles.length; index += MAX_PARALLEL_UPLOADS) {
-      const batch = selectedFiles.slice(index, index + MAX_PARALLEL_UPLOADS);
-      const batchOutcomes = await Promise.all(batch.map(async (file): Promise<UploadOutcome> => {
-        const name = getUploadName(file);
-        if (!name || getRuntimeKey() !== operationRuntime) return 'failed';
-
-        try {
-          const result = await uploadFile(joinPath(directory, name), file, {
-            directory: operationRoot,
-            overwrite,
-          });
-          return result.success ? 'uploaded' : 'failed';
-        } catch (error) {
-          if (!overwrite && isFilesystemError(error) && error.reason === 'already-exists') {
-            return 'conflict';
-          }
-          return 'failed';
-        }
-      }));
-      outcomes.push(...batchOutcomes);
-    }
-
-    const uploadedCount = outcomes.filter((outcome) => outcome === 'uploaded').length;
-    const failedCount = outcomes.filter((outcome) => outcome === 'failed').length;
-    const conflictingFiles = selectedFiles.filter((_, index) => outcomes[index] === 'conflict');
-    const uploadedPaths = selectedFiles.flatMap((file, index) => {
-      const name = getUploadName(file);
-      return outcomes[index] === 'uploaded' && name ? [joinPath(directory, name)] : [];
-    });
-    const isCurrentDestination = rootRef.current === operationRoot && getRuntimeKey() === operationRuntime;
-
+    if (!files.uploadFile || !destination.workspaceRoot || activeUploadRef.current || !destination.isCurrent()) return;
+    const operation = {};
+    activeUploadRef.current = operation;
+    setUploadingDirectory(destination.directory);
+    setUploadConflicts(null);
     try {
-      if (uploadedPaths.length > 0) {
-        notifyFileContentInvalidated({ runtimeKey: operationRuntime, paths: uploadedPaths });
+      const selection = await readSelection();
+      if (!destination.isCurrent()) return;
+      if (selection.entries.length === 0 && selection.failures.length === 0) {
+        toast.error(t('sidebarFilesTree.toast.noUploadEntries'));
+        return;
       }
-      if (uploadedCount > 0 && isCurrentDestination) {
-        await refreshDirectory(directory);
+      const result = await uploadFileTree({
+        files,
+        directory: destination.directory,
+        workspaceRoot: destination.workspaceRoot,
+        selection,
+        overwrite,
+        isCurrent: destination.isCurrent,
+      });
+      if (result.uploadedPaths.length > 0) {
+        notifyFileContentInvalidated({ runtimeKey: destination.runtimeKey, paths: result.uploadedPaths });
       }
-      if (uploadedCount > 0) {
-        toast.success(t(conflictingFiles.length > 0
+      if (!destination.isCurrent()) return;
+      if (result.changedDirectories.length > 0) {
+        await refreshDirectoriesRef.current(result.changedDirectories).catch(() => undefined);
+      }
+      if (!destination.isCurrent()) return;
+      const uploadedOnlyDirectories = result.changedDirectories.length > 0 && result.failures.length === 0
+        && selection.entries.every((entry) => entry.kind === 'directory');
+      if (result.uploadedPaths.length > 0 || uploadedOnlyDirectories) {
+        toast.success(t(result.conflicts.length > 0
           ? 'sidebarFilesTree.toast.uploadedWithoutConflicts'
           : 'sidebarFilesTree.toast.uploaded'));
       }
-      if (failedCount > 0) {
-        toast.error(t('sidebarFilesTree.toast.uploadFailed'));
+      if (result.failures.length > 0) {
+        toast.error(t('sidebarFilesTree.toast.uploadFailed'), { description: result.failures.filter(Boolean).slice(0, 5).join('\n') });
       }
-      if (conflictingFiles.length > 0 && isCurrentDestination) {
-        setUploadConflicts({
-          directory,
-          files: conflictingFiles,
-          runtimeKey: operationRuntime,
-          workspaceRoot: operationRoot,
-        });
+      if (result.conflicts.length > 0) {
+        setUploadConflicts({ ...destination, entries: result.conflicts });
       }
+    } catch {
+      if (destination.isCurrent()) toast.error(t('sidebarFilesTree.toast.uploadFailed'));
     } finally {
-      uploadingRef.current = false;
-      setUploadingDirectory(null);
+      if (mountedRef.current && activeUploadRef.current === operation) {
+        activeUploadRef.current = null;
+        setUploadingDirectory(null);
+      }
     }
-  }, [refreshDirectory, root, t, uploadFile]);
+  }, [files, t]);
+
+  const uploadDroppedFiles = React.useCallback((directory: string, dataTransfer: UploadDropData) => {
+    const destination = captureDestination(directory);
+    return uploadSelection(destination, () => droppedUploadFiles(dataTransfer, destination.isCurrent));
+  }, [captureDestination, uploadSelection]);
 
   const pickFiles = React.useCallback((directory: string) => {
     const input = inputRef.current;
-    if (!input || uploadingRef.current) return;
-    pickerDirectoryRef.current = directory;
+    if (!input || activeUploadRef.current) return;
+    pickerDestinationRef.current = captureDestination(directory);
     input.value = '';
     input.click();
-  }, []);
+  }, [captureDestination]);
+
+  const pickDirectory = React.useCallback((directory: string) => {
+    const input = directoryInputRef.current;
+    if (!input || !canPickDirectory || activeUploadRef.current) return;
+    pickerDestinationRef.current = captureDestination(directory);
+    input.value = '';
+    input.click();
+  }, [canPickDirectory, captureDestination]);
 
   const handlePickerChange = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
-    const directory = pickerDirectoryRef.current;
+    const destination = pickerDestinationRef.current;
     const picked = Array.from(input.files ?? []);
-    pickerDirectoryRef.current = null;
-    if (!directory || picked.length === 0) return;
+    pickerDestinationRef.current = null;
     try {
-      await uploadFiles(directory, picked);
+      if (destination) await uploadSelection(destination, () => selectedUploadFiles(picked, input === directoryInputRef.current));
     } finally {
       // Keep the native picker selection alive while the browser reads its files.
       input.value = '';
     }
-  }, [uploadFiles]);
+  }, [uploadSelection]);
 
   const uploadElements = (
     <>
       <input ref={inputRef} type="file" multiple hidden onChange={handlePickerChange} />
+      <input ref={(input) => { directoryInputRef.current = input; if (input) input.webkitdirectory = true; }} type="file" multiple hidden onChange={handlePickerChange} />
       <Dialog open={Boolean(uploadConflicts)} onOpenChange={(open: boolean) => !open && setUploadConflicts(null)}>
         <DialogContent>
           <DialogHeader>
@@ -177,9 +197,9 @@ export const useFileTreeUpload = ({ root, refreshDirectory }: FileTreeUploadOpti
             </DialogDescription>
           </DialogHeader>
           <ScrollableOverlay outerClassName="max-h-52" className="flex flex-col gap-1 pe-2">
-            {uploadConflicts?.files.map((file, index) => (
-              <div key={`${file.name}-${file.size}-${index}`} className="truncate rounded-md bg-muted px-2 py-1 typography-meta" title={file.name}>
-                {file.name}
+            {uploadConflicts?.entries.map((entry) => (
+              <div key={entry.relativePath} dir="ltr" className="truncate rounded-md bg-muted px-2 py-1 typography-meta" title={entry.relativePath}>
+                {entry.relativePath}
               </div>
             ))}
           </ScrollableOverlay>
@@ -190,11 +210,11 @@ export const useFileTreeUpload = ({ root, refreshDirectory }: FileTreeUploadOpti
             <Button
               onClick={() => {
                 if (!uploadConflicts) return;
-                if (uploadConflicts.runtimeKey !== getRuntimeKey() || uploadConflicts.workspaceRoot !== root) {
+                if (!uploadConflicts.isCurrent()) {
                   setUploadConflicts(null);
                   return;
                 }
-                void uploadFiles(uploadConflicts.directory, uploadConflicts.files, true);
+                void uploadSelection(uploadConflicts, () => ({ entries: uploadConflicts.entries, failures: [] }), true);
               }}
               disabled={uploadingDirectory !== null}
             >
@@ -207,10 +227,12 @@ export const useFileTreeUpload = ({ root, refreshDirectory }: FileTreeUploadOpti
   );
 
   return {
-    canUpload: Boolean(uploadFile),
+    canUpload: Boolean(files.uploadFile),
+    canPickDirectory,
     uploadingDirectory,
-    uploadFiles,
+    uploadDroppedFiles,
     pickFiles,
+    pickDirectory,
     uploadElements,
   };
 };

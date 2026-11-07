@@ -28,6 +28,7 @@ import {
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { GitignoredToggleButton } from './GitignoredToggleButton';
@@ -116,17 +117,6 @@ const getMoveDragSource = (dataTransfer: DataTransfer): FileTreeEntry | null => 
 const isDropOfMoveSource = (dataTransfer: DataTransfer, root: string, source: FileTreeEntry): boolean => (
   dataTransfer.getData(INTERNAL_FILE_PATH_TYPE) === getRelativePath(root, source.path)
 );
-
-const getExternalFiles = (dataTransfer: DataTransfer): File[] => {
-  const items = Array.from(dataTransfer.items);
-  if (items.length === 0) return Array.from(dataTransfer.files);
-
-  return items.flatMap((item) => {
-    if (item.kind !== 'file' || item.webkitGetAsEntry()?.isDirectory) return [];
-    const file = item.getAsFile();
-    return file ? [file] : [];
-  });
-};
 
 const sortNodes = (items: FileNode[]) =>
   items.slice().sort((a, b) => {
@@ -284,6 +274,8 @@ interface FileRowProps {
   onSetDropTarget: (path: string | null) => void;
   onDropFiles: (directory: string, dataTransfer: DataTransfer) => void;
   onPickFiles: (directory: string) => void;
+  canPickDirectory: boolean;
+  onPickDirectory: (directory: string) => void;
   onMoveDragChange: (source: FileTreeEntry | null) => void;
   onSetMoveDropTarget: (path: string | null) => void;
   onMoveDrop: (source: FileTreeEntry, targetDirectory: string) => void;
@@ -312,6 +304,8 @@ const FileRow: React.FC<FileRowProps> = ({
   onSetDropTarget,
   onDropFiles,
   onPickFiles,
+  canPickDirectory,
+  onPickDirectory,
   onMoveDragChange,
   onSetMoveDropTarget,
   onMoveDrop,
@@ -423,6 +417,11 @@ const FileRow: React.FC<FileRowProps> = ({
           {canUploadHere && (
             <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onPickFiles(node.path); }}>
               <Icon name="upload-2" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.uploadFiles')}
+            </Item>
+          )}
+          {canUploadHere && canPickDirectory && (
+            <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onPickDirectory(node.path); }}>
+              <Icon name="upload-2" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.uploadFolder')}
             </Item>
           )}
         </>
@@ -624,6 +623,8 @@ const areFileRowPropsEqual = (prev: FileRowProps, next: FileRowProps): boolean =
   && prev.onSetDropTarget === next.onSetDropTarget
   && prev.onDropFiles === next.onDropFiles
   && prev.onPickFiles === next.onPickFiles
+  && prev.canPickDirectory === next.canPickDirectory
+  && prev.onPickDirectory === next.onPickDirectory
   && prev.onMoveDragChange === next.onMoveDragChange
   && prev.onSetMoveDropTarget === next.onSetMoveDropTarget
   && prev.onMoveDrop === next.onMoveDrop
@@ -1022,7 +1023,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
   // screen reloads now, unless it is too large to resend; a loaded one out of
   // sight (collapsed, or inside a collapsed folder) is only forgotten, so
   // expanding it reads it again.
-  const applyFileTreeChanges = React.useCallback(({ directories }: FileTreeChangeBatch) => {
+  const applyFileTreeChanges = React.useCallback(({ directories }: FileTreeChangeBatch, force = false) => {
     if (!root) return;
     const expanded = new Set(
       (useFilesViewTabsStore.getState().byRoot[root]?.expandedPaths ?? []).map((path) => normalizePath(path)),
@@ -1047,15 +1048,15 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
     for (const changed of directories ?? loadedDirsRef.current) {
       const loaded = nearestLoaded(normalizePath(changed));
       if (!loaded) continue;
-      (isOnScreen(loaded) ? toLoad : toForget).add(loaded);
+      (visibleRef.current && isOnScreen(loaded) ? toLoad : toForget).add(loaded);
     }
     if (toForget.size > 0) {
       loadedDirsRef.current = new Set([...loadedDirsRef.current].filter((dir) => !toForget.has(dir)));
     }
     const queue = [...toLoad].filter(
-      (dir) => (entryCountByDirRef.current.get(dir) ?? 0) <= AUTO_RELIST_MAX_ENTRIES,
+      (dir) => force || (entryCountByDirRef.current.get(dir) ?? 0) <= AUTO_RELIST_MAX_ENTRIES,
     );
-    void (async () => {
+    return (async () => {
       for (let i = 0; i < queue.length; i += 3) {
         await Promise.all(queue.slice(i, i + 3).map((dir) => loadDirectory(dir, undefined, true)));
       }
@@ -1249,22 +1250,26 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
     }
   }, [loadDirectory, root, toggleExpandedPath, toggleWithMotion]);
 
+  const refreshUploadedDirectories = React.useCallback(async (directories: string[]) => {
+    await applyFileTreeChanges({ directories }, true);
+  }, [applyFileTreeChanges]);
+
   const {
     canUpload,
+    canPickDirectory,
     uploadingDirectory,
-    uploadFiles,
+    uploadDroppedFiles,
     pickFiles,
+    pickDirectory,
     uploadElements,
-  } = useFileTreeUpload({ root, refreshDirectory });
+  } = useFileTreeUpload({ root, refreshDirectories: refreshUploadedDirectories });
   const isUploading = uploadingDirectory !== null;
   const dropIndicatorTarget = uploadingDirectory ?? dropTarget;
 
   const handleDropFiles = React.useCallback((directory: string, dataTransfer: DataTransfer) => {
-    const droppedFiles = getExternalFiles(dataTransfer);
-    if (droppedFiles.length === 0) return;
     setDropTarget(null);
-    void uploadFiles(directory, droppedFiles);
-  }, [uploadFiles]);
+    void uploadDroppedFiles(directory, dataTransfer);
+  }, [uploadDroppedFiles]);
 
   const handleMoveDragChange = React.useCallback((source: FileTreeEntry | null) => {
     setFileTreeDragSource(source);
@@ -1329,8 +1334,12 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
       event.dataTransfer.dropEffect = 'move';
       return;
     }
-    if (!canUpload || isUploading || !root || !hasExternalFiles(event.dataTransfer)) return;
+    if (!canUpload || !root || !hasExternalFiles(event.dataTransfer)) return;
     event.preventDefault();
+    if (isUploading) {
+      event.dataTransfer.dropEffect = 'none';
+      return;
+    }
     event.dataTransfer.dropEffect = 'copy';
     setDropTarget(root);
   }, [canUpload, getRootMoveTarget, isUploading, root]);
@@ -1354,8 +1363,10 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
       if (target && isDropOfMoveSource(event.dataTransfer, root, moveSource)) handleMoveDrop(moveSource, target);
       return;
     }
-    if (!canUpload || isUploading || !root || !hasExternalFiles(event.dataTransfer)) return;
+    if (!canUpload || !root || !hasExternalFiles(event.dataTransfer)) return;
     event.preventDefault();
+    setDropTarget(null);
+    if (isUploading) return;
     handleDropFiles(root, event.dataTransfer);
   }, [canUpload, getRootMoveTarget, handleDropFiles, handleMoveDrop, isUploading, root]);
 
@@ -1644,6 +1655,8 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
         onSetDropTarget={setDropTarget}
         onDropFiles={handleDropFiles}
         onPickFiles={pickFiles}
+        canPickDirectory={canPickDirectory}
+        onPickDirectory={pickDirectory}
         onMoveDragChange={handleMoveDragChange}
         onSetMoveDropTarget={setMoveDropTarget}
         onMoveDrop={handleMoveDrop}
@@ -1730,7 +1743,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
                       className={toolbarButtonClassName}
                       aria-label={t('sidebarFilesTree.actions.addMenuTitle')}
                     >
-                      <Icon name={isUploading ? 'loader-4' : 'add'} className={cn('h-4 w-4', isUploading && 'animate-spin')} />
+                      {isUploading ? <Spinner className="h-4 w-4" /> : <Icon name="add" className="h-4 w-4" />}
                     </Button>
                   </DropdownMenuTrigger>
                 </span>
@@ -1751,6 +1764,11 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
               {canUpload ? (
                 <DropdownMenuItem disabled={!root || isUploading} onClick={() => pickFiles(root)}>
                   <Icon name="upload-2" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.uploadFiles')}
+                </DropdownMenuItem>
+              ) : null}
+              {canPickDirectory ? (
+                <DropdownMenuItem disabled={!root || isUploading} onClick={() => pickDirectory(root)}>
+                  <Icon name="upload-2" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.uploadFolder')}
                 </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
@@ -1907,7 +1925,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: st
         </ScrollableOverlay>
         {dropIndicatorTarget ? (
           <div className="pointer-events-none absolute inset-s-2 inset-e-2 top-2 z-50 flex items-center gap-2 rounded-md border border-primary bg-background/95 px-2 py-1.5 shadow-sm">
-            <Icon name={isUploading ? 'loader-4' : 'folder-received'} className={cn('size-4 flex-shrink-0', isUploading && 'animate-spin')} />
+            {isUploading ? <Spinner /> : <Icon name="folder-received" className="size-4 flex-shrink-0" />}
             <span className="min-w-0 truncate typography-meta" title={dropTargetLabel}>
               {t(isUploading ? 'sidebarFilesTree.drop.uploading' : 'sidebarFilesTree.drop.target', { path: dropTargetLabel })}
             </span>
