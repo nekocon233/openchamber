@@ -16,7 +16,7 @@ const draftSchema = z.object({ base: z.string(), value: z.string(), submissionId
 const pendingInputSchema = z.object({ id: z.string().min(1), value: z.string() });
 export type PendingWorkspaceInput = z.infer<typeof pendingInputSchema>;
 const pendingInputId = () => Array.from(crypto.getRandomValues(new Uint32Array(4)), part => part.toString(16)).join('-');
-export type WorkspaceInputDraft = z.infer<typeof draftSchema>;
+type WorkspaceInputDraft = z.infer<typeof draftSchema>;
 
 interface WorkspaceDraftStore {
   drafts: Record<string, WorkspaceInputDraft>;

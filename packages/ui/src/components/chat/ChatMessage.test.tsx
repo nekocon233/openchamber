@@ -5,6 +5,9 @@ import type { Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import type { Session } from '@/lib/opencode/model';
 import type { ThemeContextValue } from '@/contexts/theme-system-context';
+import { MessageSliceContext } from './message/messageSliceContext';
+import { projectTurnRecords } from './lib/turns/projectTurnRecords';
+import { buildTimelineRows, type MessageSlice } from './lib/turns/timelineRows';
 
 const browser = new Window({ url: 'http://localhost/' });
 const globals = {
@@ -109,16 +112,18 @@ afterAll(async () => {
   }
 });
 
-const render = (currentMessage = message) => act(async () => root.render(
+const render = (currentMessage = message, slice: MessageSlice | null = null) => act(async () => root.render(
   <RuntimeAPIContext.Provider value={apis}>
     <ThemeSystemContext.Provider value={themeContext}>
       <SyncProvider sdk={sdk} directory="/repo">
         <I18nProvider>
           <React.Profiler id="message" onRender={() => { commits += 1; }}>
+            <MessageSliceContext.Provider value={slice}>
             <ChatMessage message={currentMessage} turnGroupingContext={currentMessage.info.role === 'assistant' ? {
               turnId: 'turn-1', isFirstAssistantInTurn: true, isLastAssistantInTurn: true,
               isLatestTurn: true, hasTools: false, hasReasoning: false, isWorking: false,
             } : undefined} />
+            </MessageSliceContext.Provider>
           </React.Profiler>
         </I18nProvider>
       </SyncProvider>
@@ -171,6 +176,32 @@ const assistantMessage = (variant: string | undefined, modelID = 'claude-opus-5-
     finish: 'stop', time: { created: 1, completed: 2 },
   },
   parts: [{ id: 'assistant-part', sessionID: sessionId, messageID: 'assistant-1', type: 'text', text: 'Saved response' }],
+});
+
+test('renders each part once across timeline slices and keeps the footer on the last row', async () => {
+  const assistant = assistantMessage('max');
+  assistant.parts = Array.from({ length: 30 }, (_, index) => ({
+    id: `text-${index}`, messageID: assistant.info.id, sessionID: sessionId,
+    type: 'text', text: `Unique paragraph ${index}.`, time: { start: 1, end: 2 },
+  }));
+  const turn = projectTurnRecords([message, assistant]).turns[0];
+  const rows = buildTimelineRows([{ kind: 'turn', key: turn.turnId, turn, isLastTurn: true }], {
+    collapsedActivity: false, expandedTurns: new Map(), showReasoningTraces: true,
+  }, []).filter((row) => row.kind === 'turn-message');
+  expect(rows.length).toBe(2);
+
+  await render(assistant, rows[0].slice);
+  expect(container.querySelectorAll('[data-message-text-export-source]').length).toBe(24);
+  expect(container.querySelector('[data-fact-model]')).toBeNull();
+  expect(container.querySelector('[id="message-assistant-1"]')).not.toBeNull();
+  expect(container.querySelector('[data-message-continues]')).not.toBeNull();
+
+  await render(assistant, rows[1].slice);
+  expect(container.querySelectorAll('[data-message-text-export-source]').length).toBe(6);
+  expect(container.querySelectorAll('[data-fact-model]').length).toBe(1);
+  expect(container.querySelector('[id="message-assistant-1"]')).toBeNull();
+  expect(container.querySelector('[data-message-slice]')?.getAttribute('data-message-slice')).toBe('text-24:0');
+  expect(container.querySelector('[data-message-continues]')).toBeNull();
 });
 
 test('shows the reply model effort over the submitted effort without a catalog', async () => {
