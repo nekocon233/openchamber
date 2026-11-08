@@ -12,7 +12,9 @@ import type { ToolPart as ToolPartType } from '@/lib/opencode/model';
 import type { StreamPhase, ToolPopupContent, AgentMentionInfo } from './types';
 import type { TurnChangedFile, TurnGroupingContext } from '../lib/turns/types';
 import { cn } from '@/lib/utils';
+import { isInvisibleText } from '@/lib/invisibleText';
 import { isEmptyTextPart, extractTextContent } from './partUtils';
+import { MessageSliceContext, sliceMessageParts } from './messageSliceContext';
 import { FadeInOnReveal } from './FadeInOnReveal';
 import { Button } from '@/components/ui/button';
 import { ErrorResponseDetails } from '@/components/chat/ErrorResponseDetails';
@@ -1156,6 +1158,8 @@ const AssistantMessageBody = React.memo(({
     extraActions,
 }: Omit<MessageBodyProps, 'isUser'>) => {
     const { t, locale } = useI18n();
+    const messageSlice = React.useContext(MessageSliceContext);
+    const isLastSlice = !messageSlice?.to;
     const chatSurfaceMode = useChatSurfaceMode();
     const streamPhase = _streamPhase;
     void _allowAnimation;
@@ -1175,6 +1179,7 @@ const AssistantMessageBody = React.memo(({
     const visibleParts = React.useMemo(() => {
         return parts.filter((part) => !isEmptyTextPart(part));
     }, [parts]);
+    const slicedParts = React.useMemo(() => sliceMessageParts(visibleParts, messageSlice), [visibleParts, messageSlice]);
 
     const toolParts = React.useMemo(() => {
         return visibleParts.filter((part): part is ToolPartType => part.type === 'tool');
@@ -1586,14 +1591,9 @@ const AssistantMessageBody = React.memo(({
         [messageId, t, vscodeApi]
     );
 
-    // The turn footer saves the whole reply: the text the turn's earlier steps
-    // wrote, then every text part of this message. A reply of one text part
-    // keeps the copy of what the chat rendered.
-    const earlierAssistantText = turnGroupingContext?.earlierAssistantText;
-    const shareTurnAsImage = React.useCallback(
-        async (requestedSourceElement?: HTMLElement | null) => {
-            const segments = [...(earlierAssistantText ?? []), ...assistantTextSegments(assistantTextParts)];
-            if (segments.length <= 1) {
+    const shareTextAsImage = React.useCallback(
+        async (segments: readonly string[], requestedSourceElement?: HTMLElement | null) => {
+            if (segments.length <= 1 && !messageSlice) {
                 await shareMessageAsImage(requestedSourceElement);
                 return;
             }
@@ -1608,13 +1608,25 @@ const AssistantMessageBody = React.memo(({
             }
             await shareMessageAsImage(turnSource);
         },
-        [assistantTextParts, earlierAssistantText, shareMessageAsImage, t]
+        [messageSlice, shareMessageAsImage, t]
+    );
+    const shareMessageTextAsImage = React.useCallback(
+        (source?: HTMLElement | null) => shareTextAsImage(assistantTextSegments(assistantTextParts), source),
+        [assistantTextParts, shareTextAsImage],
+    );
+    // A turn includes the text of its earlier steps even when those rows are unmounted.
+    const earlierAssistantText = turnGroupingContext?.earlierAssistantText;
+    const shareTurnAsImage = React.useCallback(
+        (source?: HTMLElement | null) => shareTextAsImage([
+            ...(earlierAssistantText ?? []), ...assistantTextSegments(assistantTextParts),
+        ], source),
+        [assistantTextParts, earlierAssistantText, shareTextAsImage],
     );
 
-    const showErrorMessage = Boolean(errorMessage);
+    const showErrorMessage = isLastSlice && Boolean(errorMessage);
     const isPeekSurface = chatSurfaceMode === 'peek';
-    const shouldShowMessageActions = hasCopyableText && !isPeekSurface;
-    const shouldShowTurnFooter = isLastAssistantInTurn && hasTextContent && (hasStopFinish || Boolean(errorMessage)) && !isPeekSurface;
+    const shouldShowMessageActions = isLastSlice && hasCopyableText && !isPeekSurface;
+    const shouldShowTurnFooter = isLastSlice && isLastAssistantInTurn && hasTextContent && (hasStopFinish || Boolean(errorMessage)) && !isPeekSurface;
     const shouldShowStandaloneMessageActions = showSplitAssistantMessageActions && shouldShowMessageActions && !shouldShowTurnFooter;
 
     const messageActionButtons = React.useMemo(() => (
@@ -1623,13 +1635,13 @@ const AssistantMessageBody = React.memo(({
             isTouchContext={isTouchContext}
             onCopyMessage={onCopyMessage}
             onCopyLink={onCopyLink}
-            onShareImage={shareMessageAsImage}
+            onShareImage={shareMessageTextAsImage}
             ttsText={assistantPlanText}
             ttsReadingKey={messageId}
             reviewTransferAction={reviewTransferAction}
             extraActions={extraActions}
         />
-    ), [assistantPlanText, extraActions, hasCopyableText, isTouchContext, messageId, onCopyLink, onCopyMessage, reviewTransferAction, shareMessageAsImage]);
+    ), [assistantPlanText, extraActions, hasCopyableText, isTouchContext, messageId, onCopyLink, onCopyMessage, reviewTransferAction, shareMessageTextAsImage]);
 
     // The turn footer copies the whole turn when the turn has more than this message.
     const onCopyFooter = onCopyTurn ?? onCopyMessage;
@@ -1640,8 +1652,8 @@ const AssistantMessageBody = React.memo(({
         }
 
         let lastIndex = -1;
-        for (let index = 0; index < visibleParts.length; index += 1) {
-            const part = visibleParts[index];
+        for (let index = 0; index < slicedParts.length; index += 1) {
+            const part = slicedParts[index];
             if (!part || part.type !== 'text') {
                 continue;
             }
@@ -1649,7 +1661,7 @@ const AssistantMessageBody = React.memo(({
         }
 
         return lastIndex;
-    }, [shouldShowStandaloneMessageActions, visibleParts]);
+    }, [shouldShowStandaloneMessageActions, slicedParts]);
 
     const shouldRenderStandaloneActionsAfterContent = shouldShowStandaloneMessageActions && lastRenderableTextPartIndex < 0;
 
@@ -1658,7 +1670,6 @@ const AssistantMessageBody = React.memo(({
         const activityRendered: React.ReactNode[] = [];
         let rendered = answerRendered;
         const splitLiveActivity = liveFinalActivity?.messageId === messageId && hasStopFinish;
-        let hasRenderedAnswerText = false;
         const isFinalLiveAnswer = isLastAssistantInTurn && hasStopFinish;
         const hasEarlierVisibleActivity = isFinalLiveAnswer && Boolean(turnGroupingContext?.activityParts?.some((activity) => {
             if (activity.messageId === messageId) {
@@ -1669,6 +1680,13 @@ const AssistantMessageBody = React.memo(({
             }
             return showReasoningTraces && !isEmptyTextPart(activity.part);
         }));
+        const hasEarlierSliceActivity = messageSlice?.from && visibleParts
+            .slice(0, visibleParts.findIndex((part) => part.id === assistantTextParts[0]?.id))
+            .some((part) => {
+                if (hoistedPlan?.has(part.id) || hoistedPages?.has(part.id)) return false;
+                if (part.type === 'tool') return isToolRowShown(part) && shouldShowTool(part);
+                return part.type === 'reasoning' && showReasoningTraces && !isInvisibleText(part.text);
+            });
 
         // Flat rendering: iterate parts in natural order.
         // Group consecutive static tools (read, grep, glob, etc.) into compact rows.
@@ -1678,8 +1696,8 @@ const AssistantMessageBody = React.memo(({
         // the first rows of the message it cuts into are left out here.
         let rowsToSkip = activityRowSkip?.messageId === messageId ? activityRowSkip.rows : 0;
         let i = 0;
-        while (i < visibleParts.length) {
-            const part = visibleParts[i];
+        while (i < slicedParts.length) {
+            const part = slicedParts[i];
             if (hoistedPlan?.has(part.id)) {
                 i++;
                 continue;
@@ -1692,7 +1710,9 @@ const AssistantMessageBody = React.memo(({
             rendered = splitLiveActivity && part.type !== 'text' ? activityRendered : answerRendered;
 
             if (part.type === 'text') {
-                if (isFinalLiveAnswer && !hasRenderedAnswerText && (rendered.length > 0 || activityRendered.length > 0 || hasEarlierVisibleActivity || turnGroupingContext?.earlierAssistantText)) {
+                const startsAnswer = part.id === assistantTextParts[0]?.id
+                    && !(messageSlice?.from?.partId === part.id && messageSlice.from.offset > 0);
+                if (isFinalLiveAnswer && startsAnswer && (rendered.length > 0 || activityRendered.length > 0 || hasEarlierSliceActivity || hasEarlierVisibleActivity || turnGroupingContext?.earlierAssistantText)) {
                     rendered.push(
                         <div
                             key={`final-answer-divider-${messageId}`}
@@ -1701,14 +1721,15 @@ const AssistantMessageBody = React.memo(({
                         />
                     );
                 }
-                if (splitLiveActivity && !hasRenderedAnswerText) {
+                if (splitLiveActivity && startsAnswer) {
                     for (const pagePart of liveFinalActivity?.pages ?? []) {
                         rendered.push(<ShownPartCard key={`page-${pagePart.id}`} part={pagePart} />);
                     }
                 }
-                hasRenderedAnswerText = true;
                 rendered.push(
-                    <div key={`assistant-text-${messageId}-${i}`} ref={messageTextContentRef} data-message-text-export-source="true">
+                    <div key={`assistant-text-${messageId}-${i}`} ref={messageTextContentRef} data-message-text-export-source="true"
+                        data-answer-part={`${messageId}:${part.id}`}
+                        data-answer-continues={messageSlice?.from?.partId === part.id && messageSlice.from.offset > 0 ? '' : undefined}>
                         <AssistantTextPart
                             part={part}
                             sessionId={sessionId}
@@ -1732,7 +1753,7 @@ const AssistantMessageBody = React.memo(({
             }
 
             if (part.type === 'reasoning') {
-                if (showReasoningTraces) {
+                if (showReasoningTraces && (part.time?.end === undefined || !isInvisibleText(part.text))) {
                     if (!collapsibleThinkingBlocks) {
                         // Non-collapsible mode: render thinking blocks as plain text inline.
                         rendered.push(
@@ -1858,6 +1879,7 @@ const AssistantMessageBody = React.memo(({
         return answerRendered;
     }, [
         activityRowSkip,
+        assistantTextParts,
         alwaysShowMessageActions,
         hoistedPages,
         hoistedPlan,
@@ -1871,6 +1893,7 @@ const AssistantMessageBody = React.memo(({
         hasStopFinish,
         lastRenderableTextPartIndex,
         messageId,
+        messageSlice,
         messageActionButtons,
         sessionId,
         onShowPopup,
@@ -1881,6 +1904,7 @@ const AssistantMessageBody = React.memo(({
         showReasoningTraces,
         turnGroupingContext,
         visibleParts,
+        slicedParts,
     ]);
 
     const turnDurationText = React.useMemo(() => {
@@ -2223,7 +2247,7 @@ const AssistantMessageBody = React.memo(({
                         </FadeInOnReveal>
                     )}
                 </div>
-                <MessageFilesDisplay files={parts} onShowPopup={onShowPopup} />
+                <MessageFilesDisplay files={slicedParts} onShowPopup={onShowPopup} />
                 {shouldRenderStandaloneActionsAfterContent && (
                     <div className={INLINE_MESSAGE_ACTIONS_CLASS_NAME} data-message-actions="true">
                         <div className="flex items-center gap-1.5" data-message-action-group="true">

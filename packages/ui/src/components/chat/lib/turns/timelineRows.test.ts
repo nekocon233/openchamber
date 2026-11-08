@@ -5,6 +5,7 @@ import { projectTurnRecords } from './projectTurnRecords';
 import { buildTimelineRows, type TimelineRowsOptions } from './timelineRows';
 import type { TimelineEntry } from './timelineEntries';
 import type { ChatMessageEntry } from './types';
+import { sliceMessageParts } from '../../message/messageSliceContext';
 
 const paragraph = (index: number) => `Paragraph ${index} explains one more step of the call sequence in plain words, long enough to wrap.\n\n`;
 const longAnswer = Array.from({ length: 60 }, (_, index) => paragraph(index)).join('');
@@ -120,5 +121,47 @@ describe('buildTimelineRows', () => {
         expect(buildTimelineRows([entry], summary, first)).toBe(first);
         const opened = buildTimelineRows([entry], { ...summary, collapsedActivity: true }, first);
         expect(opened[0]).toBe(first[0]);
+    });
+});
+
+describe('message slice content', () => {
+    test('joins text cuts back into the complete answer and keeps tools once', () => {
+        const parts = [readPart, textPart('long', longAnswer), textPart('last', 'The last paragraph.')];
+        const rows = buildTimelineRows([turnEntry([assistant('answer', parts, 'stop')])], summary, [])
+            .filter((row) => row.kind === 'turn-message');
+        expect(rows.length).toBeGreaterThan(1);
+        const drawn = rows.flatMap((row) => sliceMessageParts(parts, row.slice));
+        expect(drawn.filter((part) => part.type === 'tool').map((part) => part.id)).toEqual(['read']);
+        expect(drawn.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''))
+            .toBe(`${longAnswer}The last paragraph.`);
+        expect(parts[1]).toEqual(textPart('long', longAnswer));
+    });
+
+    test('draws a 236-part native reply once across its ten rows', () => {
+        const parts: Part[] = Array.from({ length: 236 }, (_, index) => ({ ...readPart, id: `call-${index}`, callID: `call-${index}` }));
+        const rows = buildTimelineRows([turnEntry([assistant('answer', parts, 'stop')])], summary, [])
+            .filter((row) => row.kind === 'turn-message');
+        expect(rows.length).toBe(10);
+        const drawn = rows.flatMap((row) => sliceMessageParts(parts, row.slice));
+        expect(drawn.map((part) => part.id)).toEqual(parts.map((part) => part.id));
+    });
+
+    test('keeps streaming text whole until completion introduces text cuts', () => {
+        const streaming = [textPart('long', longAnswer, false)];
+        const liveRows = buildTimelineRows([turnEntry([assistant('answer', streaming)])], summary, [])
+            .filter((row) => row.kind === 'turn-message');
+        expect(liveRows.length).toBe(1);
+        expect(sliceMessageParts(streaming, liveRows[0].slice)).toBe(streaming);
+        const completed = [textPart('long', longAnswer)];
+        const finishedRows = buildTimelineRows([turnEntry([assistant('answer', completed, 'stop')])], summary, [])
+            .filter((row) => row.kind === 'turn-message');
+        expect(finishedRows.length).toBeGreaterThan(1);
+        expect(finishedRows.flatMap((row) => sliceMessageParts(completed, row.slice))
+            .map((part) => part.type === 'text' ? part.text : '').join('')).toBe(longAnswer);
+    });
+
+    test('does not draw the whole message when a stale row names an absent boundary', () => {
+        expect(sliceMessageParts([readPart], { from: { partId: 'missing', offset: 0 }, index: 1, count: 2 })).toEqual([]);
+        expect(sliceMessageParts([readPart], { to: { partId: 'missing', offset: 0 }, index: 0, count: 2 })).toEqual([]);
     });
 });

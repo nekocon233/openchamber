@@ -23,6 +23,7 @@ import type { AgentMentionInfo } from './message/types';
 import type { StreamPhase, ToolPopupContent } from './message/types';
 import { deriveMessageRole } from './message/messageRole';
 import { filterVisibleParts, normalizeParts } from './message/partUtils';
+import { MessageSliceContext } from './message/messageSliceContext';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { isHiddenUserMessage } from './message/hiddenUserMessage';
 import { flattenAssistantTextParts, flattenUserTextParts } from '@/lib/messages/messageText';
@@ -129,6 +130,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     reviewTransferDirection = null,
 }) => {
     const { t } = useI18n();
+    const messageSlice = React.useContext(MessageSliceContext);
+    const isFirstSlice = !messageSlice?.from;
+    const isLastSlice = !messageSlice?.to;
     const actionSupport = useGlobalSessionsStore(
         useShallow((state) => sessionActionSupport(message.info.sessionID, state.entityById.get(message.info.sessionID)?.metadata))
     );
@@ -652,10 +656,12 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                 className={cn(
                     'group w-full',
                     isUser ? (isMobile ? 'pt-2' : 'pt-4') : 'pt-0',
-                    isUser ? 'pb-0' : (isFollowedByAssistant || nextIsHiddenUserMessage) ? 'pb-0' : 'pb-2'
+                    isUser ? 'pb-0' : (!isLastSlice || isFollowedByAssistant || nextIsHiddenUserMessage) ? 'pb-0' : 'pb-2'
                 )}
-                id={`message-${message.info.id}`}
+                id={isFirstSlice ? `message-${message.info.id}` : undefined}
                 data-message-id={message.info.id}
+                data-message-slice={messageSlice?.from ? `${messageSlice.from.partId}:${messageSlice.from.offset}` : undefined}
+                data-message-continues={messageSlice?.to ? '' : undefined}
                 ref={messageContainerRef}
             >
                 <div className="chat-message-column relative">
@@ -779,7 +785,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                 onShowPopup={handleShowPopup}
                                 streamPhase={streamPhase}
                                 allowAnimation={allowAnimation}
-                                shouldShowHeader={shouldShowHeader}
+                                shouldShowHeader={shouldShowHeader && isFirstSlice}
                                 hasTextContent={hasTextContent}
                                 onCopyMessage={handleCopyMessage}
                                 onCopyTurn={earlierAssistantText ? handleCopyTurn : undefined}
