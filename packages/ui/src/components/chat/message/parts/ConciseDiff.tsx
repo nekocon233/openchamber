@@ -48,8 +48,8 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?:
     const { t } = useI18n();
     const [unfolded, setUnfolded] = React.useState(false);
     const parsed = React.useMemo(
-        () => files.map((file) => ({ ...file, rows: parseConciseDiffRows(file.patch) })).filter((file) => file.rows.length > 0),
-        [files],
+        () => files.map((file) => ({ ...file, rows: parseConciseDiffRows(file.patch, !showLineNumbers) })).filter((file) => file.rows.length > 0),
+        [files, showLineNumbers],
     );
     const totalRows = parsed.reduce((sum, file) => sum + file.rows.length, 0);
     if (totalRows === 0) return null;

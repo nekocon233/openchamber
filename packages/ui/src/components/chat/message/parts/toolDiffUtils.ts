@@ -29,7 +29,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 };
 
 const normalizePatchText = (patch: string): string => {
-    return patch.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    const normalized = patch.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Spaces after a hunk prefix belong to the recorded file contents.
+    return /\S/.test(normalized) ? normalized.replace(/^\n+|\n+$/g, '') : '';
 };
 
 const normalizeBareUnifiedHeaderLines = (patch: string): string => {
@@ -435,7 +437,7 @@ const getPatchChunks = (patch: string): string[] => {
 
     return patch
         .split(isGitDiff ? GIT_DIFF_FILE_BREAK_PATTERN : UNIFIED_DIFF_FILE_BREAK_PATTERN)
-        .map((chunk) => chunk.trim())
+        .map(normalizePatchText)
         .filter((chunk) => chunk.length > 0);
 };
 

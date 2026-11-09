@@ -140,11 +140,13 @@ export const ConciseToolHeader: React.FC<ConciseToolHeaderProps> = ({
                     </MinDurationShineText>
                     {argument ? (
                         <span
-                            className={cn('min-w-0 truncate', DETAIL_CLASS)}
+                            className={cn('flex min-w-0 items-center', DETAIL_CLASS)}
                             style={{ color: 'var(--tools-description)' }}
                             title={argumentTitle}
                         >
-                            ({argument})
+                            <span className="shrink-0">(</span>
+                            <span className="min-w-0 flex-1 truncate">{argument}</span>
+                            <span className="shrink-0">)</span>
                         </span>
                     ) : null}
                 </span>
