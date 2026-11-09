@@ -436,6 +436,14 @@ write remains an error and grants no file access. Ordinary assistant prose,
 truncated arguments, native answers and incomplete/error/aborted turns never
 create approvals. Child sessions remain read-only.
 
+### Why unanswered native questions accept blank numbered answers
+
+AGY 1.5.2 can save an unanswered headless question as `A1: ` instead of
+`A1: User Skipped`. Both formats recover application questions and plans only
+when every expected answer is present, numbered in order and unanswered.
+Successful application completion and complete native history remain required;
+recovery opens a decision and never approves implementation.
+
 ### Why plan marker cleanup follows identity generation
 
 Application plan text omits an optional final `</openchamber-plan-v1>` line,
