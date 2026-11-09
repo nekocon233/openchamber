@@ -266,7 +266,9 @@ current projection; completed-turn records are merged on read.
 `projector.js` shares deterministic native step identities between live frames
 and history. `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC` and `CHECKPOINT` map to
 user, assistant, tool and compaction records. Tool results join their planner
-step by index. Instructions injected by OpenChamber are hidden in both paths.
+step by index. Instructions injected by OpenChamber are hidden in both paths,
+including when `agy` truncates a large `USER_INPUT` step across its closing
+`</openchamber-instructions>` or `</USER_REQUEST>` tags.
 Nonempty `PLANNER_RESPONSE.thinking` becomes a reasoning part before text and
 tools, with a stable native-step ID. A `thinking` truncation marker survives as
 `nativeOutputTruncated`. The installed CLI's `stream-json` agent responses

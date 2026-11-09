@@ -148,9 +148,17 @@ export const antigravityPromptText = (parts) => {
  * @param {string} [expectedPlanFingerprint] Only supplied for a registered Plan send.
  */
 export const antigravityVisiblePromptText = (text, expectedPlanFingerprint) => {
-  const request = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(text)?.[1] ?? text;
-  const visible = request
-    .replace(/<openchamber-instructions>[\s\S]*?<\/openchamber-instructions>/g, '')
+  const closed = /^\s*<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>\s*(?:<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE)\b[\s\S]*)?$/.exec(text);
+  const unclosed = closed ? null : /^\s*<USER_REQUEST>\s*([\s\S]*)$/.exec(text)?.[1];
+  // agy truncates oversized USER_INPUT steps in both preview and full logs,
+  // which can remove <openchamber-instructions>, </openchamber-instructions> or </USER_REQUEST>.
+  const request = (closed ? closed[1] : unclosed ?? text)
+    .replace(/<openchamber-instructions>[\s\S]*?(?:<\/openchamber-instructions>|$)/g, '');
+  const visible = (closed
+    ? request.replace(/(?:\r?\n)?<truncated \d+ bytes>\r?\n(?:(?!<truncated \d+ bytes>)[\s\S])*?<\/openchamber-instructions>\s*$/, '')
+    : unclosed !== null && unclosed !== undefined && !unclosed.includes(INSTRUCTIONS_OPEN)
+      ? request.replace(/(?:\r?\n)?<truncated \d+ bytes>\r?\n(?:(?!<truncated \d+ bytes>)[\s\S])*$/, '')
+      : request)
     .replace(/\r\n/g, '\n')
     .trim();
   if (expectedPlanFingerprint === undefined) return visible;
