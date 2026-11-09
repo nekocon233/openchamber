@@ -13,7 +13,7 @@ const windowSchema = z.object({
   valueLabel: z.string().nullable().optional(),
   value: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('requests'), count: z.number().finite().nonnegative() }),
-    z.object({ kind: z.literal('remaining'), amount: z.number().finite(), unit: z.string() }),
+    z.object({ kind: z.literal('remaining'), amount: z.number().finite(), used: z.number().finite().nonnegative().optional(), unit: z.string() }),
     z.object({ kind: z.literal('unlimited') }),
     z.object({ kind: z.literal('spend'), spent: z.number().finite().nonnegative(), limit: z.number().finite().positive().nullable() }),
   ]).optional(),

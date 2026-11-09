@@ -5,7 +5,11 @@ import { useQuotaStore } from './useQuotaStore';
 const result = (fetchedAt = 1): ProviderResult => ({
   providerId: 'magpie', providerName: 'Magpie', configured: true, ok: true, fetchedAt,
   usage: { windows: {}, accounts: [{ id: 'account', providerId: 'custom', providerName: 'Custom',
-    accountLabel: 'work', planLabel: null, sampledAt: 1, error: null, windows: {} }] },
+    accountLabel: 'work', planLabel: null, sampledAt: 1, error: null, windows: {
+      credits: { usedPercent: 20, remainingPercent: 80, windowSeconds: null, resetAfterSeconds: null,
+        resetAt: null, resetAtFormatted: null, resetAfterFormatted: null,
+        value: { kind: 'remaining', amount: 20, used: 5, unit: 'credits' } },
+    } }] },
 });
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 const network = spyOn(globalThis, 'fetch');
@@ -32,6 +36,9 @@ test('automatic Magpie batches read cache while explicit refreshes POST, coalesc
   complete(Response.json(result(2)));
   await Promise.all([first, second, automatic]);
   expect(useQuotaStore.getState().results[0].fetchedAt).toBe(2);
+  expect(useQuotaStore.getState().results[0].usage?.accounts?.[0].windows.credits.value).toEqual({
+    kind: 'remaining', amount: 20, used: 5, unit: 'credits',
+  });
 });
 
 test('a late automatic cache cannot overwrite a manually refreshed Magpie snapshot', async () => {
