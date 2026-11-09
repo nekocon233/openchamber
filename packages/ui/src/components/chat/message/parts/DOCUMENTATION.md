@@ -114,6 +114,15 @@ numbers and complete-file totals. They may open the file, while exact-line
 navigation and sending the excerpt as a complete editor patch stay unavailable.
 Native full-file diffs keep the ordinary diff controls.
 
+Replacement previews compare the two recorded sides of each excerpt so shared
+lines stay neutral. They never read today's file or infer full-file positions.
+Line alignment is bounded to 200 lines after trimming identical edges; larger
+replacement middles retain their literal removed/added display. Noncontiguous
+or unparseable patches keep the original preview. Missing final newlines stay
+part of the comparison, and patch normalization preserves trailing content
+spaces. Concise file-tool arguments preserve the basename and truncate the
+directory, with the untruncated display path in the tooltip.
+
 ### Bidirectional prose
 
 Shared chat CSS applies `unicode-bidi: plaintext` to prose blocks, including

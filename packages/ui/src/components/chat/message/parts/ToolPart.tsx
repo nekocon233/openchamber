@@ -2494,11 +2494,14 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
             ? 'failed'
             : !isFinalized ? 'running' : status === 'completed' ? 'completed' : 'stopped';
         const argument = justificationText || description;
+        const argumentDisplay = descriptionPath && !justificationText && !guestHeader?.subtitle && isFileChangeTool(normalizedPartTool)
+            ? <span className="flex min-w-0 max-w-full">{renderAnimatedPathWithIcon(descriptionPath, false, true, false)}</span>
+            : argument;
         return (
             <div>
                 <ConciseToolHeader
                     name={guestHeader?.title ?? (isChecklistTool(part.tool) ? displayName : getConciseToolName(normalizedPartTool, part.tool))}
-                    argument={argument}
+                    argument={argumentDisplay}
                     argumentTitle={argument}
                     status={conciseStatus}
                     result={getConciseToolResult({

@@ -75,6 +75,15 @@ const nativeEdit = toolPart('prt_native_edit', 'edit', {
   time: { start: 1, end: 2 },
 });
 
+const replacementPath = '/tmp/an-isolated-worktree-with-a-long-name/packages/ui/src/example.ts';
+const replacementPatch = `--- ${replacementPath}\n+++ ${replacementPath}\n@@ -1,3 +1,3 @@\n-unchanged before\n-old value\n-unchanged after\n+unchanged before\n+new value\n+unchanged after\n`;
+const replacementEdit = toolPart('prt_replacement', 'edit', {
+  status: 'completed', input: { filePath: replacementPath, oldString: 'unchanged before\nold value\nunchanged after\n', newString: 'unchanged before\nnew value\nunchanged after\n' },
+  output: '', metadata: { nativeBackend: 'antigravity', nativeDiffScope: 'replacement',
+    files: [{ filePath: replacementPath, type: 'update', diff: replacementPatch }], diff: replacementPatch },
+  time: { start: 1, end: 2 },
+});
+
 const failed = toolPart('prt_failed', 'bash', {
   status: 'error',
   input: { command: 'ls /missing' },
@@ -199,6 +208,17 @@ test('the concise transcript shows a call as Name(argument) over one result line
     expect(container.textContent).not.toContain('1-hello');
     expect(container.textContent).not.toContain('1+hello there');
     expect(row()?.textContent).not.toContain('+1-1');
+
+    await render(replacementEdit);
+    expect(row()?.textContent).toBe(`Edit(${replacementPath})`);
+    expect([...container.querySelectorAll('span')].some((span) => span.children.length === 0 && span.textContent === 'example.ts')).toBe(true);
+    expect(container.textContent?.split('unchanged before')).toHaveLength(2);
+    expect(container.querySelectorAll('[style*="--tools-edit-removed-bg"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[style*="--tools-edit-added-bg"]')).toHaveLength(1);
+    await render(replacementEdit, true);
+    expect(container.textContent?.split('unchanged before')).toHaveLength(2);
+    expect(container.querySelectorAll('[style*="--tools-edit-removed-bg"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[style*="--tools-edit-added-bg"]')).toHaveLength(1);
 
     await render(failed);
     expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');

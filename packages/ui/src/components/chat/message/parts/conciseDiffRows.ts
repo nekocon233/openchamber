@@ -5,6 +5,7 @@
 
 import type { ToolPart } from '@/lib/opencode/model';
 import { z } from 'zod';
+import { parseDiffFromFile, parsePatchFiles } from '@pierre/diffs';
 
 export type ConciseDiffRow =
     /** Unchanged lines left out between two hunks. */
@@ -13,12 +14,83 @@ export type ConciseDiffRow =
 
 const HUNK_HEADER = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/;
 
+// Large rewritten middles keep their literal preview rather than blocking a
+// synchronous transcript render. Shared edges are still shown as context.
+const MAX_REPLACEMENT_ALIGNMENT_LINES = 200;
+const REPLACEMENT_CONTEXT_LINES = 3;
+
+const replacementRows = (patch: string): ConciseDiffRow[] | null => {
+    try {
+        // The UI normalizes away structural trailing newlines. Missing file
+        // newlines are recorded by explicit patch markers, not this delimiter.
+        const patches = parsePatchFiles(patch.endsWith('\n') ? patch : `${patch}\n`, undefined, true);
+        const file = patches[0]?.files[0];
+        if (patches.length !== 1 || patches[0].files.length !== 1 || !file || file.hunks.length !== 1) return null;
+        const hunk = file.hunks[0];
+        if (!hunk || hunk.deletionStart > 1 || hunk.additionStart > 1) return null;
+
+        const before = file.deletionLines;
+        const after = file.additionLines;
+        let start = 0;
+        while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+        let beforeEnd = before.length;
+        let afterEnd = after.length;
+        while (beforeEnd > start && afterEnd > start && before[beforeEnd - 1] === after[afterEnd - 1]) {
+            beforeEnd -= 1;
+            afterEnd -= 1;
+        }
+
+        const rows: ConciseDiffRow[] = [];
+        const append = (kind: 'context' | 'removed' | 'added', lines: string[], from: number, count: number, offset = 0) => {
+            for (let index = from; index < from + count; index += 1) {
+                const line = lines[index];
+                if (line === undefined) throw new Error('Missing replacement line');
+                rows.push({ kind, line: index + offset + 1, text: line.replace(/\r?\n$/, '') });
+            }
+        };
+        const leading = Math.max(0, start - REPLACEMENT_CONTEXT_LINES);
+        append('context', after, leading, start - leading);
+        const middleLines = beforeEnd + afterEnd - start * 2;
+        if (middleLines > MAX_REPLACEMENT_ALIGNMENT_LINES) {
+            append('removed', before, start, beforeEnd - start);
+            append('added', after, start, afterEnd - start);
+        } else if (middleLines > 0) {
+            const compared = parseDiffFromFile(
+                { name: 'replacement', contents: before.slice(start, beforeEnd).join('') },
+                { name: 'replacement', contents: after.slice(start, afterEnd).join('') },
+                { context: REPLACEMENT_CONTEXT_LINES },
+                true,
+            );
+            for (const [index, change] of compared.hunks.entries()) {
+                if (index > 0) rows.push({ kind: 'gap' });
+                for (const block of change.hunkContent) {
+                    if (block.type === 'context') {
+                        append('context', compared.additionLines, block.additionLineIndex, block.lines, start);
+                    } else {
+                        append('removed', compared.deletionLines, block.deletionLineIndex, block.deletions, start);
+                        append('added', compared.additionLines, block.additionLineIndex, block.additions, start);
+                    }
+                }
+            }
+        }
+        append('context', after, afterEnd, Math.min(REPLACEMENT_CONTEXT_LINES, after.length - afterEnd));
+        return rows;
+    } catch {
+        // Keep the recorded patch readable when it cannot be compared safely.
+        return null;
+    }
+};
+
 /**
  * The rows of a unified diff: removed lines numbered in the old file, added and
  * unchanged lines in the new one. File headers and anything before the first
  * hunk are left out.
  */
-export const parseConciseDiffRows = (patch: string): ConciseDiffRow[] => {
+export const parseConciseDiffRows = (patch: string, replacementPreview = false): ConciseDiffRow[] => {
+    if (replacementPreview) {
+        const compared = replacementRows(patch);
+        if (compared !== null) return compared;
+    }
     const rows: ConciseDiffRow[] = [];
     let oldLine = 0;
     let newLine = 0;
