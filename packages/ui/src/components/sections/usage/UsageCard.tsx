@@ -15,7 +15,6 @@ interface UsageCardProps {
   toggleEnabled?: boolean;
   onToggle?: (enabled: boolean) => void;
   providerId?: QuotaProviderId;
-  displayMode?: 'usage' | 'remaining';
 }
 
 export const UsageCard: React.FC<UsageCardProps> = ({
@@ -26,11 +25,9 @@ export const UsageCard: React.FC<UsageCardProps> = ({
   toggleEnabled = false,
   onToggle,
   providerId,
-  displayMode: displayModeOverride,
 }) => {
   const { t } = useI18n();
-  const storedDisplayMode = useQuotaStore((state) => state.displayMode);
-  const displayMode = displayModeOverride ?? storedDisplayMode;
+  const displayMode = useQuotaStore((state) => state.displayMode);
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const displayPercent = displayMode === 'remaining' ? window.remainingPercent : window.usedPercent;
   // A balance-only window (DeepSeek's credits balance) carries a value label
@@ -41,7 +38,7 @@ export const UsageCard: React.FC<UsageCardProps> = ({
   const barLabel = displayMode === 'remaining'
     ? t('settings.usage.card.bar.remaining')
     : t('settings.usage.card.bar.used');
-  const percentLabel = formatQuotaWindowValueLabel(window, displayPercent, t);
+  const percentLabel = formatQuotaWindowValueLabel(window, displayPercent, t, displayMode);
   const resetLabel = formatQuotaResetLabel(window.resetAt, window.resetAfterFormatted ?? window.resetAtFormatted, timeFormatPreference);
   const resetText = resetLabel ? t('settings.usage.card.resetsAt', { time: resetLabel }) : '';
   const windowLabel = formatWindowLabel(title);

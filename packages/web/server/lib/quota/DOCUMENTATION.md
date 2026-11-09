@@ -107,8 +107,9 @@ plan, sample timestamp, shared-balance reference, windows and error. Its IDs
 hash the provider/kind/account/source tuple. Every usable window is retained;
 one malformed card or window marks that account and does not discard others.
 Balances retain their currency/credit labels. Text-only, unlimited and wallet
-windows have no percentage; counted allowances carry a numeric remaining
-amount and unit. A shared balance is a reference, not another wallet amount.
+windows have no percentage; counted allowances carry their numeric remaining
+and used amounts with the unit. A shared balance is a reference, not another
+wallet amount.
 
 Concurrent operations share a pending refresh per local configuration directory.
 A manual refresh supersedes a pending cache read; later cache reads join the

@@ -891,7 +891,6 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                 <DropdownMenuLabel className="flex items-center gap-2 bg-[var(--surface-elevated)] typography-ui-label text-foreground">
                   <ProviderLogo providerId={group.providerId} className="h-4 w-4" />
                   {group.providerName}
-                  {group.providerId === 'magpie' && <span className="ms-auto typography-meta text-muted-foreground">{t('header.services.remaining')}</span>}
                 </DropdownMenuLabel>
                 {group.accounts ? <>
                   {group.status && <p className="px-2 typography-meta text-muted-foreground">{group.status}</p>}
@@ -911,7 +910,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                     const displayPercent = quotaDisplayMode === 'remaining'
                       ? window.remainingPercent
                       : window.usedPercent;
-                    const metricLabel = formatQuotaWindowValueLabel(window, displayPercent, t);
+                    const metricLabel = formatQuotaWindowValueLabel(window, displayPercent, t, quotaDisplayMode);
                     return (
                     <DropdownMenuItem
                       key={`${group.providerId}-${label}`}

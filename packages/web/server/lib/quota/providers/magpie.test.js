@@ -19,7 +19,7 @@ describe('Magpie allowance boundary', () => {
   it('reads only the saved report, honoring the local gateway port and every account/window', async () => {
     const { read, fetchImpl } = await setup([
       card({ user: 'one', windows: [{ name: '5 hours', used: 20, remaining: 80 }, { name: '7 days', used: 75, remaining: 25, resetsAt: '2026-12-01T00:00:00Z' }] }),
-      card({ user: 'two', windows: [{ name: 'credits', limit: 25, unit: 'credits', used: 0 }] }),
+      card({ user: 'two', windows: [{ name: 'credits', amount: 5, limit: 25, unit: 'credits', used: 20 }] }),
       card({ provider: 'wallet', kind: 'balance', balance: '¥0.00' }),
     ], 4444);
     const result = await read();
@@ -30,7 +30,7 @@ describe('Magpie allowance boundary', () => {
     expect(new Set(accounts.map(a => a.id)).size).toBe(3);
     expect(accounts[0].windows['5 hours'].remainingPercent).toBe(80);
     expect(accounts[0].windows['7 days'].resetAt).toBe(Date.parse('2026-12-01T00:00:00Z'));
-    expect(accounts[1].windows.credits.value).toEqual({ kind: 'remaining', amount: 25, unit: 'credits' });
+    expect(accounts[1].windows.credits.value).toEqual({ kind: 'remaining', amount: 20, used: 5, unit: 'credits' });
     expect(accounts[2].windows.credits_balance.valueLabel).toBe('¥0.00');
   });
 
