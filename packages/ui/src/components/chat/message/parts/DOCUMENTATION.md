@@ -589,6 +589,14 @@ consumers; the message role owns the current context-window boundary.
 
 ### Native questions and skills
 
+- OpenChamber's `openchamber_checklist_update_checklist` MCP call uses a
+  localized action title and the existing checklist icon. A successful call
+  with complete valid input shows completed/total progress and expands into
+  read-only task text and recorded statuses. An empty list says it was cleared.
+  The protocol receipt stays out of the normal presentation. Failed calls and
+  malformed or truncated input keep their generic details and errors. Extension rules keep
+  priority, and the existing tool disclosure controls retain their behavior.
+
 - Question rows accept structured `questionAnswers` and `questionStatus`
   metadata. They preserve multi-select and arbitrary custom text without
   parsing presentation strings. Older CLI output retains its existing parser.

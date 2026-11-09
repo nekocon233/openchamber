@@ -52,6 +52,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "chat.toolPart.checklist.title": "עדכון רשימת המשימות",
+  "chat.toolPart.checklist.empty": "רשימת המשימות נוקתה.",
   ...diffFileFilterI18n['he'],
   "agents.combinations.loadFailed": "לא ניתן לטעון שילובים. יש לפתוח את ההגדרות מחדש ולנסות שוב.",
   "agents.combinations.saveFailed": "לא ניתן לשמור שילובים. יש לנסות שוב.",
@@ -4092,11 +4094,11 @@ export const dict = {
   'chat.nativeTasks.recent': 'No longer active',
   'chat.nativeTasks.refresh': 'Refresh',
   'chat.nativeTasks.stale': 'These tasks may be out of date. Refresh to try again.',
-  'chat.nativeTasks.status.completed': 'Completed',
+  "chat.nativeTasks.status.completed": "הושלם",
   'chat.nativeTasks.status.failed': 'Failed',
   'chat.nativeTasks.status.paused': 'Paused',
-  'chat.nativeTasks.status.pending': 'Pending',
-  'chat.nativeTasks.status.running': 'Running',
+  "chat.nativeTasks.status.pending": "ממתין",
+  "chat.nativeTasks.status.running": "בתהליך",
   'chat.nativeTasks.status.stopped': 'Stopped',
   'chat.nativeTasks.status.unknown': 'Unknown',
   'chat.nativeTasks.stop.accepted': 'Stop requested. Waiting for CLI confirmation.',
@@ -4104,7 +4106,7 @@ export const dict = {
   'chat.nativeTasks.stop.error': 'Could not stop this task. Try again.',
   'chat.nativeTasks.stop.pending': 'Stopping…',
   'chat.nativeTasks.summary.background': 'Active: {active} / Recorded: {total}',
-  'chat.nativeTasks.summary.checklist': 'Completed: {completed} / {total}',
+  "chat.nativeTasks.summary.checklist": "הושלמו: {completed} מתוך {total}",
   'chat.nativeTasks.summary.partial': 'Incomplete or out of date',
   'chat.nativeTasks.summary.plan': 'Plan available',
   'chat.nativeTasks.summary.unavailable': 'Unavailable',

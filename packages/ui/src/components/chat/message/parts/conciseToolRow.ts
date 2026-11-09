@@ -2,6 +2,8 @@
 // one-line result, the way the Claude Code terminal prints `Bash(ls)` and the
 // line under it. See DOCUMENTATION.md, "Concise transcript".
 
+import { isChecklistTool } from '@/lib/opencode/tools';
+
 // Built-in tools under the names the CLIs use. Any other tool keeps the name it
 // was called by, which already reads that way (`TaskCreate`, `github_search`).
 const CONCISE_TOOL_NAMES = new Map<string, string>([
@@ -92,7 +94,7 @@ export const getConciseToolResult = (call: ConciseToolCall): ConciseToolResult |
     }
     if (call.diffStats) return { kind: 'diff', ...call.diffStats };
     if (call.writeLines !== null) return { kind: 'added', lines: call.writeLines };
-    if (FILE_CHANGE_TOOLS.has(call.tool) || call.recordsFileChanges || TOOLS_WITHOUT_RESULT_LINE.has(call.tool) || call.output === undefined) return null;
+    if (FILE_CHANGE_TOOLS.has(call.tool) || call.recordsFileChanges || TOOLS_WITHOUT_RESULT_LINE.has(call.tool) || isChecklistTool(call.tool) || call.output === undefined) return null;
     const count = countOutputLines(call.output);
     return count === 0 ? { kind: 'noOutput' } : { kind: 'lines', count };
 };

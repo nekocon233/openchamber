@@ -54,6 +54,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "chat.toolPart.checklist.title": "Zaktualizuj listę zadań",
+  "chat.toolPart.checklist.empty": "Lista zadań została wyczyszczona.",
   ...diffFileFilterI18n['pl'],
   ...settingsDict,
   "quota.magpie.error.unsupported": "Limity Magpie są niedostępne przy połączeniu z zewnętrzną instancją OpenCode.",

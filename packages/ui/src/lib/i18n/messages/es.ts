@@ -54,6 +54,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "chat.toolPart.checklist.title": "Actualizar lista de tareas",
+  "chat.toolPart.checklist.empty": "Lista de tareas vaciada.",
   ...diffFileFilterI18n['es'],
   "agents.combinations.loadFailed": "No se pudieron cargar las combinaciones. Vuelve a abrir los ajustes e inténtalo de nuevo.",
   "agents.combinations.saveFailed": "No se pudieron guardar las combinaciones. Inténtalo de nuevo.",

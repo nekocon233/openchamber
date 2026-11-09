@@ -18,6 +18,11 @@ to the shared UI domain model. Sync owns transcript membership and store writes.
   first message 404. Other errors stop the walk and propagate unchanged.
 - A runtime switch during a successful read also discards that response. Sync
   independently checks runtime identity and transcript membership before writing.
+- Tool identity and input accessors also cover the reserved OpenChamber
+  checklist MCP call. Its validated items preserve their recorded IDs, text
+  and statuses. Invalid or incomplete input is unknown; an explicit empty list
+  is a clear. This presentation contract does not add an OpenCode built-in or
+  change the original tool record.
 - A send that switches the session's agent first reads the folder's agent list.
   Sync also passes the agent when the session already sits on one the folder's
   loaded catalog lacks, so that session gets the same check.

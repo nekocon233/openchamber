@@ -53,6 +53,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "chat.toolPart.checklist.title": "Görev listesini güncelle",
+  "chat.toolPart.checklist.empty": "Görev listesi temizlendi.",
   ...diffFileFilterI18n['tr'],
   "agents.combinations.loadFailed": "Kombinasyonlar yüklenemedi. Ayarları yeniden açıp tekrar deneyin.",
   "agents.combinations.saveFailed": "Kombinasyonlar kaydedilemedi. Tekrar deneyin.",
