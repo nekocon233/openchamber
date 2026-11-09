@@ -191,7 +191,9 @@ export const agyTime = (value, fallback) => {
 };
 
 export const agyTokenUsage = (value) => value.thinking_tokens > value.output_tokens ? undefined : ({
-  total: value.total_tokens ?? value.input_tokens + value.output_tokens,
+  // agy reports uncached input in input_tokens and omits cache_read_tokens from
+  // total_tokens; the context window holds both plus the step's output.
+  total: Math.max(value.total_tokens ?? 0, value.input_tokens + value.output_tokens + value.cache_read_tokens),
   input: value.input_tokens,
   // agy includes thinking in output; the shared contract counts it separately.
   output: value.output_tokens - value.thinking_tokens,

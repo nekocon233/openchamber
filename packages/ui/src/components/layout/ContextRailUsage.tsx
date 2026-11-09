@@ -77,4 +77,14 @@ export const ContextRailTooltipDetails: React.FC = () => {
   );
 };
 
-export const ContextUsageRingIcon: React.FC<{ className?: string }> = ({ className }) => <ContextRing percent={0} className={className} />;
+/**
+ * Rail icon for the Context surface: an outline ring whose arc is the share of
+ * the context window in use. Drawn in the button's own colour, so it follows
+ * the rail's idle, hover and active states like the other icons. An empty
+ * track means nothing is measured yet, or a compaction made the fill unknown.
+ */
+export const ContextUsageRingIcon: React.FC<{ className?: string }> = ({ className }) => {
+  const { fill, limit } = useCurrentContextReading();
+  const percent = fill?.state === 'measured' ? (fill.totalTokens / limit) * 100 : 0;
+  return <ContextRing percent={percent} className={className} />;
+};

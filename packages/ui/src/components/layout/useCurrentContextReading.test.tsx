@@ -7,6 +7,7 @@ import type { Message, Session } from '@/lib/opencode/model'
 import { useSessionUIStore } from '@/sync/session-ui-store'
 import { SyncProvider, useDirectoryStore } from '@/sync/sync-context'
 import { installHookTestDom } from '../session/sidebar/test-utils/testDom'
+import { ContextUsageRingIcon } from './ContextRailUsage'
 import { useCurrentContextReading } from './useCurrentContextReading'
 import { useProjectsStore } from '@/stores/useProjectsStore'
 
@@ -43,7 +44,7 @@ const session = (updated: number): Session => ({
   agent: 'build',
 })
 
-const assistant = (id: string, total: number): Message => ({
+const assistant = (id: string, total: number, contextWindow?: number): Message => ({
   id,
   sessionID: SESSION_ID,
   role: 'assistant',
@@ -52,14 +53,16 @@ const assistant = (id: string, total: number): Message => ({
   providerID: 'anthropic',
   modelID: 'claude',
   tokens: { input: total, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  contextWindow,
 })
 
 let store: ReturnType<typeof useDirectoryStore> | null = null
 let renders = 0
+let latestReading: ReturnType<typeof useCurrentContextReading> | null = null
 
 const ReadingProbe = () => {
-  useCurrentContextReading()
-  return null
+  latestReading = useCurrentContextReading()
+  return <ContextUsageRingIcon />
 }
 
 const StoreProbe = () => {
@@ -136,10 +139,13 @@ describe('useCurrentContextReading', () => {
     await seed([session(1)], [assistant('msg_1', 50_000)])
     const measured = renders
 
-    await seed([session(2)], [assistant('msg_1', 50_000), assistant('msg_2', 100_000)])
+    await seed([session(2)], [assistant('msg_1', 50_000), assistant('msg_2', 100_000, 1_000_000)])
     expect(renders).toBe(measured + 1)
+    expect(latestReading?.limit).toBe(1_000_000)
+    expect(dom.container.childNodes[0]?.childNodes).toHaveLength(2)
 
     await seed([session(3)], [])
     expect(renders).toBe(measured + 2)
+    expect(dom.container.childNodes[0]?.childNodes).toHaveLength(1)
   })
 })
