@@ -341,8 +341,9 @@ and desktop, not by mobile or VS Code; those use the shared MCP Settings page.
 
 Magpie is a separate Usage entry backed by the connected runtime's local
 gateway. Its detail view uses `components/usage/MagpieUsage` to show every
-account and window, always as remaining allowance regardless of the global
-used/remaining switch. Missing Magpie configuration shows its own startup hint.
+account and window, following the global used/remaining switch for percentage
+and counted-limit windows while keeping wallet balances, unlimited and text
+windows as reported. Missing Magpie configuration shows its own startup hint.
 Automatic reads use the gateway's kept report; only explicit refresh queries
 vendors. The same account groups serve work status and VS Code's quota menu.
 

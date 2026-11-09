@@ -40,12 +40,14 @@ export const formatQuotaWindowValueLabel = (
   window: UsageWindow,
   percent: number | null,
   translate: (key: I18nKey, params?: I18nParams) => string,
+  displayMode: 'usage' | 'remaining' = 'remaining',
 ): string => {
   const value = window.value;
   if (!value) return formatQuotaValueLabel(window, percent, translate);
   if (value.kind === 'unlimited') return translate('quota.magpie.unlimited');
   if (value.kind === 'remaining') {
-    const amount = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumFractionDigits: 2 }).format(value.amount);
+    const rawAmount = displayMode === 'usage' && value.used !== undefined ? value.used : value.amount;
+    const amount = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumFractionDigits: 2 }).format(rawAmount);
     return `${amount} ${value.unit}`.trim();
   }
   if (value.kind === 'requests') {

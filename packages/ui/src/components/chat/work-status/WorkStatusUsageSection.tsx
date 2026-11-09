@@ -71,7 +71,7 @@ export const WorkStatusUsageSection = ({ visible = true }: { visible?: boolean }
 
   if (groups.length === 0) return null;
 
-  const modeLabel = displayMode === 'remaining' || currentProviderId === 'magpie' || groups.every(group => group.providerId === 'magpie')
+  const modeLabel = displayMode === 'remaining'
     ? t('header.services.remaining')
     : t('header.services.used');
 
@@ -121,7 +121,6 @@ export const WorkStatusUsageSection = ({ visible = true }: { visible?: boolean }
           <WorkStatusRow
             leading={<ProviderLogo providerId={group.providerId} className="size-4 shrink-0" />}
             label={<span className="font-semibold text-foreground">{group.providerName}</span>}
-            value={group.providerId === 'magpie' ? <span className="typography-micro text-muted-foreground">{t('header.services.remaining')}</span> : undefined}
           />
           {group.status && <p className="px-2 pb-1 typography-micro text-muted-foreground break-words">{group.status}</p>}
           {group.accounts && <MagpieUsage accounts={group.accounts} compact />}

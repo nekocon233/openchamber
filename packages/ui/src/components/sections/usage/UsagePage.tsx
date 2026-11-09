@@ -53,6 +53,7 @@ export const UsagePage: React.FC = () => {
   const isLoading = useQuotaStore((state) => selectedProviderId === 'claude' || selectedProviderId === 'magpie'
     ? state.isFetchingProvider[selectedProviderId] === true
     : state.isLoading);
+  const displayMode = useQuotaStore((state) => state.displayMode);
   const lastUpdated = useQuotaStore((state) => state.lastUpdated);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
@@ -186,7 +187,7 @@ export const UsagePage: React.FC = () => {
         isLoading ? (
           <span className="animate-pulse typography-settings-description text-muted-foreground">{t('settings.usage.page.header.refreshing')}</span>
         ) : selectedProviderId === 'magpie' ? (
-          t('settings.usage.card.bar.remaining')
+          displayMode === 'remaining' ? t('settings.usage.card.bar.remaining') : t('settings.usage.card.bar.used')
         ) : selectedProviderId === 'claude' ? (
           selectedResult?.planLabel
         ) : selectedResult?.planLabel ? (

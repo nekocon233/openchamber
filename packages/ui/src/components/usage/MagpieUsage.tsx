@@ -2,6 +2,7 @@ import type { QuotaAccount } from '@/types/quota';
 import { useI18n } from '@/lib/i18n';
 import { formatMagpieError } from '@/lib/quota/magpie';
 import { formatQuotaResetLabel, formatQuotaWindowValueLabel, formatWindowLabel } from '@/lib/quota';
+import { useQuotaStore } from '@/stores/useQuotaStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { UsageCard } from '@/components/sections/usage/UsageCard';
 import { SettingsSection } from '@/components/sections/shared/SettingsSection';
@@ -10,6 +11,7 @@ import { WorkStatusRow, WorkStatusValue } from '@/components/chat/work-status/Wo
 /** The same account/window hierarchy serves Settings, work status, and VS Code. */
 export const MagpieUsage = ({ accounts, compact = false }: { accounts: QuotaAccount[]; compact?: boolean }) => {
   const { t } = useI18n();
+  const displayMode = useQuotaStore(state => state.displayMode);
   const timeFormat = useUIStore(state => state.timeFormatPreference);
   if (accounts.length === 0) return <p className="typography-meta text-muted-foreground">{t('quota.magpie.empty')}</p>;
 
@@ -19,8 +21,9 @@ export const MagpieUsage = ({ accounts, compact = false }: { accounts: QuotaAcco
       {account.error && <p role="status" className="typography-meta text-[var(--status-warning-text)] break-words">{formatMagpieError(account.error, t)}</p>}
       {account.sharedBalance && <p className="typography-meta text-muted-foreground break-words">{t('quota.magpie.sharedBalance', { account: account.sharedBalance })}</p>}
       {Object.entries(account.windows).map(([label, window]) => {
-        if (!compact) return <UsageCard key={label} title={label} window={window} displayMode="remaining" />;
-        const metric = formatQuotaWindowValueLabel(window, window.remainingPercent, t);
+        if (!compact) return <UsageCard key={label} title={label} window={window} />;
+        const percent = displayMode === 'remaining' ? window.remainingPercent : window.usedPercent;
+        const metric = formatQuotaWindowValueLabel(window, percent, t, displayMode);
         const reset = formatQuotaResetLabel(window.resetAt, null, timeFormat);
         const used = window.usedPercent;
         const tone = used !== null && used >= 80 ? 'error' : used !== null && used >= 50 ? 'warning' : 'default';

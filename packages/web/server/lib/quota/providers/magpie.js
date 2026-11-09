@@ -55,7 +55,8 @@ function accountsFrom(payload) {
       else if (source.balance !== undefined) window.value = { kind: 'remaining', amount: source.balance, unit: source.unit || '' };
       else if (!source.text && source.limit > 0) {
         // Magpie omits zero amounts from JSON with Go's omitempty.
-        window.value = { kind: 'remaining', amount: Math.max(0, source.limit - Math.max(0, source.amount ?? 0)), unit: source.unit || '' };
+        const used = Math.max(0, source.amount ?? 0);
+        window.value = { kind: 'remaining', amount: Math.max(0, source.limit - used), used, unit: source.unit || '' };
       }
       const key = Object.hasOwn(windows, source.name) ? `${source.name} · ${index + 1}` : source.name;
       windows[key] = window;
