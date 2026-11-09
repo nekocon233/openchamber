@@ -222,8 +222,8 @@ const run = (text) => {
     finish('SUCCESS', 'Report received.\n');
     return;
   }
-  if (['decision-questions', 'decision-plan', 'decision-questions-output-limit', 'decision-questions-stale-output-limit'].includes(visible)) {
-    const questions = visible === 'decision-plan' ? [{
+  if (['decision-questions', 'decision-plan', 'decision-questions-blank', 'decision-plan-blank', 'decision-questions-output-limit', 'decision-questions-stale-output-limit'].includes(visible)) {
+    const questions = visible.startsWith('decision-plan') ? [{
       question: '<openchamber-plan-v1>\n# Fixture implementation plan\n\n1. Preserve the API.\n2. Update the tests.\n</openchamber-plan-v1>',
       options: ['build', 'plan'], is_multi_select: false,
     }] : [
@@ -231,7 +231,8 @@ const run = (text) => {
       { question: 'Which checks should run?', options: ['Unit tests', 'Lint'], is_multi_select: true },
     ];
     planner('Please review the next step.\n', [{ name: 'ask_question', args: { questions } }]);
-    append({ step_index: stepIndex++, type: 'GENERIC', content: questions.map((_, index) => `A${index + 1}: User Skipped`).join('\n') });
+    const answer = visible.endsWith('-blank') ? '' : 'User Skipped';
+    append({ step_index: stepIndex++, type: 'GENERIC', content: questions.map((_, index) => `A${index + 1}: ${answer}`).join('\n') });
     if (visible === 'decision-questions-output-limit') {
       planner('');
       append({ step_index: stepIndex++, type: 'ERROR_MESSAGE', error: outputLimitError, content: outputLimitError });

@@ -71,6 +71,26 @@ describe('Antigravity application interaction proposals', () => {
     expect(updated.proposal.callID).not.toBe(first.proposal.callID);
   });
 
+  it.each(['A1:', 'A1: ', 'Created At: 2026-11-09T14:10:39+08:00\r\nCompleted At: 2026-11-09T14:10:48+08:00\r\nA1: \t'])('restores a plan with a numbered blank native answer: %j', (output) => {
+    const source = input(round(0, markedPlan(), output));
+    const before = structuredClone(source.entries);
+    const result = agyInteractionProposal(source);
+    expect(result?.proposal).toMatchObject({ kind: 'antigravity-plan-exit', plan: PLAN });
+    expect(result?.part).toMatchObject({ tool: 'plan_exit', state: { input: { plan: PLAN } } });
+    expect(agyInteractionHistory(source).latest).toEqual(result);
+    expect(source.entries).toEqual(before);
+  });
+
+  it.each(['A1: \nA2: ', 'A1: User Skipped\r\nA2:\t'])('restores questions only when every numbered native answer is unanswered: %j', (output) => {
+    const call = ask();
+    call.args.questions.push(ask('Which checks?', ['Lint', 'Tests']).args.questions[0]);
+    expect(agyInteractionProposal(input(round(0, call, output)))?.proposal.questions)
+      .toMatchObject([{ question: 'Which scope?' }, { question: 'Which checks?' }]);
+    for (const answered of ['A1: \nA2: Lint', 'A1: File\nA2: ', 'A1: ', 'A1: \nA1: ', 'A2: \nA1: ']) {
+      expect(agyInteractionProposal(input(round(0, call, answered)))).toBeNull();
+    }
+  });
+
   it('removes a terminal plan closing tag while retaining its existing decision identity', () => {
     const source = input(round(0, markedPlan(`${PLAN}\n</openchamber-plan-v1>`)));
     const before = structuredClone(source.entries);

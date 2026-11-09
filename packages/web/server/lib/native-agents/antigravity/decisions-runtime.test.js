@@ -75,6 +75,20 @@ const setup = async ({ unified = false } = {}) => {
 const toolParts = (page) => page.records.flatMap((record) => record.parts).filter((part) => part.type === 'tool');
 
 describe('Antigravity decisions through the native runtime', () => {
+  it.each(['decision-plan-blank', 'decision-questions-blank'])('restores %s in a unified conversation without approving or replaying it', async (prompt) => {
+    const harness = await setup({ unified: true });
+    const question = await harness.waiting(prompt);
+    expect(question.sessionID).toBe(harness.session.id);
+    expect(question.kind).toBe(prompt === 'decision-plan-blank' ? 'antigravity-plan-exit' : undefined);
+    expect(question.questions).toHaveLength(prompt === 'decision-plan-blank' ? 1 : 2);
+    expect(toolParts(await harness.history()).find((part) => part.tool === 'ask_question')?.state.output)
+      .toBe(prompt === 'decision-plan-blank' ? 'A1: ' : 'A1: \nA2: ');
+    await harness.restart();
+    expect(await harness.runtime.questions(harness.directory)).toEqual([question]);
+    expect(harness.requests()).toHaveLength(1);
+    expect((await harness.history()).records.filter((record) => record.info.role === 'user')).toHaveLength(1);
+  });
+
   it.each([false, true])('restores recovered output-limit questions once across restart with unified=%s', async (unified) => {
     const harness = await setup({ unified });
     const first = await harness.waiting('decision-questions-output-limit');

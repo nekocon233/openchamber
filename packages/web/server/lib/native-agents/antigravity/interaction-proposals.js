@@ -50,7 +50,9 @@ const skippedQuestions = (result, count) => {
   if (result?.type !== 'GENERIC' || result.status !== 'DONE' || (result.error ?? '').trim() !== ''
     || agyInteractionTruncated(result, 'content') || agyInteractionTruncated(result, 'error')) return false;
   const answers = (result.content ?? '').split(/\r?\n/).filter((line) => /^A\d+:/.test(line));
-  return answers.length === count && answers.every((line, index) => line === `A${index + 1}: User Skipped`);
+  return answers.length === count && answers.every((line, index) => (
+    line === `A${index + 1}: User Skipped` || line.trimEnd() === `A${index + 1}:`
+  ));
 };
 
 /** Extracts one already-read native round. Publication and persistence belong to the decision owner. */
