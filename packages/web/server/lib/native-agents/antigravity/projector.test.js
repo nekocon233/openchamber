@@ -275,6 +275,41 @@ describe('Antigravity native plan prefix', () => {
     });
     expect(bindings.get(0)?.messageId).toBe(literal.messageId);
   });
+
+  it.each([
+    [
+      'googleplay 框架装好了吗',
+      '<USER_REQUEST>\ngoogleplay 框架装好了吗\n\n<openchamber-instructions>\nContinue this same conversation using the historical context below.\n<conversation-history>\n[user]\n<USER_REQUEST>earlier</USER_REQUEST>\n<truncated 696737 bytes>\n\nNOTE: The output was truncated because it was too long.',
+    ],
+    [
+      'googleplay 框架装好了吗',
+      '<USER_REQUEST>\ngoogleplay 框架装好了吗\n\n<openchamber-instructions>\nInstructions from: /home/user/.config/opencode/AGENTS.md\nBackground command completions arrive fro\n<truncated 2395 bytes>\n</PLAN>\n</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>\nModel Selection\n</USER_SETTINGS_CHANGE>',
+    ],
+    [
+      'Here is the log:\n<truncated 100 bytes>\nWhy did it fail?',
+      '<USER_REQUEST>\nHere is the log:\n<truncated 100 bytes>\nWhy did it fail?\n<truncated 1800 bytes>\ntail of instructions\n</openchamber-instructions>\n\n<openchamber-instructions>\nglobal rules\n</openchamber-instructions>\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>',
+    ],
+    [
+      'Here is the log:\n<truncated 100 bytes>\nWhy did it fail?',
+      '<USER_REQUEST>\nHere is the log:\n<truncated 100 bytes>\nWhy did it fail?\n\n<openchamber-instructions>\nglobal rules\n</openchamber-instructions>\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>',
+    ],
+    [
+      'Here is the log:\n<truncated 100 bytes>\nWhy did it fail?',
+      '<USER_REQUEST>\nHere is the log:\n<truncated 100 bytes>\nWhy did it fail?\n\n<openchamber-instructions>\nhidden\n<truncated 2000 bytes>\n</ADDITIONAL_METADATA>',
+    ],
+  ])('strips hidden instructions and envelopes when agy truncates USER_INPUT (%#)', async (promptText, content) => {
+    const rawWithHistory = `${promptText}\n\n<openchamber-instructions>\n<conversation-history>\n<USER_REQUEST>inner</USER_REQUEST>\n</conversation-history>\n</openchamber-instructions>`;
+    const send = { messageId: 'client-message', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'build',
+      antigravity: { fingerprint: antigravityPromptFingerprint(rawWithHistory) } };
+    const { bindings } = await resolveAntigravityBindings({
+      sessionId: `nag_${NATIVE_ID}`,
+      entries: [{ step_index: 0, type: 'USER_INPUT', content }],
+      registry: { sendRecords: async () => new Map([[send.messageId, send]]), bindAntigravityMessage: async () => {} },
+    });
+    expect(bindings.get(0)?.messageId).toBe(send.messageId);
+    const records = project([{ step_index: 0, type: 'USER_INPUT', content }], bindings);
+    expect(records[0].parts[0].text).toBe(promptText);
+  });
 });
 
 describe('Antigravity saved tool outcomes', () => {
