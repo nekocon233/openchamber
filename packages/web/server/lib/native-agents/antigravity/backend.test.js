@@ -509,7 +509,7 @@ describe('Antigravity CLI adapter', () => {
     expect(history.records[0].parts[0].text).toBe('hello');
     expect(history.records[0].info.model).toMatchObject({ providerID: 'antigravity-native', modelID: 'gemini-test-high' });
     expect(history.records[1].parts[0].text).toBe('Reply to hello\n');
-    expect(history.records[1].info.tokens).toMatchObject({ total: 14, input: 10, output: 3, reasoning: 1, cache: { read: 2, write: 0 } });
+    expect(history.records[1].info.tokens).toMatchObject({ total: 16, input: 10, output: 3, reasoning: 1, cache: { read: 2, write: 0 } });
     expect((await registry.sendRecords(session.id)).get(firstMessage).antigravity.measurements.records)
       .toEqual([expect.objectContaining({ messageID: history.records[1].info.id, tokens: history.records[1].info.tokens })]);
     expect(JSON.stringify(history)).not.toContain('GLOBAL FIXTURE RULES');

@@ -178,7 +178,7 @@ describe('Antigravity retained thinking and conversation messages', () => {
 
 it('separates agy output from thinking without double-counting generated tokens', () => {
   expect(agyTokenUsage({ input_tokens: 10415, output_tokens: 657, thinking_tokens: 616, cache_read_tokens: 8113, total_tokens: 11072 }))
-    .toEqual({ total: 11072, input: 10415, output: 41, reasoning: 616, cache: { read: 8113, write: 0 } });
+    .toEqual({ total: 19185, input: 10415, output: 41, reasoning: 616, cache: { read: 8113, write: 0 } });
   expect(agyTokenUsage({ input_tokens: 10, output_tokens: 1, thinking_tokens: 2, cache_read_tokens: 0 })).toBeUndefined();
 });
 

@@ -5,7 +5,7 @@ import { antigravityMeasurementsSchema, captureAntigravityMeasurements, restoreA
 const record = () => ({
   info: buildAssistantMessage({ id: 'assistant', sessionID: 'session', parentID: 'user', created: 1000, completed: 5000,
     providerID: 'antigravity-native', modelID: 'test', agent: 'plan', cwd: '/repo',
-    tokens: { total: 120, input: 100, output: 5, reasoning: 15, cache: { read: 200, write: 0 } } }),
+    tokens: { total: 320, input: 100, output: 5, reasoning: 15, cache: { read: 200, write: 0 } } }),
   parts: [
     buildTextPart({ id: 'text', sessionID: 'session', messageID: 'assistant', text: 'Private answer', start: 3000, end: 4000 }),
     buildToolPart({ id: 'tool', sessionID: 'session', messageID: 'assistant', callID: 'call', tool: 'bash', input: { command: 'private command' },

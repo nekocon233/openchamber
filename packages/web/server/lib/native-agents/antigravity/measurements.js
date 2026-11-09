@@ -68,7 +68,10 @@ export const restoreAntigravityMeasurements = (records, sends) => {
     const saved = byParent.get(info.parentID)?.get(info.id);
     if (!saved || saved.completed < info.time.created || saved.tokens && !sameUsage(info.tokens, saved.tokens)) continue;
     info.time.completed = Math.max(info.time.completed ?? 0, saved.completed);
-    if (saved.tokens) info.tokens = structuredClone(saved.tokens);
+    if (saved.tokens) {
+      const sum = saved.tokens.input + saved.tokens.output + saved.tokens.reasoning + saved.tokens.cache.read + saved.tokens.cache.write;
+      info.tokens = { ...structuredClone(saved.tokens), total: Math.max(saved.tokens.total ?? 0, sum) };
+    }
     const textTimes = new Map(saved.parts.filter((part) => part.type === 'text').map((part) => [part.id, part]));
     const toolTimes = new Map(saved.parts.filter((part) => part.type === 'tool').map((part) => [part.callID, part.time]));
     for (const part of record.parts) {

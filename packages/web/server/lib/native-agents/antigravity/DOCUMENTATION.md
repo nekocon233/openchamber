@@ -134,8 +134,10 @@ At turn completion, history fills records and tool parts absent from the
 stream, including skipped `ask_question` calls. Their native outcomes remain
 unchanged; separate application question/plan parts carry human decisions.
 Saved per-message token counters also fill live records whose generation
-frames omitted usage. agy's output includes thinking; the shared projection
-subtracts thinking from output before exposing the separate reasoning counter.
+frames omitted usage. agy's output includes thinking and its `input_tokens`
+excludes `cache_read_tokens`; the shared projection subtracts thinking from
+output before exposing the separate reasoning counter and includes
+`cache_read_tokens` in `tokens.total`.
 Inconsistent thinking/output counters remain unavailable. Existing live counters
 and text timing remain intact;
 absent saved usage stays unknown. Only changed records are republished, so

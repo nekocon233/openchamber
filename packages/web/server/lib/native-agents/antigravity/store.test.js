@@ -145,10 +145,12 @@ describe('Antigravity native store', () => {
     await registry.recordSend(SESSION_ID, send);
     const initial = await createAntigravityStore({ registry, home }).loadHistory(SESSION_ID, NATIVE_ID, directory);
     const live = structuredClone(initial.records[1]);
-    live.info.tokens = { total: 120, input: 100, output: 5, reasoning: 15, cache: { read: 200, write: 0 } };
+    live.info.tokens = { total: 320, input: 100, output: 5, reasoning: 15, cache: { read: 200, write: 0 } };
     live.info.time.completed = sentAt + 5000;
     live.parts[0].time = { start: sentAt + 3000, end: sentAt + 4800 };
     const measurements = captureAntigravityMeasurements([live], send.messageId);
+    // Older saved measurements that omitted cache_read_tokens from total still restore the full window.
+    measurements.records[0].tokens.total = 120;
     await registry.recordSend(SESSION_ID, { ...send, antigravity: { ...send.antigravity, measurements } });
     const restarted = createAntigravityStore({ registry: createNativeRegistry({ filePath }), home });
     const restored = await restarted.loadHistory(SESSION_ID, NATIVE_ID, directory);
@@ -444,7 +446,7 @@ describe('Antigravity native store', () => {
       step({ step_index: 4, type: 'PLANNER_RESPONSE', content: 'Final answer', usage: { input_tokens: 5, output_tokens: 2 } }),
     ]);
     const history = await createAntigravityStore({ registry, home }).loadHistory(SESSION_ID, NATIVE_ID, directory);
-    expect(history.records[1].info.tokens).toMatchObject({ input: 20, output: 3, cache: { read: 7 }, total: 23 });
+    expect(history.records[1].info.tokens).toMatchObject({ input: 20, output: 3, cache: { read: 7 }, total: 30 });
     expect(history.records[1].parts[0].state).toMatchObject({ output: 'Retained output', metadata: { nativeOutputTruncated: true } });
     expect(history.records[2].info).toMatchObject({ role: 'compaction', summary: 'Native summary' });
     expect(history.records[3].info.tokens).toMatchObject({ input: 5, output: 2 });
