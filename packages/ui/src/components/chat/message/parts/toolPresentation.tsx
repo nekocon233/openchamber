@@ -4,6 +4,13 @@ import { GuestIcon } from '@/components/layout/GuestRailIcon';
 import { resolveGuestToolIcon } from '@/lib/guests/icon';
 import type { GuestToolRule } from '@/lib/guests/tool-presentation';
 import { getRuntimeUrlResolver } from '@/lib/runtime-url';
+import { getToolMetadata } from '@/lib/toolHelpers';
+import { isChecklistTool } from '@/lib/opencode/tools';
+import type { useI18n } from '@/lib/i18n';
+
+export const getToolDisplayName = (toolName: string, t: ReturnType<typeof useI18n>['t']): string => (
+    isChecklistTool(toolName) ? t('chat.toolPart.checklist.title') : getToolMetadata(toolName).displayName
+);
 
 /**
  * Icon for a tool row, dialog header, or error fallback. An extension rule
@@ -18,6 +25,9 @@ export const getToolIcon = (toolName: string, presentation?: GuestToolRule | nul
         : null;
     if (guestIcon) {
         return <GuestIcon icon={guestIcon.icon} iconSrc={guestIcon.iconSrc} className={iconClass} />;
+    }
+    if (isChecklistTool(toolName)) {
+        return <Icon name="list-check-2" className={iconClass} />;
     }
     const tool = toolName.toLowerCase();
 

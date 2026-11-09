@@ -53,6 +53,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "chat.toolPart.checklist.title": "Mettre à jour la liste des tâches",
+  "chat.toolPart.checklist.empty": "Liste des tâches vidée.",
   ...diffFileFilterI18n['fr'],
   "agents.combinations.loadFailed": "Impossible de charger les combinaisons. Rouvrez les paramètres et réessayez.",
   "agents.combinations.saveFailed": "Impossible d'enregistrer les combinaisons. Réessayez.",

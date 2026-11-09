@@ -52,6 +52,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "chat.toolPart.checklist.title": "تحديث قائمة المهام",
+  "chat.toolPart.checklist.empty": "تم مسح قائمة المهام.",
   ...diffFileFilterI18n['ar'],
   "agents.combinations.loadFailed": "تعذر تحميل المجموعات. أعد فتح الإعدادات وحاول مجددًا.",
   "agents.combinations.saveFailed": "تعذر حفظ المجموعات. حاول مجددًا.",
@@ -4092,11 +4094,11 @@ export const dict = {
   'chat.nativeTasks.recent': 'No longer active',
   'chat.nativeTasks.refresh': 'Refresh',
   'chat.nativeTasks.stale': 'These tasks may be out of date. Refresh to try again.',
-  'chat.nativeTasks.status.completed': 'Completed',
+  "chat.nativeTasks.status.completed": "مكتمل",
   'chat.nativeTasks.status.failed': 'Failed',
   'chat.nativeTasks.status.paused': 'Paused',
-  'chat.nativeTasks.status.pending': 'Pending',
-  'chat.nativeTasks.status.running': 'Running',
+  "chat.nativeTasks.status.pending": "قيد الانتظار",
+  "chat.nativeTasks.status.running": "قيد التنفيذ",
   'chat.nativeTasks.status.stopped': 'Stopped',
   'chat.nativeTasks.status.unknown': 'Unknown',
   'chat.nativeTasks.stop.accepted': 'Stop requested. Waiting for CLI confirmation.',
@@ -4104,7 +4106,7 @@ export const dict = {
   'chat.nativeTasks.stop.error': 'Could not stop this task. Try again.',
   'chat.nativeTasks.stop.pending': 'Stopping…',
   'chat.nativeTasks.summary.background': 'Active: {active} / Recorded: {total}',
-  'chat.nativeTasks.summary.checklist': 'Completed: {completed} / {total}',
+  "chat.nativeTasks.summary.checklist": "المكتمل: {completed} من {total}",
   'chat.nativeTasks.summary.partial': 'Incomplete or out of date',
   'chat.nativeTasks.summary.plan': 'Plan available',
   'chat.nativeTasks.summary.unavailable': 'Unavailable',

@@ -7,7 +7,7 @@ import { Window } from 'happy-dom';
 import { OpenCode } from "@opencode/client"
 import { type ToolPart as ToolPartData } from "@/lib/opencode/model"
 import { SyncProvider } from '@/sync/sync-context';
-import { I18nProvider } from '@/lib/i18n';
+import { I18nProvider, useI18nStore } from '@/lib/i18n';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
 import { getDefaultTheme } from '@/lib/theme/themes';
 import { useUIStore } from '@/stores/useUIStore';
@@ -81,6 +81,19 @@ const failed = toolPart('prt_failed', 'bash', {
   error: 'ls: /missing: No such file or directory\nexit code 1',
   time: { start: 1, end: 2 },
 });
+
+const checklistState: Extract<ToolPartData['state'], { status: 'completed' }> = {
+  status: 'completed',
+  input: { todos: [
+    { id: 'research', content: 'Read the current implementation', status: 'completed' },
+    { id: 'implement', content: 'Update the checklist display', status: 'in_progress' },
+    { id: 'verify', content: 'Verify desktop and mobile', status: 'pending' },
+  ] },
+  output: '{"openchamberChecklist":1,"digest":"internal-receipt"}',
+  metadata: { nativeBackend: 'antigravity', openchamberToolSource: 'mcp' },
+  time: { start: 1, end: 2 },
+};
+const checklist = toolPart('prt_checklist', 'openchamber_checklist_update_checklist', checklistState);
 
 // Commands whose file changes Claude Code recorded, as the native server
 // projects them: the diffs it kept, and the files it named without one.
@@ -207,13 +220,59 @@ test('the concise transcript shows a call as Name(argument) over one result line
     expect(container.textContent).not.toContain('/p/gen/6.txt');
     expect(container.textContent).toContain('+1 more file');
 
+    await render(checklist);
+    expect(row()?.textContent).toBe('Update checklist(Completed: 1 / 3)');
+    expect(container.textContent).not.toContain('Read the current implementation');
+    await render(checklist, true);
+    expect(container.querySelectorAll('[data-checklist-item-id]')).toHaveLength(3);
+    expect(container.textContent).toContain('Read the current implementation');
+    expect(container.textContent).toContain('Running');
+    expect(container.textContent).toContain('Pending');
+    expect(container.textContent).not.toContain('internal-receipt');
+    expect(container.textContent).not.toContain('openchamber_checklist_update_checklist');
+
+    await act(async () => { await useI18nStore.getState().setLocale('zh-CN'); });
+    expect(row()?.textContent).toBe('更新任务清单(已完成：1 / 3)');
+    expect(container.textContent).toContain('进行中');
+    expect(container.querySelectorAll('[data-checklist-item-id]')).toHaveLength(3);
+    await act(async () => { await useI18nStore.getState().setLocale('en'); });
+
+    await render({ ...checklist, state: { ...checklistState, input: { todos: [] } } }, true);
+    expect(container.textContent).toContain('Checklist cleared.');
+    expect(container.textContent).toContain('Completed: 0 / 0');
+    await render({ ...checklist, state: { ...checklistState, input: { todos: [{ content: 'Partial task' }] } } }, true);
+    expect(container.textContent).toContain('Partial task');
+    expect(container.textContent).not.toContain('Completed: 0 / 0');
+    expect(container.querySelector('[data-checklist-item-id]')).toBeNull();
+
+    for (const input of [checklistState.input, { todos: [] }]) {
+      await render({ ...checklist, state: { ...checklistState, input, metadata: { nativeInputTruncated: true } } }, true);
+      expect(container.querySelector('[data-checklist-item-id]')).toBeNull();
+      expect(container.textContent).not.toContain('Completed:');
+      expect(container.textContent).not.toContain('Checklist cleared.');
+    }
+
+    await render(toolPart('prt_checklist_error', checklist.tool, {
+      status: 'error', input: checklistState.input, error: 'Checklist update was rejected.',
+      time: { start: 1, end: 2 },
+    }), true);
+    expect(container.textContent).toContain('Checklist update was rejected.');
+    expect(container.textContent).not.toContain('Completed: 1 / 3');
+    expect(container.querySelector('[data-checklist-item-id]')).toBeNull();
+
     // Turning the setting off brings back the standard row.
     await act(async () => { useUIStore.setState({ conciseTranscript: false }); });
+    await render(checklist, true);
+    expect(container.textContent).toContain('Update checklist');
+    expect(container.textContent).toContain('Completed: 1 / 3');
+    expect(container.querySelectorAll('[data-checklist-item-id]')).toHaveLength(3);
+    expect(container.textContent).not.toContain('internal-receipt');
     await render(bash);
     expect(container.textContent).toContain('Shell Command');
     expect(container.textContent).not.toContain('Bash(ls -la)');
   } finally {
     await act(async () => { root.unmount(); });
+    await useI18nStore.getState().setLocale('en');
     useUIStore.setState({ conciseTranscript: useUIStore.getInitialState().conciseTranscript });
     await happyWindow.happyDOM.abort();
     for (const [name, descriptor] of previous) {

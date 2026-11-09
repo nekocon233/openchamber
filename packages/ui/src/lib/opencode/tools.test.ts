@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ToolInput } from "./model"
 
 import {
   patchInputFiles,
@@ -14,6 +15,8 @@ import {
   isSubagentTool,
   isWebTool,
   normalizeToolName,
+  isChecklistTool,
+  checklistToolItems,
   recordedFileChanges,
   renderedPage,
   subagentSessionId,
@@ -23,6 +26,13 @@ import {
 } from "./tools"
 
 describe("tool identity", () => {
+  test("recognizes only the application checklist tool", () => {
+    expect(isChecklistTool('openchamber_checklist_update_checklist')).toBe(true)
+    expect(isChecklistTool('runtime.openchamber_checklist_update_checklist:2')).toBe(true)
+    for (const tool of ['update_checklist', 'other_update_checklist', 'todowrite', undefined]) {
+      expect(isChecklistTool(tool)).toBe(false)
+    }
+  })
   test("recognizes OpenCode 2 names and the native CLI tool names", () => {
     expect(isShellTool("shell")).toBe(true)
     expect(isShellTool("bash")).toBe(true)
@@ -51,6 +61,25 @@ describe("tool identity", () => {
 })
 
 describe("tool input and metadata", () => {
+  test("distinguishes checklist updates, explicit clears and invalid input", () => {
+    const input = { todos: [
+      { id: 'done', content: 'Inspect the existing tool row', status: 'completed' },
+      { id: 'next', content: 'Verify the display', status: 'pending' },
+    ] }
+    const before = structuredClone(input)
+    expect(checklistToolItems(input)).toEqual(input.todos)
+    expect(input).toEqual(before)
+    expect(checklistToolItems({ todos: [] })).toEqual([])
+    const invalidInputs: Array<ToolInput | undefined> = [undefined, {}, { todos: null },
+      { todos: [{ id: 'same', content: 'One', status: 'pending' }, { id: 'same', content: 'Two', status: 'completed' }] },
+      { todos: [{ id: 'one', content: ' ', status: 'pending' }] },
+      { todos: [{ id: 'one', content: 'Task', status: 'unknown' }] },
+      { todos: [{ content: 'Missing identity', status: 'pending' }] },
+    ]
+    for (const invalid of invalidInputs) {
+      expect(checklistToolItems(invalid)).toBeNull()
+    }
+  })
   test("reads the v2 path key and the legacy ones MCP tools use", () => {
     expect(toolInputPath({ path: "src/a.ts" })).toBe("src/a.ts")
     expect(toolInputPath({ filePath: "src/b.ts" })).toBe("src/b.ts")

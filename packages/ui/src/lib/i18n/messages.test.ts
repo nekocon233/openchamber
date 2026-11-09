@@ -35,6 +35,19 @@ const localeDictionaries = {
 } as const;
 
 describe('i18n dictionaries', () => {
+  test('checklist tool titles, progress and statuses are translated in every locale', () => {
+    const keys = ['chat.toolPart.checklist.title', 'chat.toolPart.checklist.empty',
+      'chat.nativeTasks.status.pending', 'chat.nativeTasks.status.running',
+      'chat.nativeTasks.status.completed', 'chat.nativeTasks.summary.checklist'] as const;
+    for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
+      for (const key of keys) {
+        expect(dictionary[key]).toBeTruthy();
+        if (locale !== 'en') expect(dictionary[key]).not.toBe(enDict[key]);
+      }
+      expect(dictionary['chat.nativeTasks.summary.checklist']).toContain('{completed}');
+      expect(dictionary['chat.nativeTasks.summary.checklist']).toContain('{total}');
+    }
+  });
   test('Magpie quota messages are translated with matching placeholders', () => {
     const messages = Object.entries(enDict).filter(([key]) => key.startsWith('quota.magpie.'));
     for (const [locale, dictionary] of Object.entries(localeDictionaries)) {

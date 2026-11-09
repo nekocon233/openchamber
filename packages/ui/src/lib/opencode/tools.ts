@@ -87,6 +87,28 @@ export const isEditTool = is(OPENCODE_TOOLS.edit)
 export const isWriteTool = is(OPENCODE_TOOLS.write)
 export const isPatchTool = is(OPENCODE_TOOLS.patch)
 
+/** The application-owned MCP tool, separate from OpenCode's built-in tools. */
+export const isChecklistTool = (toolName: ToolName): boolean =>
+  normalizeToolName(toolName) === 'openchamber_checklist_update_checklist'
+
+const checklistToolItemSchema = z.object({
+  id: z.string().min(1),
+  content: z.string().refine((value) => value.trim().length > 0),
+  status: z.enum(['pending', 'in_progress', 'completed']),
+})
+const checklistToolInputSchema = z.object({
+  todos: z.array(checklistToolItemSchema).max(2000)
+    .refine((items) => new Set(items.map((item) => item.id)).size === items.length),
+})
+
+export type ChecklistToolItem = z.infer<typeof checklistToolItemSchema>
+
+/** Null preserves generic details for incomplete input; [] is an explicit clear. */
+export function checklistToolItems(input: ToolInput | undefined): ChecklistToolItem[] | null {
+  const parsed = checklistToolInputSchema.safeParse(input)
+  return parsed.success ? parsed.data.todos : null
+}
+
 // Tools whose transcript row opens the read file or skill in the app and never
 // shows the call's result.
 const NAVIGATION_TOOLS = new Set<string>([OPENCODE_TOOLS.read, OPENCODE_TOOLS.skill])

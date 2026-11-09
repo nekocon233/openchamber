@@ -54,6 +54,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "chat.toolPart.checklist.title": "タスクリストを更新",
+  "chat.toolPart.checklist.empty": "タスクリストをクリアしました。",
   ...diffFileFilterI18n['ja'],
   "agents.combinations.loadFailed": "組み合わせを読み込めませんでした。設定を開き直して再試行してください。",
   "agents.combinations.saveFailed": "組み合わせを保存できませんでした。再試行してください。",

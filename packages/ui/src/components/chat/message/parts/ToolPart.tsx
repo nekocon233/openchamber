@@ -10,7 +10,6 @@ import { BlockLine } from './BlockLine';
 import { ToolRevealOnMount } from './ToolRevealOnMount';
 import { FormMarkdown } from '../../FormMarkdown';
 import { MessageFilesDisplay } from '../../FileAttachment';
-import { getToolMetadata } from '@/lib/toolHelpers';
 import type { FilePart, Metadata, Part, ToolInput, ToolPart as ToolPartType, ToolState as ToolStateUnion } from '@/lib/opencode/model';
 import { toolDisplayStyles } from '@/lib/typography';
 import { WorkerHighlightedCode } from '@/components/code/WorkerHighlightedCode';
@@ -48,7 +47,8 @@ import { Icon } from "@/components/icon/Icon";
 import { DiffViewToggle, type DiffViewMode } from '../DiffViewToggle';
 import { useDefaultDiffViewMode } from '../useDefaultDiffViewMode';
 import { MinDurationShineText } from './MinDurationShineText';
-import { getToolIcon } from './toolPresentation';
+import { getToolDisplayName, getToolIcon } from './toolPresentation';
+import { ChecklistToolContent } from './ChecklistToolContent';
 import { GuestToolTable } from './GuestToolTable';
 import { readQuestionTranscript } from './questionTranscript';
 import {
@@ -105,6 +105,9 @@ import {
     subagentAgent,
     subagentDescription,
     isWriteTool,
+    isChecklistTool,
+    checklistToolItems,
+    type ChecklistToolItem,
     normalizeToolName,
     recordedFileChanges,
     toolDescription, type ToolDescription,
@@ -939,12 +942,13 @@ const TaskSummaryEntryRow = React.memo(({
     animateTailText: boolean;
     showToolFileIcons: boolean;
 }) => {
+    const { t } = useI18n();
     const normalizedToolName = normalizeToolName(entry.tool);
     const toolName = normalizedToolName.length > 0 ? normalizedToolName : 'tool';
     const label = getTaskSummaryLabel(entry);
     const hasLabel = label.trim().length > 0;
     const status = entry.state?.status;
-    const displayName = getToolMetadata(toolName).displayName;
+    const displayName = getToolDisplayName(toolName, t);
 
     return (
         <ToolRevealOnMount animate={animateTailText} wipe>
@@ -1404,6 +1408,7 @@ interface ToolExpandedContentProps {
     isExpanded: boolean;
     onShowPopup?: (content: ToolPopupContent) => void;
     presentation: GuestToolRule | null;
+    checklistItems: ChecklistToolItem[] | null;
 }
 
 const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
@@ -1413,6 +1418,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     isExpanded,
     onShowPopup,
     presentation,
+    checklistItems,
 }) => {
     const { t } = useI18n();
     const runtime = React.useContext(RuntimeAPIContext);
@@ -1830,7 +1836,9 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                 'relative pe-2 pb-2 pt-2 space-y-2 ps-4'
             )}
         >
-            {plan ? (
+            {checklistItems !== null ? (
+                renderScrollableBlock(<ChecklistToolContent items={checklistItems} />, { maxHeightClass: 'max-h-60' })
+            ) : plan ? (
                 renderScrollableBlock(<div className="space-y-2">
                     <FormMarkdown content={plan.text} size="meta" className="text-foreground" />
                     {state.status === 'error' ? <div className="typography-meta text-[var(--status-error)]">{state.error}</div> : null}
@@ -2227,8 +2235,13 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         () => (presentation ? renderGuestToolHeader(presentation, { input, output: stateOutput, metadata }) : null),
         [input, metadata, presentation, stateOutput],
     );
-    const description = guestHeader?.subtitle ?? builtInDescription;
-    const displayName = guestHeader?.title ?? getToolMetadata(normalizedPartTool || part.tool).displayName;
+    const checklistItems = !presentation && status === 'completed' && metadata?.nativeInputTruncated !== true && isChecklistTool(part.tool)
+        ? checklistToolItems(input)
+        : null;
+    const description = guestHeader?.subtitle ?? (checklistItems !== null
+        ? t('chat.nativeTasks.summary.checklist', { completed: checklistItems.filter((item) => item.status === 'completed').length, total: checklistItems.length })
+        : builtInDescription);
+    const displayName = guestHeader?.title ?? getToolDisplayName(normalizedPartTool || part.tool, t);
 
     // Opened, the body already carries the whole error and output.
     const failureDetail = isError && !isExpanded ? failureReason : undefined;
@@ -2455,6 +2468,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
                             isExpanded={isExpanded}
                             onShowPopup={onShowPopup}
                             presentation={presentation}
+                            checklistItems={checklistItems}
                         />
                     ) : contentCompletion.status === 'loading' ? (
                         contentCompletion.showProgress ? (
@@ -2483,7 +2497,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         return (
             <div>
                 <ConciseToolHeader
-                    name={guestHeader?.title ?? getConciseToolName(normalizedPartTool, part.tool)}
+                    name={guestHeader?.title ?? (isChecklistTool(part.tool) ? displayName : getConciseToolName(normalizedPartTool, part.tool))}
                     argument={argument}
                     argumentTitle={argument}
                     status={conciseStatus}
@@ -2921,7 +2935,7 @@ const SubagentToolPartContent: React.FC<ToolPartProps> = (props) => {
 const ToolPart: React.FC<ToolPartProps> = (props) => {
     const { t } = useI18n();
     const toolName = normalizeToolName(props.part.tool) || 'tool';
-    const displayName = getToolMetadata(toolName).displayName;
+    const displayName = getToolDisplayName(toolName, t);
     const backgroundShellID = isShellTool(toolName) ? readBackgroundShellID(props.part) : undefined;
 
     return (

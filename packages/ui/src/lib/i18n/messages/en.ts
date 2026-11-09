@@ -53,6 +53,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "chat.toolPart.checklist.title": "Update checklist",
+  "chat.toolPart.checklist.empty": "Checklist cleared.",
   ...diffFileFilterI18n['en'],
   "agents.combinations.loadFailed": "Could not load combinations. Reopen settings and retry.",
   "agents.combinations.saveFailed": "Could not save combinations. Retry.",
