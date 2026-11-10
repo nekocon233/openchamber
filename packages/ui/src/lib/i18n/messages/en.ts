@@ -2747,6 +2747,7 @@ export const dict = {
   'chat.commandAutocomplete.command.btwDescription': 'Ask a side question in a temporary child session without derailing this chat.',
   'chat.commandAutocomplete.command.forkDescription': 'Fork this chat from the last finished reply and continue there; text after /fork is sent to the fork.',
   'chat.commandAutocomplete.empty': 'No commands found',
+  "chat.commandAutocomplete.loadFailed": "Could not load CLI commands. Reopen the menu to retry.",
   'chat.agentMentionAutocomplete.badge.system': 'system',
   'chat.agentMentionAutocomplete.empty': 'No agents found',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Type to search more agents',

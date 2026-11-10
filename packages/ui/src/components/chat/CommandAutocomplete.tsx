@@ -241,7 +241,6 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   // lists, minus the names those shadow.
   const nativeCommandLists = React.useMemo(() => {
     if (!nativeBackend) return null;
-    if (nativeBackend === 'antigravity' && !unified) return { localCommands: [], cliCommands: [] };
     const cliName = CLI_NAMES[nativeBackend];
     const localCommands: CommandInfo[] = [
       ...(nativeBackend === 'codex' ? CODEX_COMPOSER_COMMANDS.map((command): CommandInfo => ({
@@ -268,7 +267,9 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
       description: command.description || undefined,
       cliName,
     }));
-    return { localCommands: nativeBackend === 'deepseek' && !unified ? localCommands.filter((command) => !['undo', 'redo', 'timeline'].includes(command.name)) : localCommands, cliCommands };
+    const availableLocal = nativeBackend === 'antigravity' && !unified ? []
+      : nativeBackend === 'deepseek' && !unified ? localCommands.filter((command) => !['undo', 'redo', 'timeline'].includes(command.name)) : localCommands;
+    return { localCommands: availableLocal, cliCommands };
   }, [nativeBackend, nativeCommands, hasSession, unified, canUseReviewHandoffFlow, t]);
 
   const commands = React.useMemo(
@@ -280,7 +281,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
 
   // A native CLI's command listing can be slow; its warnings explain a partial
   // or failed directory read.
-  const loading = nativeBackend === 'claude' && nativeCommands.status === 'loading';
+  const loading = (nativeBackend === 'claude' || nativeBackend === 'antigravity') && nativeCommands.status === 'loading';
 
   React.useEffect(() => {
     setSelectedIndex(0);
@@ -367,6 +368,9 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
       style={mobileMaxHeight !== undefined ? { ...style, maxHeight: mobileMaxHeight } : style}
     >
       <ScrollableOverlay preventOverscroll outerClassName="flex-1 min-h-0" className="px-0 pb-2">
+        {nativeBackend && nativeCommands.status === 'failed' && (
+          <p className="px-3 py-2 typography-ui-label text-muted-foreground">{t('chat.commandAutocomplete.loadFailed')}</p>
+        )}
         {nativeCommands.status === 'ready' && nativeCommands.warnings?.map((warning, index) => (
           <p key={index} className="px-3 py-2 break-words text-sm text-[var(--status-warning-text)]">{warning}</p>
         ))}
@@ -478,7 +482,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
                 </AutocompleteRowTooltip>
               );
             })}
-            {commands.length === 0 && (
+            {commands.length === 0 && nativeCommands.status !== 'failed' && (
               <div className="px-3 py-2 typography-ui-label text-muted-foreground">
                 {t('chat.commandAutocomplete.empty')}
               </div>

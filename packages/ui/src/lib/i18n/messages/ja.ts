@@ -2741,6 +2741,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': '最後に完了した応答からこのチャットをフォークして続行します。/fork の後のテキストはフォーク先に送信されます。',
   'chat.commandAutocomplete.command.exploreDescription': 'このコードベースに慣れる: アーキテクチャと主要部分の概要ツアー。',
   'chat.commandAutocomplete.empty': 'コマンドが見つかりません',
+  "chat.commandAutocomplete.loadFailed": "CLI コマンドを読み込めませんでした。メニューを開き直して再試行してください。",
   'chat.agentMentionAutocomplete.badge.system': 'システム',
   'chat.agentMentionAutocomplete.empty': 'エージェントが見つかりません',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'さらにエージェントを検索するには入力',

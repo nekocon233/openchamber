@@ -432,6 +432,25 @@ The registry also owns archive and title overrides. Deletion is not simulated:
 hiding a native conversation in OpenChamber while leaving it in agy would make
 `deleted: true` false, so deletion remains unsupported.
 
+## Skill commands
+
+The command menu lists skills from the direct executable's local `--print /skills`
+command in the requested directory. A process-local settings override clears the
+model/provider selection for discovery only, so a shell gateway or missing API
+key cannot turn a local listing into a model request. Prompt routing is unchanged.
+
+Directory listings have a 25-second process deadline and share a 10-minute cache,
+bounded to 64 directories. Cold installed-CLI skill discovery can exceed the
+10-second catalog/quota deadline before its local print command completes. Failed or
+unreadable results are not cached. Submission rereads the current list, rejects
+unknown or removed skills before native admission, and converts `/skill args`
+into an explicit request to read and follow that skill. Other prompt parts and
+feature instructions keep their order. Ordinary prose and absolute file paths
+perform no discovery. Stop, archive and shutdown cancel an in-flight prompt
+preparation, including standalone sessions waiting for skill discovery. A cancelled
+lookup never dispatches its prompt. Build retains `--disable-slash-commands`; Plan keeps its
+existing native planning expansion. Terminal-only controls remain unsupported.
+
 ## Historical statistics
 
 The store provides a separate read-only statistics path over all retained root

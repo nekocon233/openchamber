@@ -13,6 +13,21 @@ const option = (name) => {
   const index = args.indexOf(name);
   return index === -1 ? null : args[index + 1];
 };
+if (args.includes('/skills')) {
+  if (!args.includes('--disable-slash-commands=false')) throw new Error('Skill listing must execute the local CLI command');
+  const settings = JSON.parse(option('--settings') ?? '{}');
+  if (settings.modelProvider !== '' || settings.model !== '') throw new Error('Skill listing must ignore gateway model routing');
+  if (process.env.AGY_FIXTURE_SKILL_PROBES) fs.appendFileSync(process.env.AGY_FIXTURE_SKILL_PROBES, JSON.stringify({ cwd: process.cwd(), args }) + '\n');
+  const gate = process.env.AGY_FIXTURE_SKILL_GATE;
+  if (gate && !fs.existsSync(gate)) await new Promise((resolve) => {
+    const watcher = fs.watch(path.dirname(gate), () => {
+      if (fs.existsSync(gate)) { watcher.close(); resolve(); }
+    });
+    if (fs.existsSync(gate)) { watcher.close(); resolve(); }
+  });
+  process.stdout.write(process.env.AGY_FIXTURE_SKILLS ? fs.readFileSync(process.env.AGY_FIXTURE_SKILLS, 'utf8') : 'fixture-skill\tFixture skill\n');
+  process.exit(0);
+}
 if (args.includes('--version')) {
   console.log('1.4.11');
   process.exit(0);

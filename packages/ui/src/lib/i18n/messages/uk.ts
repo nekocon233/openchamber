@@ -2714,6 +2714,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': 'Відгалузити цей чат від останньої завершеної відповіді й продовжити там; текст після /fork надсилається у відгалуження.',
   "chat.commandAutocomplete.command.exploreDescription": "Зорієнтуватись у кодовій базі: високорівневий тур архітектурою й основними частинами.",
   "chat.commandAutocomplete.empty": "Команди не знайдено",
+  "chat.commandAutocomplete.loadFailed": "Не вдалося завантажити команди CLI. Відкрийте меню знову, щоб повторити спробу.",
   "chat.agentMentionAutocomplete.badge.system": "система",
   "chat.agentMentionAutocomplete.empty": "Агентів не знайдено",
   "chat.fileMentionAutocomplete.searchMoreAgents": "Введіть, щоб знайти більше агентів",

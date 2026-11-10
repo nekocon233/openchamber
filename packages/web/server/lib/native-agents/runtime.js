@@ -208,6 +208,7 @@ export const createNativeAgentsRuntime = ({
   let planExecution;
   let delegation;
   const sourceTools = new Map();
+  const antigravityPreparations = new Map();
   const publisher = createNativeEventPublisher({
     publishNativeEvent: (event) => {
       delegation?.observe(event);
@@ -599,6 +600,7 @@ export const createNativeAgentsRuntime = ({
 
   // Stops a running turn and waits until the CLI has settled it.
   const stopTurn = async (sessionId) => {
+    antigravityPreparations.get(sessionId)?.abort();
     let delegationError;
     try { await delegation?.cancel((await registry.getSession(sessionId))?.conversationId ?? sessionId); }
     catch (error) { delegationError = error; }
@@ -646,13 +648,21 @@ export const createNativeAgentsRuntime = ({
     if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
       signal?.throwIfAborted();
       await antigravityDecisions.beforePrompt(sessionId, request.messageID);
-      const knowledge = memory && !isEnterpriseMode() ? await memory.context({ backend, sessionId, directory: request.directory, delivery: 'managed' }).catch(() => null) : null;
-      const parts = withInstructions(request.parts, [request.instructions, knowledge?.text].filter(Boolean).join('\n\n') || undefined);
+      if (antigravityPreparations.has(sessionId)) throw sessionBusyError();
+      const preparation = new AbortController();
+      antigravityPreparations.set(sessionId, preparation);
+      const admissionSignal = signal ? AbortSignal.any([signal, preparation.signal]) : preparation.signal;
       try {
-        await antigravity.prompt(sessionId, { ...request, parts }, signal);
+        const commandParts = await antigravity.commandParts(request.parts, request.directory);
+        admissionSignal.throwIfAborted();
+        const knowledge = memory && !isEnterpriseMode() ? await memory.context({ backend, sessionId, directory: request.directory, delivery: 'managed' }).catch(() => null) : null;
+        const parts = withInstructions(commandParts, [request.instructions, knowledge?.text].filter(Boolean).join('\n\n') || undefined);
+        await antigravity.prompt(sessionId, { ...request, parts }, admissionSignal);
       } catch (error) {
         if (error.code !== 'NATIVE_PROMPT_OUTCOME_UNKNOWN') memory?.release(sessionId);
         throw error;
+      } finally {
+        if (antigravityPreparations.get(sessionId) === preparation) antigravityPreparations.delete(sessionId);
       }
       return;
     }
@@ -964,12 +974,12 @@ export const createNativeAgentsRuntime = ({
     },
 
     /**
-     * Claude's commands or Codex's enabled skills in the requested directory.
-     * @param {'claude' | 'codex'} backend
+     * Native commands or enabled skills in the requested directory.
+     * @param {'claude' | 'codex' | 'deepseek' | 'antigravity'} backend
      * @param {string} directory
      */
     async commands(backend, directory, sessionId) {
-      if (backend === NATIVE_BACKEND_ANTIGRAVITY) return { commands: [] };
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) return antigravity.commands(directory);
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.commands(sessionId, directory);
       if (backend === NATIVE_BACKEND_CODEX) return codexCommands.list(directory);
       const cached = claudeCommands.get(directory);
@@ -1022,6 +1032,8 @@ export const createNativeAgentsRuntime = ({
      * reports no background work.
      */
     async abort(sessionId) {
+      const preparation = antigravityPreparations.get(sessionId);
+      preparation?.abort();
       let delegationError;
       let cancelledDelegation = false;
       try { cancelledDelegation = await delegation?.cancel((await registry.getSession(sessionId))?.conversationId ?? sessionId) ?? false; }
@@ -1032,7 +1044,7 @@ export const createNativeAgentsRuntime = ({
       const aborted = await liveFor(sessionId).abort(sessionId);
       const stoppedBackground = !aborted && decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && await claudeLive.stopBackgroundTasks(sessionId);
       if (delegationError) throw delegationError;
-      return aborted || cancelledDelegation || cancelledExecution || cancelledPlan || cancelledAntigravity || stoppedBackground;
+      return Boolean(preparation) || aborted || cancelledDelegation || cancelledExecution || cancelledPlan || cancelledAntigravity || stoppedBackground;
     },
 
     /**
@@ -1470,6 +1482,7 @@ export const createNativeAgentsRuntime = ({
     },
 
     async shutdown() {
+      for (const preparation of antigravityPreparations.values()) preparation.abort();
       await delegation?.shutdown();
       await planExecution.shutdown();
       await antigravityDecisions.shutdown();

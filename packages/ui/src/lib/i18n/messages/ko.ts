@@ -2745,6 +2745,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': '마지막으로 완료된 응답에서 이 채팅을 포크하여 이어갑니다. /fork 뒤의 텍스트는 포크된 세션으로 전송됩니다.',
   'chat.commandAutocomplete.command.exploreDescription': '코드베이스에 대한 방향을 잡습니다: 아키텍처와 주요 부분을 한눈에 살펴봅니다.',
   'chat.commandAutocomplete.empty': '명령 없음',
+  "chat.commandAutocomplete.loadFailed": "CLI 명령을 불러오지 못했습니다. 메뉴를 다시 열어 재시도하세요.",
   'chat.agentMentionAutocomplete.badge.system': 'system',
   'chat.agentMentionAutocomplete.empty': '에이전트 없음',
   'chat.fileMentionAutocomplete.searchMoreAgents': '입력해 에이전트를 더 검색하세요',

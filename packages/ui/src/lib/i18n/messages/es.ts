@@ -2714,6 +2714,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': 'Bifurca este chat desde la última respuesta terminada y continúa allí; el texto tras /fork se envía a la bifurcación.',
   "chat.commandAutocomplete.command.exploreDescription": "Oriéntate en este código: un recorrido general de la arquitectura y las partes principales.",
   "chat.commandAutocomplete.empty": "No se encontraron comandos",
+  "chat.commandAutocomplete.loadFailed": "No se pudieron cargar los comandos de CLI. Vuelve a abrir el menú para reintentarlo.",
   "chat.agentMentionAutocomplete.badge.system": "sistema",
   "chat.agentMentionAutocomplete.empty": "No se encontraron agentes",
   "chat.fileMentionAutocomplete.searchMoreAgents": "Escribe para buscar más agentes",

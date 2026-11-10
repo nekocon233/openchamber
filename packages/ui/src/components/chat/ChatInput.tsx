@@ -662,6 +662,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             ?? (isUnifiedNativeSessionId(currentSessionId) ? nativeBackendOfProviderId(currentProviderId ?? '') ?? unifiedState?.backend ?? null : null)
         : newSessionDraftOpen && currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null;
     const isNativeTarget = nativeTargetBackend !== null || Boolean(currentSessionId && isNativeSessionId(currentSessionId));
+    const nativeLocalCommandsEnabled = nativeTargetBackend !== 'antigravity' || Boolean(currentSessionId && isUnifiedNativeSessionId(currentSessionId));
     const getModelMetadata = useConfigStore((state) => state.getModelMetadata);
     // Subscribe to both sources read by getModelMetadata so async metadata and provider updates are observed.
     useConfigStore((state) => state.modelsMetadata);
@@ -1840,7 +1841,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         let commandPlan = inputSnapshot.hasContent
             ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
             : null;
-        if (commandPlan && ((nativeTargetBackend === 'antigravity' && (!currentSessionId || !isUnifiedNativeSessionId(currentSessionId))) || (isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)))) commandPlan = null;
+        if (commandPlan && (!nativeLocalCommandsEnabled || (isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)))) commandPlan = null;
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);
             const commandIsAvailable = commandPlan.command.name === 'btw'
@@ -2042,7 +2043,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         // A native CLI compacts with its own command, which shows as the
         // compaction marker; nothing goes out as a message.
-        const nativeCompaction = isNativeTarget && currentSessionId && (nativeTargetBackend !== 'antigravity' || isUnifiedNativeSessionId(currentSessionId)) && !isBtwActive && inputMode === 'normal'
+        const nativeCompaction = isNativeTarget && currentSessionId && nativeTargetBackend !== 'antigravity' && !isBtwActive && inputMode === 'normal'
             ? nativeCompactCommand(inputSnapshot.message)
             : null;
         if (nativeCompaction && currentSessionId) {
@@ -2375,7 +2376,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Local slash commands, normal mode only. A native session keeps only
         // the ones that act on OpenChamber's view of it; the rest are the CLI's.
         const typedCommand = inputMode === 'normal' ? parseSlashCommand(primaryText) : null;
-        const parsedCommand = typedCommand && (nativeTargetBackend !== 'antigravity' || (currentSessionId && isUnifiedNativeSessionId(currentSessionId))) && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
+        const parsedCommand = typedCommand && nativeLocalCommandsEnabled && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
             ? typedCommand
             : null;
         if (parsedCommand) {
@@ -3723,7 +3724,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     });
 
     const handleCommandSelect = useStableHandler((command: CommandInfo) => {
-        if (command.name === 'btw' && currentSessionId) {
+        if (command.source === 'openchamber' && command.name === 'btw' && currentSessionId) {
             closeAutocomplete();
             void handleSubmitRef.current({ presetText: '/btw' });
             return;

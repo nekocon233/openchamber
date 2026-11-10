@@ -2593,6 +2593,7 @@ export const dict = {
   'chat.commandAutocomplete.command.weighDescription': 'Commit etmeden önce 2-3 yaklaşımı ödünleşimleriyle değerlendirir ve bir öneri sunar.',
   'chat.commandAutocomplete.command.exploreDescription': 'Bu kod tabanında yön bulmanı sağlar: mimarinin ve ana bölümlerin üst düzey bir turu.',
   'chat.commandAutocomplete.empty': 'Komut bulunamadı',
+  "chat.commandAutocomplete.loadFailed": "CLI komutları yüklenemedi. Yeniden denemek için menüyü tekrar açın.",
   'chat.agentMentionAutocomplete.badge.system': 'sistem',
   'chat.agentMentionAutocomplete.empty': 'Agent bulunamadı',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Daha fazla agent aramak için yaz',

@@ -2710,6 +2710,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': '从最后一个已完成的回复分叉此对话并在新会话中继续；/fork 后的文本会发送到分叉会话。',
   'chat.commandAutocomplete.command.exploreDescription': '快速熟悉这个代码库：对架构和主要部分的概览。',
   'chat.commandAutocomplete.empty': '未找到命令',
+  "chat.commandAutocomplete.loadFailed": "无法加载 CLI 命令。重新打开菜单以重试。",
   'chat.agentMentionAutocomplete.badge.system': '系统',
   'chat.agentMentionAutocomplete.empty': '未找到智能体',
   'chat.fileMentionAutocomplete.searchMoreAgents': '输入以搜索更多智能体',
