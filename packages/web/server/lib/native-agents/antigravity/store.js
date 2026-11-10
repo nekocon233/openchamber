@@ -6,13 +6,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 
 import { NativeAgentError } from '../errors.js';
-import { encodeAntigravitySessionId } from '../ids.js';
+import { encodeAntigravitySessionId, decodeNativeSessionId } from '../ids.js';
 import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
 import { parseAgyTranscript } from './protocol.js';
 import { projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
 import { agySavedTasks } from './tasks.js';
 import { agyInteractionHistory } from './interaction-proposals.js';
 import { restoreAntigravityMeasurements } from './measurements.js';
+import { antigravityStatisticsRecords } from './statistics.js';
 
 const SUMMARY_COLUMNS = 'conversation_id, parent_conversation_id, title, preview, last_modified_time, workspace_uris';
 const SELECT_ROOTS = `select ${SUMMARY_COLUMNS}
@@ -203,17 +204,19 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
     };
   };
 
-  return {
+  const store = {
     transcriptPath,
 
     hasTranscript,
 
-    async listRootSessions(directory) {
+    async listRootSessions(directory, { statistics = false, signal } = {}) {
+      signal?.throwIfAborted();
       const entries = await registered(directory);
       const unconfirmed = [...entries.values()].filter((entry) => (
         entry.origin === 'openchamber' && entry.confirmedAt === undefined
       ));
       if (!hasSummaries()) {
+        if (statistics) throw unavailable('The Antigravity conversation index is missing');
         const confirmed = [...entries.values()].some((entry) => entry.confirmedAt !== undefined);
         if (confirmed) throw unavailable('The Antigravity conversation index is missing');
         return unconfirmed.map((entry) => unconfirmedSessionRecord({ ...entry }));
@@ -231,24 +234,52 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       }
       const records = [];
       const seen = new Set();
+      let failedSessions = 0;
       for (const raw of rows) {
+        signal?.throwIfAborted();
         const parsed = summaryRow.safeParse(raw);
-        if (!parsed.success) continue;
+        if (!parsed.success) { failedSessions += 1; continue; }
         const entry = entries.get(parsed.data.conversation_id);
         let record;
         try {
           record = recordOf(parsed.data, entry);
         } catch {
+          failedSessions += 1;
           continue;
         }
-        if (normalizedDirectory(record.directory) !== normalizedDirectory(directory)) continue;
+        if (directory !== undefined && normalizedDirectory(record.directory) !== normalizedDirectory(directory)) continue;
         records.push(record);
         seen.add(parsed.data.conversation_id);
       }
       for (const entry of unconfirmed) {
         if (!seen.has(entry.nativeId)) records.push(unconfirmedSessionRecord({ ...entry }));
       }
-      return records;
+      return statistics ? { sessions: records, failedSessions } : records;
+    },
+
+    listStatisticsSessions: (signal) => store.listRootSessions(undefined, { statistics: true, signal }),
+
+    async loadStatistics(sessionId, directory, { signal, tools = 'none' } = {}) {
+      signal?.throwIfAborted();
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== 'antigravity') return null;
+      const nativeId = decoded.conversationId;
+      const session = await one(sessionId, nativeId, directory);
+      if (!session) return null;
+      if (!hasTranscript(nativeId)) {
+        const entry = await registry.getSession(sessionId);
+        if (entry?.origin === 'openchamber' && entry.confirmedAt === undefined) return { records: [], childSessions: [] };
+        throw unavailable(`Antigravity transcript is missing: ${nativeId}`);
+      }
+      const transcript = readTranscript(nativeId);
+      let children;
+      try { children = childrenOf(nativeId, session); }
+      catch { children = { childSessions: [], complete: false }; }
+      const sends = await registry.sendRecords(sessionId);
+      signal?.throwIfAborted();
+      return { records: antigravityStatisticsRecords({ nativeId, entries: transcript.entries,
+        sends, parentID: session.parentID, tools }), childSessions: children.childSessions,
+      complete: transcript.malformed === 0 && transcript.unknownTypes.length === 0 && children.complete };
     },
 
     getSession: one,
@@ -364,4 +395,5 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
         && last.tool_calls.length === 0 ? last : null;
     },
   };
+  return store;
 };

@@ -128,6 +128,9 @@ Stats combines official OpenCode reports through `opencode/session-stats.ts`
 with native reports through `RuntimeAPIs.nativeAgents.stats`. Each read captures
 one range end and viewer timezone for all sources. Native histories are
 aggregated on the server; the browser receives counters and coverage only.
+Antigravity participates alongside Claude Code, Codex and DeepSeek. Its optional
+response partition preserves older-server compatibility; an omitted partition
+reports unavailable coverage and contributes no synthetic zero report.
 Project lookup failure affects the OpenCode source, never an unfiltered
 fallback or the native source. VS Code skips the unsupported native capability.
 

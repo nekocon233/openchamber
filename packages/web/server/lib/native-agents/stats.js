@@ -12,6 +12,7 @@ const recordSchema = z.object({
     z.object({ ...messageBase, role: z.literal('compaction') }),
     z.object({ ...messageBase, role: z.literal('assistant'), summary: z.boolean().optional(),
       providerID: z.string().optional(), modelID: z.string().optional(), variant: z.string().nullish(),
+      reasoningKnown: z.boolean().optional(),
       tokens: tokensSchema.optional(), cost: count.optional(),
     }),
   ]),
@@ -99,7 +100,7 @@ export const createStatisticsAccumulator = (query) => {
   let steps = 0;
   let cost = 0;
   return {
-    failed() { coverage.failedSessions += 1; },
+    failed(count = 1) { coverage.failedSessions += count; },
     add(session, snapshot) {
       let incomplete = snapshot.complete === false;
       for (const raw of snapshot.records) {
@@ -137,7 +138,7 @@ export const createStatisticsAccumulator = (query) => {
           target.tokens[info.tokens ? 'known' : 'missing'] += 1;
           if (info.tokens && snapshot.tokensComplete === false) target.tokens.missing += 1;
           target.cost[info.cost !== undefined ? 'known' : 'missing'] += 1;
-          target.reasoning[info.tokens && snapshot.reasoningKnown !== false ? 'known' : 'missing'] += 1;
+          target.reasoning[info.tokens && (info.reasoningKnown ?? snapshot.reasoningKnown) !== false ? 'known' : 'missing'] += 1;
         }
         if (info.tokens) {
           const value = { input: info.tokens.input, output: info.tokens.output, reasoning: info.tokens.reasoning, cacheRead: info.tokens.cache.read, cacheWrite: info.tokens.cache.write };
@@ -200,8 +201,10 @@ export const readNativeStatistics = async ({ query, backends, signal, scopeDirec
     const sourceSignal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
     try {
       signal?.throwIfAborted();
-      const roots = await untilAborted(store.listStatisticsSessions(sourceSignal), sourceSignal);
+      const listing = await untilAborted(store.listStatisticsSessions(sourceSignal), sourceSignal);
+      const roots = Array.isArray(listing) ? listing : listing.sessions;
       const accumulator = createStatisticsAccumulator(query);
+      if (!Array.isArray(listing)) accumulator.failed(listing.failedSessions);
       const visited = new Set();
       const visit = async (session) => {
         signal?.throwIfAborted();

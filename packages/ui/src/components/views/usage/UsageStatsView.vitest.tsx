@@ -10,6 +10,7 @@ for (const [name, value] of Object.entries({
   window: dom, document: dom.document, navigator: dom.navigator, location: dom.location, localStorage: dom.localStorage,
   Element: dom.Element, HTMLElement: dom.HTMLElement, Node: dom.Node, MutationObserver: dom.MutationObserver,
   ResizeObserver: dom.ResizeObserver, getComputedStyle: dom.getComputedStyle.bind(dom),
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom), cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   KeyboardEvent: dom.KeyboardEvent,
 })) {
   originalGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -64,7 +65,8 @@ afterEach(async () => {
   await changeLocale('en');
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await new Promise<void>((resolve) => setImmediate(resolve));
   dom.happyDOM.cancelAsync();
   globalThis.fetch = originalFetch;
   for (const [name, descriptor] of originalGlobals) {
@@ -79,6 +81,14 @@ test('unknown native metrics never render a zero cost or token breakdown', async
   expect(container.textContent).not.toContain('did not record');
   expect(container.textContent).not.toContain('$0.00');
   expect(container.textContent).not.toContain('In 0');
+});
+
+test('names incomplete AGY coverage without rendering it as zero usage', async () => {
+  const stats = report();
+  stats.sources = [{ source: 'antigravity', status: 'partial' }];
+  const container = await render(stats);
+  expect(container.textContent).toContain('Antigravity CLI');
+  expect(container.textContent).toContain('Unknown');
 });
 
 test('a recorded zero stays zero', async () => {

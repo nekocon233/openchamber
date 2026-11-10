@@ -12,6 +12,7 @@ import { antigravityPromptFingerprint } from '../prompt-parts.js';
 import { createNativeRegistry } from '../registry.js';
 import { createAntigravityStore } from './store.js';
 import { captureAntigravityMeasurements } from './measurements.js';
+import { readNativeStatistics } from '../stats.js';
 
 const NATIVE_ID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const SESSION_ID = encodeAntigravitySessionId(NATIVE_ID);
@@ -55,6 +56,73 @@ const setup = ({ confirmed = true } = {}) => {
 const step = (value) => JSON.stringify({ created_at: '2026-10-01T12:00:00Z', status: 'DONE', ...value });
 
 describe('Antigravity native store', () => {
+  it('counts native generations across roots, archives and children without counting child reports or checkpoints', async () => {
+    const { home, directory, registry, entry, writeSummary, writeTranscript } = setup();
+    await registry.registerSession(SESSION_ID, { ...entry, archivedAt: 5 });
+    writeSummary();
+    const child = '410d8822-277d-48ee-a2eb-42b5c19688dc';
+    writeSummary(child, '/child/worktree', NATIVE_ID);
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', input_tokens: 10, output_tokens: 7, thinking_tokens: 2, cache_read_tokens: 20 }),
+      step({ step_index: 2, type: 'CHECKPOINT', content: 'Summary' }),
+      step({ step_index: 3, type: 'SYSTEM_MESSAGE', content: `<SYSTEM_MESSAGE>\n[Message] timestamp=now sender=${child} priority=HIGH content=Child report\n</SYSTEM_MESSAGE>` }),
+    ]);
+    writeTranscript([step({ step_index: 0, type: 'PLANNER_RESPONSE', input_tokens: 0, output_tokens: 0, thinking_tokens: 0 })], child);
+    const store = createAntigravityStore({ registry, home });
+    expect((await store.listStatisticsSessions()).sessions).toHaveLength(1);
+    const query = { to: Date.parse('2026-10-02'), timezone: 'UTC', tools: 'none', directory };
+    const result = (await readNativeStatistics({ query, scopeDirectories: [directory], backends: { antigravity: store } })).backends.antigravity;
+    expect(result).toMatchObject({ status: 'ok', stats: { sessions: 1, subagents: 1, steps: 2,
+      tokens: { input: 10, output: 5, reasoning: 2, cacheRead: 20, total: 37 }, coverage: { tokens: { known: 2, missing: 0 } },
+    } });
+  });
+
+  it('keeps undated, missing and inconsistent usage unknown and reports malformed history as partial', async () => {
+    const { home, directory, registry, writeSummary, writeTranscript } = setup();
+    writeSummary();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: undefined, input_tokens: 4, output_tokens: 6 }),
+      step({ step_index: 2, type: 'PLANNER_RESPONSE', input_tokens: 1, output_tokens: 2, thinking_tokens: 3 }),
+      step({ step_index: 3, type: 'PLANNER_RESPONSE' }),
+      '{malformed',
+    ]);
+    const store = createAntigravityStore({ registry, home });
+    const result = (await readNativeStatistics({ query: { to: Date.parse('2026-10-02'), timezone: 'UTC', tools: 'none' }, backends: { antigravity: store } })).backends.antigravity;
+    expect(result).toMatchObject({ status: 'partial', stats: { steps: 3, tokens: { total: 10 },
+      coverage: { tokens: { known: 1, missing: 2 }, reasoning: { known: 0, missing: 3 }, undated: 1, failedSessions: 1 },
+      activity: [{ date: '2026-10-01', tokens: null, tokensComplete: false }],
+    } });
+    const aborted = AbortSignal.abort();
+    await expect(store.loadStatistics(SESSION_ID, directory, { signal: aborted })).rejects.toThrow();
+  });
+
+  it('counts saved tool failures and unfinished work and uses only recorded duration intervals', async () => {
+    const { home, directory, registry, writeSummary, writeTranscript } = setup();
+    writeSummary();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', tool_calls: [
+        { name: 'run_command', args: { CommandLine: 'background' } },
+        { name: 'edit_file', args: { Path: '/sample', Target: 'before', Replacement: 'after' } },
+        { name: 'read_file', args: { Path: '/sample' } },
+      ] }),
+      step({ step_index: 2, type: 'GENERIC', content: `Tool is running as a background task with task id: ${NATIVE_ID}/task-2` }),
+      step({ step_index: 3, type: 'GENERIC', status: 'INVALID', content: 'Rejected' }),
+      step({ step_index: 4, type: 'GENERIC', status: 'RUNNING', content: 'Pending' }),
+      step({ step_index: 5, type: 'SYSTEM_MESSAGE', content: `<SYSTEM_MESSAGE>\n[Message] timestamp=now sender=${NATIVE_ID}/task-2 priority=HIGH content=Task id "${NATIVE_ID}/task-2" finished with result:\nCommand exited with code 1.\n</SYSTEM_MESSAGE>` }),
+      step({ step_index: 6, type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'success' } }] }),
+      step({ step_index: 7, type: 'GENERIC', content: 'Created At: 2026-10-01T12:00:00Z\nCompleted At: 2026-10-01T12:00:02Z\nCommand exited with code 0.' }),
+    ]);
+    const store = createAntigravityStore({ registry, home });
+    const result = (await readNativeStatistics({ query: { to: Date.parse('2026-10-02'), timezone: 'UTC', tools: 'detail' }, backends: { antigravity: store } })).backends.antigravity;
+    expect(result.stats.tools).toMatchObject({ mode: 'detail', totals: { calls: 4, succeeded: 1, failed: 2, unfinished: 1 },
+      usage: expect.arrayContaining([{ name: 'bash', calls: 2, succeeded: 1, failed: 1, unfinished: 0, durationP50: 2000 }]),
+    });
+    expect((await store.loadStatistics(SESSION_ID, directory)).records.every((record) => record.parts.every((part) => part.type !== 'tool'))).toBe(true);
+  });
+
   it('reads completed generation snapshots including tool calls without thinking', () => {
     const { registry, home, writeTranscript } = setup();
     writeTranscript([

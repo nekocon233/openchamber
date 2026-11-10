@@ -432,6 +432,22 @@ The registry also owns archive and title overrides. Deletion is not simulated:
 hiding a native conversation in OpenChamber while leaving it in agy would make
 `deleted: true` false, so deletion remains unsupported.
 
+## Historical statistics
+
+The store provides a separate read-only statistics path over all retained root
+conversations, including registry archives, and their indexed children. Each
+planner generation counts once; checkpoint summaries and child report envelopes
+add no model step. Native per-generation counters supply disjoint token buckets,
+never process-cumulative result usage. Missing dates stay undated, and missing
+reasoning counters or monetary costs stay unknown.
+
+Statistics do not load chat projections, recover edit diffs, populate chat caches
+or bind client messages. Tool detail reads native call identities and outcomes,
+including background completion notifications; absent completions stay unfinished.
+Only recorded start/end times supply duration samples. Malformed transcripts,
+unreadable children and damaged index rows preserve readable siblings and mark
+coverage partial. Missing confirmed history remains an error.
+
 ## Operations and runtimes
 
 `interaction-signals.js` validates complete structured calls.
