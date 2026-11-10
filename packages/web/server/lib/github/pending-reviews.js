@@ -17,9 +17,6 @@ const actionSchema = z.discriminatedUnion('kind', [
   if (action.kind === 'comment' && action.startLine !== undefined && action.startLine >= action.line) {
     ctx.addIssue({ code: 'custom', message: 'startLine must precede line' });
   }
-  if (action.kind === 'submit' && action.verdict === 'request-changes' && !action.body) {
-    ctx.addIssue({ code: 'custom', message: 'Requesting changes requires a summary' });
-  }
 });
 const fail = (message, code = 'SOURCE_CONTROL_MUTATION_TARGET_CHANGED', status = 409) => Object.assign(new Error(message), { code, status });
 

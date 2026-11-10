@@ -857,12 +857,16 @@ describe('canonical GitHub mutations', () => {
         .send({ ...context(account.accountId, { target }), verdict: 'approve' }).expect(200);
       const requested = await request(app).post('/api/source-control/github/pr/review')
         .send({ ...context(account.accountId, { target, idempotencyKey: 'request-two' }), verdict: 'request-changes', body: 'Rename it' }).expect(200);
+      const requestedEmpty = await request(app).post('/api/source-control/github/pr/review')
+        .send({ ...context(account.accountId, { target, idempotencyKey: 'request-three' }), verdict: 'request-changes' }).expect(200);
 
       expect(approved.body.result).toEqual({ commented: false });
       expect(requested.body.result).toEqual({ commented: true });
+      expect(requestedEmpty.body.result).toEqual({ commented: false });
       expect(requests.filter((entry) => entry.path.endsWith('/reviews'))).toEqual([
         { method: 'POST', path: '/repos/acme/app/pulls/7/reviews', body: { commit_id: 'abc123', event: 'APPROVE' } },
         { method: 'POST', path: '/repos/acme/app/pulls/7/reviews', body: { commit_id: 'abc123', event: 'REQUEST_CHANGES', body: 'Rename it' } },
+        { method: 'POST', path: '/repos/acme/app/pulls/7/reviews', body: { commit_id: 'abc123', event: 'REQUEST_CHANGES' } },
       ]);
     });
 
@@ -1042,7 +1046,7 @@ describe('canonical GitHub mutations', () => {
       expect(requests.map((entry) => entry.method)).toEqual(['GET']);
     });
 
-    it('asks for text before requesting changes and for the reviewed commit, and writes nothing', async () => {
+    it('refuses blank review text, missing comment text, and a missing reviewed commit, and writes nothing', async () => {
       const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
       const requests = recordRequests(() => jsonResponse(pullRequest()));
       const { app } = makeApp();

@@ -244,7 +244,7 @@ preview's footer holds actions instead of what the agent gets.
   set is sent once, when the popup closes, so several clicks are one change;
   a GitHub PR's author is not offered as its reviewer.
 - Reply (`SourceBoardReply`, GitHub and GitLab items): below the activity a
-  comment box; on an open PR also Approve and Request changes (needs text),
+  comment box; on an open PR also Approve and Request changes,
   for the head commit the preview shows. The box is keyed by the item, so a
   draft never moves to another one, and keeps its text until the host has it.
   After a write, and after a refused review (usually a push since the
