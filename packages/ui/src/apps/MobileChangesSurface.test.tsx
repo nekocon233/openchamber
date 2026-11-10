@@ -545,8 +545,21 @@ test('mobile changes last turn scope lists the turn diffs, opens one, and shows 
     // The selector offers Last turn and choosing it asks the client for the turn.
     await chooseMode('Last turn');
     expect(turnDiffs.mock.calls[0]).toEqual(['ses_turn', { directory: '/repo' }]);
+    expect(container.querySelector('[title="src"]')).not.toBeNull();
     expect(container.querySelector('[title="src/added.ts"]')).not.toBeNull();
     expect(container.querySelector('[title="src/modified.ts"]')).not.toBeNull();
+    // Collapsing a folder hides its files and shows the folder's file count; expanding restores them.
+    await click('[aria-label="Collapse src"]');
+    expect(container.querySelector('[title="src/added.ts"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Expand src"]')?.textContent).toContain('2');
+    await click('[aria-label="Expand src"]');
+    expect(container.querySelector('[title="src/added.ts"]')).not.toBeNull();
+    // The header toggle switches between tree and flat list.
+    await click('[aria-label="List view"]');
+    expect(container.querySelector('[title="src"]')).toBeNull();
+    expect(container.querySelector('[title="src/added.ts"]')).not.toBeNull();
+    await click('[aria-label="Tree view"]');
+    expect(container.querySelector('[title="src"]')).not.toBeNull();
     // Status letters and counts are the turn diff's, not the working tree's.
     const added = container.querySelector('[title="src/added.ts"]')?.closest('button');
     const modified = container.querySelector('[title="src/modified.ts"]')?.closest('button');

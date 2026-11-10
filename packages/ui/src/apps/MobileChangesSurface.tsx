@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { ChangesPanel, type ChangesGroupConfig } from '@/components/views/git/ChangesPanel';
+import { TREE_INDENT_PX } from '@/components/views/git/changesTree';
+import { buildDiffTreeRows } from '@/components/views/diffFileTree';
 import { BranchSelector } from '@/components/views/git/BranchSelector';
 import { ChangedPathLabel } from '@/components/views/git/ChangedPathLabel';
 import type { WalkthroughTarget } from '@/lib/walkthrough/types';
@@ -136,6 +138,7 @@ type ComparisonDiff =
 const LOADING_COMPARISON_DIFF: ComparisonDiff = { status: 'loading' };
 const FULL_CONTEXT_DIFF_LINES = 1_000_000;
 const LIST_ROUTE: ChangesRoute = { type: 'list' };
+const EMPTY_COLLAPSED_DIRECTORIES: ReadonlySet<string> = new Set();
 
 // The server already serializes reverts per repository, so anything beyond a
 // couple of in-flight POSTs only holds browser connections away from reads.
@@ -265,6 +268,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   const mode = navigation.ownerKey === ownerKey ? navigation.mode : 'working';
   const route = navigation.ownerKey === ownerKey ? navigation.route : LIST_ROUTE;
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
+  const [comparisonListMode, setComparisonListMode] = React.useState<'tree' | 'flat'>('tree');
+  const isComparisonTree = comparisonListMode === 'tree';
   const changeMode = React.useCallback((nextMode: ChangesMode) => {
     setNavigation({ ownerKey, mode: nextMode, route: LIST_ROUTE });
     setModeMenuOpen(false);
@@ -416,6 +421,19 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   }, [comparisonSource, prComparison.prs]);
   const pendingReview = usePendingReview(prComparison.readContext, reviewPull, visible && mode === 'pr');
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile } = comparison;
+  const treeScopeKey = JSON.stringify([ownerKey, mode, mode === 'turn' ? currentSessionId : comparison.key]);
+  const [collapsedTreeState, setCollapsedTreeState] = React.useState<{ scopeKey: string; paths: Set<string> }>({
+    scopeKey: treeScopeKey,
+    paths: new Set(),
+  });
+  const collapsedDirectories = collapsedTreeState.scopeKey === treeScopeKey ? collapsedTreeState.paths : EMPTY_COLLAPSED_DIRECTORIES;
+  const toggleTreeDirectory = React.useCallback((path: string) => {
+    setCollapsedTreeState((previous) => {
+      const next = new Set(previous.scopeKey === treeScopeKey ? previous.paths : EMPTY_COLLAPSED_DIRECTORIES);
+      if (!next.delete(path)) next.add(path);
+      return { scopeKey: treeScopeKey, paths: next };
+    });
+  }, [treeScopeKey]);
   const comparisonFiles = React.useMemo(() => comparison.files ? [...comparison.files].sort((a, b) => a.path.localeCompare(b.path)) : null, [comparison.files]);
   const turnFiles = React.useMemo(
     () => lastTurnDiffs
@@ -1252,7 +1270,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
         : t('diffView.branch.empty', { base: sourceLabel ?? '' })} />;
     }
     if (fileFilter.hiddenCount === comparisonFiles.length) return <DiffFileFilterEmpty onRestore={fileFilter.restoreAll} />;
-    return <MobileComparisonFileList files={comparisonFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => {
+    return <MobileComparisonFileList viewMode={comparisonListMode} collapsedDirectories={collapsedDirectories} onToggleDirectory={toggleTreeDirectory} files={comparisonFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => {
       if (comparison.key) setRoute({ type: 'comparison', path, sourceKey: comparison.key });
     }} />;
   };
@@ -1272,7 +1290,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     if (!hasTurnData && currentSessionId) return <MobileChangesState loading message={t('diffView.state.loadingChanges')} />;
     if (turnFiles.length === 0) return <MobileChangesState message={t('diffView.state.noLastTurnChanges')} />;
     if (fileFilter.hiddenCount === turnFiles.length) return <DiffFileFilterEmpty onRestore={fileFilter.restoreAll} />;
-    return <MobileComparisonFileList files={turnFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => setRoute({ type: 'turn', path })} />;
+    return <MobileComparisonFileList viewMode={comparisonListMode} collapsedDirectories={collapsedDirectories} onToggleDirectory={toggleTreeDirectory} files={turnFiles.filter((file) => isFileVisible(file.path))} onSelect={(path) => setRoute({ type: 'turn', path })} />;
   };
 
   return (
@@ -1313,6 +1331,25 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
         {nestedRepoPicker}
         <DiffFileTypeFilter mobile options={fileFilter.options} excludedTypes={fileFilter.excludedTypes}
           hiddenCount={fileFilter.hiddenCount} onChange={fileFilter.setTypes} />
+        {mode !== 'working' && activeFiles.length > 0 ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-pressed={isComparisonTree}
+            aria-label={t(isComparisonTree ? 'diffView.fileTree.showAsList' : 'diffView.fileTree.showAsTree')}
+            title={t(isComparisonTree ? 'diffView.fileTree.showAsList' : 'diffView.fileTree.showAsTree')}
+            className={cn(
+              'shrink-0',
+              isComparisonTree
+                ? 'bg-interactive-selection text-interactive-selection-foreground'
+                : 'text-muted-foreground',
+            )}
+            onClick={() => setComparisonListMode((current) => (current === 'tree' ? 'flat' : 'tree'))}
+            style={{ touchAction: 'manipulation' }}
+          >
+            <Icon name="node-tree" className="size-4" />
+          </Button>
+        ) : null}
         {visible && mode === 'branch' && (
           <BranchComparisonSelector mobile key={JSON.stringify([ownerKey, currentBranch])}
             branches={branches?.all ?? []} currentBranch={currentBranch} base={branchComparison.base}
@@ -1685,18 +1722,77 @@ const MobileDiffDetail: React.FC<{
 
 type ComparisonFileListItem = { path: string; status: string; insertions: number; deletions: number };
 
-const MobileComparisonFileList: React.FC<{ files: ComparisonFileListItem[]; onSelect: (path: string) => void }> = ({ files, onSelect }) => {
+const MobileComparisonFileList: React.FC<{
+  files: ComparisonFileListItem[];
+  viewMode?: 'tree' | 'flat';
+  collapsedDirectories: ReadonlySet<string>;
+  onToggleDirectory: (path: string) => void;
+  onSelect: (path: string) => void;
+}> = ({ files, viewMode = 'tree', collapsedDirectories, onToggleDirectory, onSelect }) => {
   const { t } = useI18n();
+  const rows = React.useMemo(
+    () => (viewMode === 'tree' ? buildDiffTreeRows(files, collapsedDirectories) : []),
+    [collapsedDirectories, files, viewMode],
+  );
+  const describeStatus = (status: string) => {
+    const label = status === 'A' ? t('diffView.change.new')
+      : status === 'D' ? t('diffView.change.deleted')
+      : status === 'R' ? t('diffView.change.renamed')
+      : status === 'C' ? t('diffView.change.copied') : t('diffView.change.modified');
+    const color = status === 'A' ? 'var(--status-success)' : status === 'D' ? 'var(--status-error)'
+      : status === 'R' || status === 'C' ? 'var(--status-info)' : 'var(--status-warning)';
+    return { label, color };
+  };
+  const renderGuides = (depth: number) => Array.from({ length: depth }, (_, level) => (
+    <span
+      key={level}
+      aria-hidden
+      className="pointer-events-none absolute inset-y-0 w-px bg-edge"
+      style={{ insetInlineStart: `${level * TREE_INDENT_PX + 18}px` }}
+    />
+  ));
+
   return (
     <ScrollableOverlay outerClassName="h-full" className="px-3 py-2" useScrollShadow disableHorizontal>
       <ul aria-label={t('gitView.changes.changedFilesAria')} className="flex flex-col gap-1">
-        {files.map((file) => {
-          const statusLabel = file.status === 'A' ? t('diffView.change.new')
-            : file.status === 'D' ? t('diffView.change.deleted')
-            : file.status === 'R' ? t('diffView.change.renamed')
-            : file.status === 'C' ? t('diffView.change.copied') : t('diffView.change.modified');
-          const statusColor = file.status === 'A' ? 'var(--status-success)' : file.status === 'D' ? 'var(--status-error)'
-            : file.status === 'R' || file.status === 'C' ? 'var(--status-info)' : 'var(--status-warning)';
+        {viewMode === 'tree' ? rows.map((row) => {
+          const indentStyle = row.depth > 0 ? { paddingInlineStart: `${row.depth * TREE_INDENT_PX + 12}px` } : undefined;
+          if (row.kind === 'directory') {
+            return (
+              <li key={row.key} className="relative">
+                {renderGuides(row.depth)}
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  className="w-full justify-start gap-2 text-start normal-case text-muted-foreground hover:text-foreground"
+                  style={indentStyle}
+                  aria-expanded={row.expanded}
+                  aria-label={t(row.expanded ? 'diffView.fileTree.collapseDirectoryAria' : 'diffView.fileTree.expandDirectoryAria', { path: row.path })}
+                  onClick={() => onToggleDirectory(row.path)}
+                >
+                  <Icon name="arrow-right-s" className={cn('size-4 shrink-0 transition-transform', row.expanded && 'rotate-90 rtl:-rotate-90')} />
+                  <span dir="ltr" className="min-w-0 flex-1 truncate typography-ui-label" title={row.path}>{row.label}</span>
+                  {!row.expanded ? <span className="shrink-0 typography-meta tabular-nums text-muted-foreground">{row.fileCount}</span> : null}
+                </Button>
+              </li>
+            );
+          }
+          const { file } = row;
+          const { label: statusLabel, color: statusColor } = describeStatus(file.status);
+          return (
+            <li key={row.key} className="relative">
+              {renderGuides(row.depth)}
+              <Button variant="ghost" size="lg" className="w-full justify-start gap-2.5 text-start normal-case" style={indentStyle} onClick={() => onSelect(file.path)}>
+                <span className="w-4 shrink-0 text-center typography-meta font-semibold uppercase" style={{ color: statusColor }} aria-label={statusLabel}>{file.status}</span>
+                <FileTypeIcon filePath={file.path} className="size-4 shrink-0" />
+                <span dir="ltr" className="min-w-0 flex-1 truncate typography-ui-label text-foreground" title={file.path}>{row.name}</span>
+                {(file.insertions > 0 || file.deletions > 0) && <span className="shrink-0 typography-meta text-muted-foreground">+{file.insertions} -{file.deletions}</span>}
+                <Icon name="arrow-right-s" className="size-4 shrink-0 text-muted-foreground" />
+              </Button>
+            </li>
+          );
+        }) : files.map((file) => {
+          const { label: statusLabel, color: statusColor } = describeStatus(file.status);
           return <li key={file.path}>
             <Button variant="ghost" size="lg" className="w-full justify-start gap-2.5 text-start normal-case" onClick={() => onSelect(file.path)}>
               <span className="w-4 shrink-0 text-center typography-meta font-semibold uppercase" style={{ color: statusColor }} aria-label={statusLabel}>{file.status}</span>
