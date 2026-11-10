@@ -32,6 +32,25 @@ const setup = async (options = {}) => {
 };
 
 describe('shared native CLI memory', () => {
+  it('shares managed AGY context and durable handoffs without enrolling terminal hooks', async () => {
+    const { memory, sharing, checkpoint, a, b } = await setup();
+    await memory.create({ scope: 'global' }, { title: 'Reply language', body: 'Use simplified Chinese.', type: 'preference' });
+    await checkpoint('claude', 'other', 'Parser prepared.');
+    const input = { backend: 'antigravity', sessionId: 'nag_same', directory: a, delivery: 'managed' };
+    const context = await sharing.context(input);
+    expect(context.text).toContain('Reply language');
+    expect(context.text).toContain('Parser prepared.');
+    expect(context.text).toContain('native-cli.mjs');
+    expect(sharing.release('nag_same')).toBe(true);
+    await checkpoint('antigravity', 'nag_same', 'AGY integration completed.');
+    const progress = (await sharing.status(a)).progress.find((row) => row.backend === 'antigravity');
+    expect(progress).toMatchObject({ sessionId: 'same', summary: 'AGY integration completed.' });
+    expect((await sharing.context(input)).text).not.toContain('AGY integration completed.');
+    expect((await sharing.context({ backend: 'codex', sessionId: 'same', directory: a })).text).toContain('AGY integration completed.');
+    expect((await sharing.context({ backend: 'codex', sessionId: 'same', directory: b })).text).not.toContain('AGY integration completed.');
+    await expect(sharing.connect('antigravity', 3000)).rejects.toThrow();
+  });
+
   it('shares global preferences and same-project handoffs in both directions', async () => {
     const { memory, sharing, checkpoint, a, b } = await setup();
     await memory.create({ scope: 'global' }, { title: 'Concise answers', body: 'Prefer concise answers.', type: 'preference' });

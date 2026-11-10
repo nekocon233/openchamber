@@ -165,6 +165,7 @@ environment:
 
 ### 変わること
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - DeepSeek Harness のセッション、ワンクリック設定、プロバイダー設定は利用できません。モデルは dsh で個別に設定され、OpenCode のプロバイダーポリシーの対象外です。
 - エンタープライズモードでは統合ネイティブ会話を作成または続行できません。コンテキストの圧縮や、処理を再開する質問への回答も制限されます。引き継ぎ先が OpenCode の外部で設定された CLI プロバイダーになる場合があるためです。保存済みの会話は一覧に残り、元の履歴の読み取りと削除には各 CLI の既存ポリシーが適用されます。
 - ネイティブエージェントの組み合わせの変更と、CLI 間のサブエージェント呼び出しは利用できません。実行中の CLI からの呼び出しも対象です。選択したモデルが OpenCode の外部で設定されたプロバイダーに接続する可能性があるため、保存済みの組み合わせでもこの制限を回避できません。

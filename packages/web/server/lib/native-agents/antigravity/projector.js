@@ -456,6 +456,10 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       return [...records.values()];
     },
 
+    finalReply() {
+      return currentAssistant;
+    },
+
     restoreGenerations(entries) {
       for (const entry of entries) {
         const record = records.get(assistantId(nativeId, entry.step_index));

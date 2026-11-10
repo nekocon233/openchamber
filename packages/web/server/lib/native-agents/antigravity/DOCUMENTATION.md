@@ -488,12 +488,18 @@ separate parts across later turns and reloads.
 Web and Electron use this server adapter. Hosted mobile and Capacitor use the
 connected server through existing native HTTP and events. VS Code retains its
 explicit unsupported native API. There is no agy-specific RuntimeAPI, bridge,
-Small Model runtime, memory hook or Electron helper.
+Small Model runtime, terminal memory hook or Electron helper.
 
 Global AGENTS.md is injected into the first prompt of each agy process and
 hidden from the transcript projection. Feature instructions use the existing
 `<openchamber-instructions>` block. Unified creation and source ownership follow
 the parent conversation controller.
+
+Managed prompts include the shared memory index in the same hidden feature
+instructions. Turn completion captures the final visible reply as a completed or
+interrupted handoff through the shared memory owner. Disabled memory and failed
+reads do not block chat. The shared memory contract is in
+`../../agent-memory/DOCUMENTATION.md`; terminal hook enrollment remains unsupported.
 
 ## Execution model on plan approval
 

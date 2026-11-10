@@ -165,6 +165,7 @@ To check it worked, open Settings → Providers: an Enterprise mode notice with 
 
 ### What changes
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - DeepSeek Harness sessions and one-click setup are unavailable. Their models are configured separately in dsh, outside the OpenCode provider policy. The provider page never edits DSH settings.
 - Unified native conversations cannot be created or continued in enterprise mode, including context compaction and replies that continue a turn. Their handoffs can cross CLI providers configured outside OpenCode. Saved conversations remain listed; source reads and cleanup follow each CLI's existing policy.
 - Native agent combination changes and cross-CLI subagent dispatch are unavailable, including callbacks from an already running CLI. Their model choices can reach providers configured outside OpenCode. Saved combinations do not bypass this restriction.
