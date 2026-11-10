@@ -628,12 +628,11 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
             const name = getProviderModelDisplayName(provider, model.modelID) || model.modelID || t('usageStats.models.unknown');
             const share = max > 0 ? ((valueOf(model) ?? 0) / max) * 100 : 0;
             return (
-              <li key={`${model.providerID}/${model.modelID}#${model.variant ?? ''}`} className="flex min-w-0 flex-col gap-1">
+              <li key={`${model.providerID}/${model.modelID}`} className="flex min-w-0 flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <ProviderLogo providerId={model.providerID} alt={providerName} className="size-4 shrink-0" />
                   <span className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate" title={`${providerName} · ${model.providerID}/${model.modelID}`}>
                     <span className="truncate typography-ui-label text-foreground">{name}</span>
-                    {model.variant ? <span className="shrink-0 typography-micro text-muted-foreground">{model.variant}</span> : null}
                     {/* Phones keep the row for the model name; the logo names the provider there. */}
                     <span className="hidden shrink-0 typography-micro text-muted-foreground sm:inline">{providerName}</span>
                   </span>

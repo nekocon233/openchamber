@@ -11,7 +11,7 @@ const recordSchema = z.object({
     z.object({ ...messageBase, role: z.literal('user') }),
     z.object({ ...messageBase, role: z.literal('compaction') }),
     z.object({ ...messageBase, role: z.literal('assistant'), summary: z.boolean().optional(),
-      providerID: z.string().optional(), modelID: z.string().optional(), variant: z.string().nullish(),
+      providerID: z.string().optional(), modelID: z.string().optional(),
       reasoningKnown: z.boolean().optional(),
       tokens: tokensSchema.optional(), cost: count.optional(),
     }),
@@ -127,10 +127,10 @@ export const createStatisticsAccumulator = (query) => {
           day.steps += 1;
           if (!info.tokens || snapshot.tokensComplete === false) day.tokensComplete = false;
         }
-        const modelKey = JSON.stringify([info.providerID ?? '', info.modelID ?? '', info.variant ?? null]);
+        const modelKey = JSON.stringify([info.providerID ?? '', info.modelID ?? '']);
         let model = models.get(modelKey);
         if (!model) {
-          model = { providerID: info.providerID ?? '', modelID: info.modelID ?? '', variant: info.variant ?? null, steps: 0, tokens: emptyTokens(), cost: 0, coverage: emptyCoverage() };
+          model = { providerID: info.providerID ?? '', modelID: info.modelID ?? '', steps: 0, tokens: emptyTokens(), cost: 0, coverage: emptyCoverage() };
           models.set(modelKey, model);
         }
         model.steps += 1;

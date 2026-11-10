@@ -153,7 +153,8 @@ and are never assigned to a guessed day.
 
 Token and cost totals retain recorded values with coverage labels; completely
 missing metrics display unknown. Ratios with incomplete inputs display a dash.
-Model rows carry the same coverage. Source failures and incomplete histories
+Model rows aggregate usage by `(providerID, modelID)` across thinking efforts
+and carry the same coverage. Source failures and incomplete histories
 are visible even when readable sources contain no activity. Source notices
 report read failures only; missing token, cost or reasoning fields do not
 produce page-level notices. Metric labels and daily bar descriptions still

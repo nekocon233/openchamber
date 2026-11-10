@@ -68,7 +68,7 @@ export const mergeUsageStats = (reports: UsageStats[], sources: UsageSourceState
       previous.tokensComplete = previous.tokensComplete && day.tokensComplete;
     }
     for (const model of report.models) {
-      const key = JSON.stringify([model.providerID, model.modelID, model.variant]);
+      const key = JSON.stringify([model.providerID, model.modelID]);
       const previous = models.get(key);
       if (!previous) {
         const covered = coverageOf(model);

@@ -34,7 +34,10 @@ const wire = {
   activeDays: 2,
   streak: 2,
   activity: [{ date: "2026-09-01", steps: 4 }],
-  models: [{ model: { providerID: "anthropic", id: "claude", variant: "high" }, steps: 9, tokens: tokens(10), cost: 1.25 }],
+  models: [
+    { model: { providerID: "openai", id: "gpt-6.1-sol", variant: "high" }, steps: 5, tokens: tokens(4), cost: 0.75 },
+    { model: { providerID: "openai", id: "gpt-6.1-sol", variant: "max-fast" }, steps: 4, tokens: tokens(6), cost: 0.5 },
+  ],
 }
 
 describe("session.stats boundary", () => {
@@ -55,7 +58,13 @@ describe("session.stats boundary", () => {
       })
       expect(stats.tokens).toEqual({ input: 10, output: 2, reasoning: 1, cacheRead: 3, cacheWrite: 4, total: 20 })
       expect(stats.tools).toEqual({ mode: "none" })
-      expect(stats.models[0]).toMatchObject({ providerID: "anthropic", modelID: "claude", variant: "high", cost: 1.25 })
+      expect(stats.models).toEqual([{
+        providerID: "openai",
+        modelID: "gpt-6.1-sol",
+        steps: 9,
+        tokens: { input: 10, output: 4, reasoning: 2, cacheRead: 6, cacheWrite: 8, total: 30 },
+        cost: 1.25,
+      }])
       expect(stats.range).toEqual({ from: 1_000, to: 2_000 })
     } finally {
       fetch.mockRestore()

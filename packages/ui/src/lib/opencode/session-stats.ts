@@ -35,7 +35,6 @@ export interface UsageTokens {
 export interface UsageModel {
   providerID: string
   modelID: string
-  variant: string | null
   steps: number
   tokens: UsageTokens
   cost: number
@@ -151,6 +150,34 @@ const toTools = (tools: SessionStatsInfo["tools"]): UsageTools => {
   }
 }
 
+const toModels = (entries: SessionStatsInfo["models"]): UsageModel[] => {
+  const models = new Map<string, UsageModel>()
+  for (const entry of entries) {
+    const tokens = toTokens(entry.tokens)
+    const key = JSON.stringify([entry.model.providerID, entry.model.id])
+    const previous = models.get(key)
+    if (!previous) {
+      models.set(key, {
+        providerID: entry.model.providerID,
+        modelID: entry.model.id,
+        steps: entry.steps,
+        tokens,
+        cost: entry.cost,
+      })
+      continue
+    }
+    previous.steps += entry.steps
+    previous.cost += entry.cost
+    previous.tokens.input += tokens.input
+    previous.tokens.output += tokens.output
+    previous.tokens.reasoning += tokens.reasoning
+    previous.tokens.cacheRead += tokens.cacheRead
+    previous.tokens.cacheWrite += tokens.cacheWrite
+    previous.tokens.total += tokens.total
+  }
+  return Array.from(models.values()).sort((a, b) => b.tokens.total - a.tokens.total)
+}
+
 const toUsageStats = (info: SessionStatsInfo): UsageStats => ({
   range: { from: info.range.from, to: info.range.to },
   sessions: info.sessions,
@@ -163,14 +190,7 @@ const toUsageStats = (info: SessionStatsInfo): UsageStats => ({
   activeDays: info.activeDays,
   streak: info.streak,
   activity: info.activity.map((day) => ({ date: day.date, steps: day.steps, tokens: null, tokensComplete: false })),
-  models: info.models.map((entry) => ({
-    providerID: entry.model.providerID,
-    modelID: entry.model.id,
-    variant: entry.model.variant ?? null,
-    steps: entry.steps,
-    tokens: toTokens(entry.tokens),
-    cost: entry.cost,
-  })),
+  models: toModels(info.models),
 })
 
 const requestStats = async (query: UsageStatsQuery, tools: "none" | "detail", signal?: AbortSignal): Promise<SessionStatsInfo> => {

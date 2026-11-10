@@ -42,7 +42,7 @@ export const antigravityStatisticsRecords = ({ nativeId, entries, sends, parentI
         state: { status, time: { start, end: start > 0 && end >= start ? end : undefined } } };
     }) : [];
     records.push({ info: { id: `nag_a_${key}_${entry.step_index}`, role: 'assistant', time: { created: at },
-      providerID: 'antigravity-native', modelID: selection?.modelID ?? '', variant: selection?.variant ?? null,
+      providerID: 'antigravity-native', modelID: selection?.modelID ?? '',
       tokens, reasoningKnown: entry.reasoningKnown !== false,
     }, parts });
   }

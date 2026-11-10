@@ -55,17 +55,32 @@ describe('native statistics accounting', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('counts retained messages once, separates children and preserves unknown metrics', () => {
+  it('counts retained messages once, separates children, merges variants of the same model and preserves unknown metrics', () => {
     const aggregate = createStatisticsAccumulator(query);
     const root = session('root');
-    const records = [user('u'), user('context', at('18'), true), assistant('a', at('18'), { tokens: usage }), assistant('a', at('18'), { tokens: usage }), assistant('summary', at('18'), { summary: true }),
-      { info: { id: 'compaction', role: 'compaction', time: { created: at('18') }, summary: 'retained context' }, parts: [] }];
+    const records = [
+      user('u'),
+      user('context', at('18'), true),
+      assistant('a', at('18'), { modelID: 'gpt-6.1-sol', variant: 'high', tokens: usage }),
+      assistant('a', at('18'), { modelID: 'gpt-6.1-sol', variant: 'high', tokens: usage }),
+      assistant('fast', at('18'), { modelID: 'gpt-6.1-sol', variant: 'max-fast', tokens: usage }),
+      assistant('summary', at('18'), { summary: true }),
+      { info: { id: 'compaction', role: 'compaction', time: { created: at('18') }, summary: 'retained context' }, parts: [] },
+    ];
     aggregate.add(root, { records, reasoningKnown: false });
-    aggregate.add(session('child', 'root'), { records: [assistant('b')] });
+    aggregate.add(session('child', 'root'), { records: [assistant('b', at('18'), { modelID: 'gpt-6.1-sol' })] });
     const result = aggregate.result();
-    expect(result).toMatchObject({ sessions: 1, subagents: 1, prompts: 1, steps: 2, tokens: { total: 40 }, cost: 0,
-      coverage: { tokens: { known: 1, missing: 1 }, cost: { known: 0, missing: 2 }, reasoning: { known: 0, missing: 2 }, failedSessions: 0 } });
-    expect(result.activity).toEqual([{ date: '2026-10-18', steps: 2, tokens: 40, tokensComplete: false }]);
+    expect(result).toMatchObject({ sessions: 1, subagents: 1, prompts: 1, steps: 3, tokens: { total: 80 }, cost: 0,
+      coverage: { tokens: { known: 2, missing: 1 }, cost: { known: 0, missing: 3 }, reasoning: { known: 0, missing: 3 }, failedSessions: 0 } });
+    expect(result.models).toEqual([{
+      providerID: 'codex-native',
+      modelID: 'gpt-6.1-sol',
+      steps: 3,
+      tokens: { input: 20, output: 6, reasoning: 4, cacheRead: 40, cacheWrite: 10, total: 80 },
+      cost: 0,
+      coverage: { tokens: { known: 2, missing: 1 }, cost: { known: 0, missing: 3 }, reasoning: { known: 0, missing: 3 }, undated: 0, failedSessions: 0 },
+    }]);
+    expect(result.activity).toEqual([{ date: '2026-10-18', steps: 3, tokens: 80, tokensComplete: false }]);
   });
 
   it('uses inclusive start, exclusive end and the viewer timezone', () => {
