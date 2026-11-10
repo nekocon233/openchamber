@@ -2438,7 +2438,7 @@ export interface NativeAgentsAPI {
   deepseekSetupStatus(options?: NativeReadOptions): Promise<DeepseekSetupStatus>;
   setupDeepseek(): Promise<DeepseekSetupStatus>;
   /** Claude's slash commands, Codex's enabled skills or DeepSeek's command list. */
-  commands(backend: 'claude' | 'codex' | 'deepseek', directory: string, options?: NativeReadOptions & { sessionId?: string }): Promise<NativeCommandList>;
+  commands(backend: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory: string, options?: NativeReadOptions & { sessionId?: string }): Promise<NativeCommandList>;
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
   deepseekCommand(request: NativeDeepseekCommandRequest): Promise<NativeCommandResult>;
   /** Root sessions of a directory, reported per backend. */

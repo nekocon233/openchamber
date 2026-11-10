@@ -15,7 +15,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const setup = async ({ checklist = false, memory = null } = {}) => {
+const setup = async ({ checklist = false, memory = null, skillGate = false } = {}) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-runtime-')));
   let unauthenticated = false;
   const directory = path.join(root, 'project');
@@ -29,20 +29,26 @@ const setup = async ({ checklist = false, memory = null } = {}) => {
   fs.chmodSync(executable, 0o755);
   const events = [];
   const requestsFile = path.join(root, 'requests.jsonl');
+  const skillsFile = path.join(root, 'skills.tsv');
+  const skillProbesFile = path.join(root, 'skill-probes.jsonl');
+  const skillGateFile = path.join(root, 'release-skills');
+  fs.writeFileSync(skillsFile, 'fixture-skill\tFixture skill\n');
   const runtime = createNativeAgentsRuntime({
     dataDir: root,
     memory,
     resolveExecutable: async (cli) => cli === 'agy' ? executable : cli === 'node' && checklist ? process.execPath : null,
     resolveAntigravityCommand: async () => ({ executable, argsPrefix: [] }),
-    buildChildEnv: () => ({ ...process.env, HOME: home, AGY_FIXTURE_HOME: fixtureHome, AGY_FIXTURE_REQUESTS: requestsFile, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
+    buildChildEnv: () => ({ ...process.env, HOME: home, AGY_FIXTURE_HOME: fixtureHome, AGY_FIXTURE_REQUESTS: requestsFile,
+      AGY_FIXTURE_SKILLS: skillsFile, AGY_FIXTURE_SKILL_PROBES: skillProbesFile, AGY_FIXTURE_SKILL_GATE: skillGate ? skillGateFile : '', ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     readGlobalInstructions: async () => 'RUNTIME RULES',
   });
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   cleanups.push(() => runtime.shutdown());
+  if (skillGate) cleanups.push(() => fs.writeFileSync(skillGateFile, 'release'));
   const session = await runtime.createSession({ backend: 'antigravity', directory, title: 'Runtime agy' });
-  return { runtime, session, directory, events, requestsFile, setUnauthenticated: () => { unauthenticated = true; } };
+  return { runtime, session, directory, events, requestsFile, skillsFile, skillProbesFile, skillGateFile, setUnauthenticated: () => { unauthenticated = true; } };
 };
 
 const prompt = async (runtime, session, directory, text = 'runtime') => {
@@ -56,6 +62,37 @@ const prompt = async (runtime, session, directory, text = 'runtime') => {
 };
 
 describe('Antigravity native runtime', () => {
+  it('cancels a standalone prompt stopped while skill discovery is still pending', async () => {
+    const { runtime, session, directory, requestsFile, skillProbesFile, skillGateFile } = await setup({ skillGate: true });
+    const sending = runtime.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: '/fixture-skill' }] })
+      .then(() => ({ sent: true }), (error) => ({ error }));
+    await vi.waitFor(() => expect(fs.existsSync(skillProbesFile)).toBe(true));
+    expect(await runtime.abort(session.id)).toBe(true);
+    fs.writeFileSync(skillGateFile, 'release');
+    expect(await sending).toMatchObject({ error: { name: 'AbortError' } });
+    expect(fs.existsSync(requestsFile)).toBe(false);
+    expect(await runtime.statuses(directory)).toEqual({});
+  });
+
+  it('discovers skills through HTTP, expands a send and rejects removed skills before native admission', async () => {
+    const { runtime, session, directory, requestsFile, skillsFile, skillProbesFile } = await setup();
+    const app = express();
+    registerNativeAgentRoutes(app, { runtime });
+    await request(app).get('/api/native/commands').query({ backend: 'antigravity', directory }).expect(200)
+      .expect((response) => expect(response.body.commands[0].name).toBe('fixture-skill'));
+    await prompt(runtime, session, directory, '/fixture-skill argument');
+    const sends = fs.readFileSync(requestsFile, 'utf8').trim().split('\n').map(JSON.parse);
+    expect(sends[0].text).toContain('Use the "fixture-skill" skill.');
+    expect(sends[0].text).toContain('argument');
+    expect(sends[0].text).toContain('RUNTIME RULES');
+    expect(fs.readFileSync(skillProbesFile, 'utf8').trim().split('\n').map(JSON.parse).every((probe) => probe.cwd === directory)).toBe(true);
+    fs.writeFileSync(skillsFile, '');
+    await expect(runtime.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: '/fixture-skill' }] })).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_COMMAND_UNSUPPORTED' });
+    expect(fs.readFileSync(requestsFile, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
   it('injects hidden managed memory and checkpoints only the final reply once', async () => {
     const memory = { enabled: async () => true, context: vi.fn(async () => ({ text: 'Shared memory index' })),
       checkpoint: vi.fn(async () => {}), release: vi.fn() };
@@ -215,6 +252,6 @@ describe('Antigravity native runtime', () => {
     await expect(runtime.unrevert(session.id, directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
     await expect(runtime.fork(session.id, null, directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
     await expect(runtime.deleteSession(session.id, directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
-    expect((await runtime.commands('antigravity', directory)).commands).toEqual([]);
+    expect((await runtime.commands('antigravity', directory)).commands[0].name).toBe('fixture-skill');
   });
 });

@@ -60,6 +60,14 @@ const setup = async ({ decorateSession = async (session) => session, onInteracti
 };
 
 describe('Antigravity CLI adapter', () => {
+  it('lists skills in the requested directory without using the prompt wrapper or starting a conversation', async () => {
+    const { backend, directory, home, resolveCommand } = await setup();
+    expect(await backend.commands(directory)).toEqual({ commands: [{ name: 'fixture-skill', description: 'Fixture skill', argumentHint: '' }] });
+    expect(resolveCommand).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(home, 'conversation_summaries.db'))).toBe(false);
+    expect(backend.busySessionIds(directory)).toEqual([]);
+  });
+
   it('keeps the process-local budget after external sync and refreshes changed routes on an idle admission', async () => {
     const { backend, directory, home, prompt } = await setup();
     const settingsFile = path.join(home, 'settings.json');

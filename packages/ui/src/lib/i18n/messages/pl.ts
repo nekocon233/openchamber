@@ -1318,6 +1318,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.badge.command': 'polecenie',
   'chat.commandAutocomplete.badge.system': 'system',
   'chat.commandAutocomplete.empty': 'Nie znaleziono poleceń',
+  "chat.commandAutocomplete.loadFailed": "Nie udało się wczytać poleceń CLI. Otwórz menu ponownie, aby spróbować jeszcze raz.",
   'chat.agentMentionAutocomplete.badge.system': 'system',
   'chat.agentMentionAutocomplete.empty': 'Nie znaleziono agentów',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Wpisz aby szukać więcej agentów',

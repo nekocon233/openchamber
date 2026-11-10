@@ -2720,6 +2720,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.commandAutocomplete.command.forkDescription': '從最後一個已完成的回覆分叉此對話並在新工作階段中繼續；/fork 後的文字會傳送到分叉工作階段。',
   'chat.commandAutocomplete.command.exploreDescription': '快速熟悉這個程式碼庫：對架構和主要部分的概覽。',
   'chat.commandAutocomplete.empty': '找不到命令',
+  "chat.commandAutocomplete.loadFailed": "無法載入 CLI 指令。重新開啟選單以重試。",
   'chat.agentMentionAutocomplete.badge.system': '系統',
   'chat.agentMentionAutocomplete.empty': '找不到 Agent',
   'chat.fileMentionAutocomplete.searchMoreAgents': '輸入以搜尋更多 Agent',

@@ -798,8 +798,11 @@ command can leave the queue untouched and delivery can take only part of it.
   resolve from. A failed prompt command restores everything it consumed: text,
   confirmed mentions, files, comment drafts, and pending synthetic context.
   Native sessions also run the commands `isNativeLocalCommand` names.
-  Antigravity has no local or CLI slash-command list in this version, and its
-  composer offers build only. Compact, revert, fork and BTW stay unavailable.
+  Antigravity's `/` picker lists its native skills. Submission rechecks and
+  expands them on the server. Its standalone sessions keep local session commands
+  closed; unified conversations retain their existing local actions. Build and
+  Plan remain available, while manual compaction stays unsupported. Discovery
+  failures show a translated retry message and never claim an empty skill list.
   Codex built-ins are dispatched first by `submit/codexCommands.ts`; settings
   commands update the existing selections, inspections use the native API,
   and `/plan <prompt>` sends its argument with an explicit plan-mode selection.

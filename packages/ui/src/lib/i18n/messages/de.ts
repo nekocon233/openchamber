@@ -2470,6 +2470,7 @@ export const dict = {
   'chat.commandAutocomplete.command.forkDescription': 'Diesen Chat ab der letzten abgeschlossenen Antwort abzweigen und dort weitermachen; Text nach /fork wird an die Abzweigung gesendet.',
   'chat.commandAutocomplete.command.exploreDescription': 'Vertraut machen mit diesem Codebase: Eine Übersicht über die Architektur und Hauptbestandteile.',
   'chat.commandAutocomplete.empty': 'Keine Befehle gefunden',
+  "chat.commandAutocomplete.loadFailed": "CLI-Befehle konnten nicht geladen werden. Öffne das Menü erneut, um es noch einmal zu versuchen.",
   'chat.agentMentionAutocomplete.badge.system': 'System',
   'chat.agentMentionAutocomplete.empty': 'Keine Agenten gefunden',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Tippe, um mehr Agenten zu suchen',

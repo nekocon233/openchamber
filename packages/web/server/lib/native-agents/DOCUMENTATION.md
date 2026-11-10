@@ -915,6 +915,13 @@ while a turn or background task is running fails with
 opened just to ask, which sends no prompt and leaves no transcript. Claude
 lists are kept for 10 minutes per directory; a failed listing is not kept.
 
+Antigravity lists native skills through the direct executable's local `/skills`
+print command in the selected directory. It shares bounded 10-minute listings,
+rechecks a skill at submission and sends an explicit skill request, preserving
+arguments and attachment order. Unknown skills and unsupported terminal commands
+fail before a turn starts. Build's native slash expansion stays disabled. The
+adapter's owning document describes discovery settings and failure behavior.
+
 Codex parses built-in slash commands in its terminal, not in `turn/start`.
 The composer therefore owns their dispatch. Model, effort and plan commands
 update its existing selections. Session commands reuse the session actions.

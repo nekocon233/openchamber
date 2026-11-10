@@ -34,6 +34,7 @@ import { AGY_PLAN_QUESTION_PREFIX } from './interaction-signals.js';
 import { captureAntigravityMeasurements } from './measurements.js';
 import { antigravityChecklistSnapshot } from './checklist.js';
 import { prepareAgyContextSettings } from './context-settings.js';
+import { createAntigravityCommands } from './commands.js';
 
 const MINIMUM_VERSION = [1, 1, 15];
 const IDLE_CLOSE_MS = 5 * 60_000;
@@ -108,20 +109,20 @@ export const createAntigravityBackend = ({
     return commandPromise;
   };
 
-  const probe = async (args, { native = false } = {}) => {
+  const probe = async (args, { native = false, cwd = process.cwd(), timeoutMs = 10_000 } = {}) => {
     const command = native
       ? { executable: await resolveExecutable(), argsPrefix: [] }
       : await requireCommand();
     if (!command.executable) throw cliMissingError('agy');
     return new Promise((resolve, reject) => {
-      const child = spawnCliProcess(command.executable, [...command.argsPrefix, ...args], { cwd: process.cwd(), env: buildEnv() });
+      const child = spawnCliProcess(command.executable, [...command.argsPrefix, ...args], { cwd, env: buildEnv() });
       let stdout = '';
       let stderr = '';
       let outputExceeded = false;
       const deadline = setTimeout(() => {
         signalCliProcess(child, 'SIGKILL');
         reject(backendError(`Antigravity discovery timed out: ${args.join(' ')}`, 'NATIVE_ANTIGRAVITY_PROBE_TIMEOUT'));
-      }, 10_000);
+      }, timeoutMs);
       deadline.unref?.();
       child.stdout.on('data', (chunk) => {
         if (outputExceeded) return;
@@ -148,6 +149,12 @@ export const createAntigravityBackend = ({
       });
     });
   };
+
+  const commands = createAntigravityCommands({ now, readSkills: (directory) => probe([
+    '--settings', JSON.stringify({ modelProvider: '', model: '' }),
+    '--disable-slash-commands=false', '--print', '/skills', '--print-timeout', '10s',
+    '--add-dir', directory,
+  ], { native: true, cwd: directory, timeoutMs: 25_000 }) });
 
   const quota = createAntigravityQuota({
     resolveExecutable,
@@ -458,6 +465,8 @@ export const createAntigravityBackend = ({
 
   return {
     store,
+    commands: commands.list,
+    commandParts: commands.promptParts,
     quota,
 
     catalog: readCatalog,

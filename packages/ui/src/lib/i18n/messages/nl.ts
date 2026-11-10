@@ -2550,6 +2550,7 @@ export const dict = {
   'chat.commandAutocomplete.command.btwDescription': 'Stel een bijvraag in een tijdelijke subsessie zonder deze chat uit de koers te halen.',
   'chat.commandAutocomplete.command.forkDescription': 'Fork deze chat vanaf het laatst afgeronde antwoord en ga daar verder; tekst na /fork wordt naar de fork gestuurd.',
   'chat.commandAutocomplete.empty': 'Geen opdrachten gevonden',
+  "chat.commandAutocomplete.loadFailed": "CLI-opdrachten konden niet worden geladen. Open het menu opnieuw om het nogmaals te proberen.",
   'chat.agentMentionAutocomplete.badge.system': 'systeem',
   'chat.agentMentionAutocomplete.empty': 'Geen agents gevonden',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Typ om meer agents te zoeken',

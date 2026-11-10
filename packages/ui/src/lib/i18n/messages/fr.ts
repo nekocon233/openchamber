@@ -2443,6 +2443,7 @@ export const dict = {
   'chat.commandAutocomplete.command.summaryDescription': 'Résumé de session non destructif. Indice de sujet facultatif après la commande.',
   'chat.commandAutocomplete.command.workspaceReviewDescription': 'Examine les modifications actuelles de l’espace de travail pour ne signaler que les problèmes importants.',
   'chat.commandAutocomplete.empty': 'Aucune commande trouvée',
+  "chat.commandAutocomplete.loadFailed": "Impossible de charger les commandes CLI. Rouvrez le menu pour réessayer.",
   'chat.agentMentionAutocomplete.badge.system': 'système',
   'chat.agentMentionAutocomplete.empty': 'Aucun agent trouvé',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'Tapez pour rechercher plus d\'agents',

@@ -35,6 +35,13 @@ const localeDictionaries = {
 } as const;
 
 describe('i18n dictionaries', () => {
+  test('CLI command discovery failures are translated in every locale', () => {
+    for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
+      expect(dictionary['chat.commandAutocomplete.loadFailed']).toBeTruthy();
+      if (locale !== 'en') expect(dictionary['chat.commandAutocomplete.loadFailed']).not.toBe(enDict['chat.commandAutocomplete.loadFailed']);
+    }
+  });
+
   test('checklist tool titles, progress and statuses are translated in every locale', () => {
     const keys = ['chat.toolPart.checklist.title', 'chat.toolPart.checklist.empty',
       'chat.nativeTasks.status.pending', 'chat.nativeTasks.status.running',

@@ -2467,6 +2467,7 @@ export const dict = {
   'chat.commandAutocomplete.command.btwDescription': 'اطرح سؤالًا جانبيًا في جلسة فرعية مؤقتة دون تشتيت هذه المحادثة.',
   'chat.commandAutocomplete.command.forkDescription': 'اشتقاق هذه المحادثة من آخر رد مكتمل والمتابعة هناك؛ يُرسل النص بعد /fork إلى النسخة المشتقة.',
   'chat.commandAutocomplete.empty': 'لم يتم العثور على أوامر',
+  "chat.commandAutocomplete.loadFailed": "تعذر تحميل أوامر CLI. أعد فتح القائمة للمحاولة مجددًا.",
   'chat.agentMentionAutocomplete.badge.system': 'النظام',
   'chat.agentMentionAutocomplete.empty': 'لم يتم العثور على وكلاء',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'اكتب للبحث عن مزيد من الوكلاء',

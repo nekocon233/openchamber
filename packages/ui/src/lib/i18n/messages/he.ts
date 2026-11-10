@@ -2467,6 +2467,7 @@ export const dict = {
   'chat.commandAutocomplete.command.btwDescription': 'שאלה צדדית בהפעלת משנה זמנית, בלי להסיט את הצ\'אט הזה.',
   'chat.commandAutocomplete.command.forkDescription': 'פיצול הצ\'אט מהתגובה האחרונה שהסתיימה והמשך שם; טקסט אחרי /fork נשלח להפעלה המפוצלת.',
   'chat.commandAutocomplete.empty': 'לא נמצאו פקודות',
+  "chat.commandAutocomplete.loadFailed": "לא ניתן לטעון פקודות CLI. יש לפתוח מחדש את התפריט כדי לנסות שוב.",
   'chat.agentMentionAutocomplete.badge.system': 'מערכת',
   'chat.agentMentionAutocomplete.empty': 'לא נמצאו סוכנים',
   'chat.fileMentionAutocomplete.searchMoreAgents': 'יש להקליד כדי לחפש סוכנים נוספים',
