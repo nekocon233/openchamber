@@ -39,7 +39,7 @@ import { coverageOf } from './usageStatsMerge';
 
 /** Select value for the unfiltered report; project values are OpenChamber project ids. */
 const ALL_PROJECTS = '__all__';
-const SOURCE_NAMES = { opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek' } as const;
+const SOURCE_NAMES = { opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek', antigravity: 'Antigravity CLI' } as const;
 const incompleteSources = (sources?: UsageSourceState[]) => sources?.some((source) => source.status !== 'ok') ?? false;
 
 function metricText(stats: Pick<UsageStats, 'steps' | 'coverage' | 'sources'>, key: 'tokens' | 'cost', value: string, t: ReturnType<typeof useI18n>['t']): string {

@@ -140,7 +140,9 @@ export const parseAgyTranscript = (text, { encodedArguments = true } = {}) => {
     if (line.trim() === '') continue;
     let decoded;
     try {
-      decoded = transcriptStep.parse(JSON.parse(line));
+      const raw = JSON.parse(line);
+      decoded = transcriptStep.parse(raw);
+      if (!Object.hasOwn(raw.usage ?? raw, 'thinking_tokens')) decoded.reasoningKnown = false;
     } catch {
       malformed += 1;
       continue;

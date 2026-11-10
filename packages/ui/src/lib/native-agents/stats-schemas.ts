@@ -29,6 +29,6 @@ const source = z.discriminatedUnion('status', [
   z.object({ status: z.literal('unavailable'), message: z.string(), code: z.string() }),
 ]);
 
-export const nativeStatisticsSchema = z.object({ backends: z.object({ claude: source, codex: source, deepseek: source }) });
+export const nativeStatisticsSchema = z.object({ backends: z.object({ claude: source, codex: source, deepseek: source, antigravity: source.optional() }) });
 export type NativeStatistics = z.infer<typeof nativeStatisticsSchema>;
 export type NativeStatisticsQuery = { from?: number; to: number; timezone: string; directory?: string; tools: 'none' | 'detail' };

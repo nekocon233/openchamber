@@ -72,7 +72,20 @@ test('a failed native endpoint preserves the official report and names missing s
   registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({ stats: async () => { throw new Error('offline'); } })));
   const result = await fetchCombinedUsageStats(query, new AbortController().signal);
   expect(result).toMatchObject({ sessions: 2, prompts: 3, steps: 4 });
-  expect(result.sources?.filter((source) => source.status === 'error').map((source) => source.source)).toEqual(['claude', 'codex', 'deepseek']);
+  expect(result.sources?.filter((source) => source.status === 'error').map((source) => source.source)).toEqual(['claude', 'codex', 'deepseek', 'antigravity']);
+});
+
+test('includes AGY statistics when supplied and keeps older-server absence unavailable', async () => {
+  spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ data: official }));
+  const legacy = native();
+  let response = legacy;
+  registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({ stats: async () => response })));
+  const old = await fetchCombinedUsageStats(query, new AbortController().signal);
+  expect(old.sources?.find((source) => source.source === 'antigravity')).toEqual({ source: 'antigravity', status: 'unavailable' });
+  response = nativeStatisticsSchema.parse({ backends: { ...legacy.backends, antigravity: legacy.backends.claude } });
+  const current = await fetchCombinedUsageStats(query, new AbortController().signal);
+  expect(current).toMatchObject({ sessions: 4, prompts: 4, steps: 8, tokens: { total: 48 } });
+  expect(current.sources?.find((source) => source.source === 'antigravity')).toEqual({ source: 'antigravity', status: 'ok' });
 });
 
 test('runtimes without native support do not request or fabricate native statistics', async () => {

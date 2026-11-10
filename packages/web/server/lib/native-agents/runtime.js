@@ -810,7 +810,7 @@ export const createNativeAgentsRuntime = ({
     },
     delegatedChildren: (parentID) => delegation.children(parentID),
     memorySharing: memory,
-    statistics: (query, options) => readNativeStatistics({ query, backends: { claude, codex, deepseek }, ...options }),
+    statistics: (query, options) => readNativeStatistics({ query, backends: { claude, codex, deepseek, antigravity: antigravity.store }, ...options }),
     claudeConnections,
     codexConnections,
     /** Applies a saved or removed connection to the CLI, or defers it to idle. */

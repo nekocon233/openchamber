@@ -5,7 +5,7 @@ import { mergeUsageStats, mergeUsageTools } from './usageStatsMerge';
 
 type Query = Omit<NativeStatisticsQuery, 'tools'>;
 type Result<T> = { reports: T[]; sources: UsageSourceState[] };
-const BACKENDS = ['claude', 'codex', 'deepseek'] as const;
+const BACKENDS = ['claude', 'codex', 'deepseek', 'antigravity'] as const;
 
 // Both requests capture the runtime at invocation; reset aborts every answer
 // before it can enter another runtime's report cache.
@@ -28,6 +28,7 @@ const readSources = async <T>(query: Query, signal: AbortSignal, tools: 'none' |
   if (native.status === 'fulfilled' && native.value) {
     for (const backend of BACKENDS) {
       const source = native.value.backends[backend];
+      if (!source) { sources.push({ source: backend, status: 'unavailable' }); continue; }
       if (source.status === 'ok' || source.status === 'partial') {
         reports.push(fromNative(source.stats));
         sources.push({ source: backend, status: source.status });

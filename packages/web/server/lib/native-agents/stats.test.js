@@ -1,9 +1,18 @@
 import express from 'express';
 import request from 'supertest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerNativeAgentRoutes } from './routes.js';
 import { createStatisticsAccumulator, createStatisticsLimiter, readNativeStatistics, statisticsQuery } from './stats.js';
+import { createNativeRegistry } from './registry.js';
+import { createAntigravityStore } from './antigravity/store.js';
 
 const at = (day) => Date.parse(`2026-10-${day}T12:00:00Z`);
 const query = { from: at('12'), to: at('20'), timezone: 'Asia/Taipei', tools: 'none' };
@@ -13,6 +22,39 @@ const assistant = (id, time = at('18'), extra = {}, parts = []) => ({ info: { id
 const usage = { total: 1, input: 10, output: 3, reasoning: 2, cache: { read: 20, write: 5 } };
 
 describe('native statistics accounting', () => {
+  it('accounts for fake-agy history without chat reads or registry writes, retaining partial index coverage', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-statistics-'));
+    const directory = path.join(root, 'project');
+    const home = path.join(root, 'native');
+    fs.mkdirSync(directory);
+    fs.mkdirSync(home);
+    const nativeId = '76456c89-8f13-4672-8690-21718ea67954';
+    try {
+      const child = spawn(process.execPath, [fileURLToPath(new URL('./antigravity/fixtures/fake-agy.mjs', import.meta.url)), '--add-dir', directory], {
+        env: { ...process.env, AGY_FIXTURE_HOME: home, AGY_FIXTURE_CONVERSATION_ID: nativeId }, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.stdout.resume();
+      child.stderr.resume();
+      child.stdin.end(JSON.stringify({ event: 'user', message: { content: 'tool' } }) + '\n');
+      expect((await once(child, 'close'))[0]).toBe(0);
+      const registryPath = path.join(root, 'registry.json');
+      const store = createAntigravityStore({ registry: createNativeRegistry({ filePath: registryPath }), home });
+      const read = () => readNativeStatistics({ query: { to: Date.now() + 1000, timezone: 'UTC', tools: 'detail' }, backends: { antigravity: store } });
+      const first = (await read()).backends.antigravity;
+      expect(first).toMatchObject({ status: 'ok', stats: { sessions: 1, prompts: 1, steps: 2,
+        tokens: { input: 20, output: 6, reasoning: 2, cacheRead: 4, total: 32 },
+        coverage: { cost: { known: 0, missing: 2 } }, tools: { mode: 'detail', totals: { calls: 1, succeeded: 1 } },
+      } });
+      expect(fs.existsSync(registryPath)).toBe(false);
+      const snapshot = await store.loadStatistics(`nag_${nativeId}`, directory, { tools: 'detail' });
+      expect(snapshot.records.flatMap((record) => record.parts).every((part) => !('input' in (part.state ?? {})) && !('metadata' in (part.state ?? {})))).toBe(true);
+      const db = new DatabaseSync(path.join(home, 'conversation_summaries.db'));
+      db.exec("insert into conversation_summaries values ('invalid-id', 'Bad row', '', 'bad date', '[]', '')");
+      db.close();
+      expect((await read()).backends.antigravity).toMatchObject({ status: 'partial', stats: { steps: 2, coverage: { failedSessions: 1 } } });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('counts retained messages once, separates children and preserves unknown metrics', () => {
     const aggregate = createStatisticsAccumulator(query);
     const root = session('root');

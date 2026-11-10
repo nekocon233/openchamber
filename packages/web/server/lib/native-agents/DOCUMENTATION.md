@@ -178,7 +178,8 @@ sources keep a 25-second deadline. The web client's statistics request allows
 
 Steps count retained assistant records, excluding compact summaries. Claude
 blocks sharing an API message id form one record; Codex uses assistant segments;
-DeepSeek uses turn/step identities. Codex token totals sum disjoint token
+DeepSeek uses turn/step identities; Antigravity counts native planner generations,
+excluding checkpoint summaries and child report envelopes. Codex token totals sum disjoint token
 buckets, never the last request-window `tokens.total`. Claude has no separate
 reasoning bucket. Tool medians are exact within one source; the UI omits a
 merged median when independent source populations contributed to one tool.
@@ -187,8 +188,12 @@ Web, Electron, hosted mobile and Capacitor use this endpoint. VS Code retains
 its explicit unsupported native API and shows OpenCode statistics only. Reads
 rewrite no transcript or usage record and create no persistent statistics DB.
 
-Antigravity histories are not included in the first statistics implementation.
-Their absence is unsupported coverage, not zero usage.
+Antigravity reads its native SQLite index and transcripts without opening a CLI
+process, recovering edit previews or changing client-message bindings. Its token
+totals include disjoint input, output, reasoning and cache-read buckets; missing
+reasoning counters and cost remain unknown. A damaged index row makes coverage
+partial while retaining readable siblings. Older servers can omit this backend;
+clients report unavailable coverage rather than zero usage.
 
 ## Listing
 
@@ -1475,8 +1480,8 @@ remaining capabilities, not substitutes for the supported tool-call records.
 
 Antigravity covers independent and unified chat sessions, native history and
 interruption. Its unsupported operations and authentication partition remain
-explicit. It does not participate in native statistics, Small Model or terminal
-memory enrollment.
+explicit. It participates in native statistics and managed shared memory. Small Model and
+terminal memory enrollment remain unsupported.
 
 Shared global preferences, project knowledge and terminal handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`. Enrollment is opt-in and local to the server

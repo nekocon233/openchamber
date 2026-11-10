@@ -51,7 +51,7 @@ export interface UsageCoverage {
 }
 
 export interface UsageSourceState {
-  source: 'opencode' | 'claude' | 'codex' | 'deepseek'
+  source: 'opencode' | 'claude' | 'codex' | 'deepseek' | 'antigravity'
   status: 'ok' | 'partial' | 'error' | 'unavailable'
   message?: string
 }
