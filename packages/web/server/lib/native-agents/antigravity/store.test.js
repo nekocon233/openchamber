@@ -55,7 +55,7 @@ const setup = ({ confirmed = true } = {}) => {
 const step = (value) => JSON.stringify({ created_at: '2026-10-01T12:00:00Z', status: 'DONE', ...value });
 
 describe('Antigravity native store', () => {
-  it('reads only completed nonblank reasoning snapshots for live enrichment', () => {
+  it('reads completed generation snapshots including tool calls without thinking', () => {
     const { registry, home, writeTranscript } = setup();
     writeTranscript([
       step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
@@ -65,7 +65,7 @@ describe('Antigravity native store', () => {
       step({ step_index: 4, type: 'PLANNER_RESPONSE', thinking: 'Shortened', truncated_fields: ['thinking'] }),
     ]);
     const store = createAntigravityStore({ registry, home });
-    expect(store.completedReasoning(NATIVE_ID).map((entry) => entry.step_index)).toEqual([1, 4]);
+    expect(store.completedGenerations(NATIVE_ID).map((entry) => entry.step_index)).toEqual([1, 3, 4]);
   });
 
   it('projects only indexed direct-child reports and the indexed parent task', async () => {

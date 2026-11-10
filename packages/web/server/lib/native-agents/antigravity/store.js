@@ -338,10 +338,10 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       };
     },
 
-    completedReasoning(nativeId) {
+    completedGenerations(nativeId) {
       if (!hasTranscript(nativeId)) return [];
       return readTranscript(nativeId).entries.filter((entry) => entry.type === 'PLANNER_RESPONSE'
-        && entry.status === 'DONE' && (entry.thinking ?? '').trim() !== '');
+        && entry.status === 'DONE');
     },
 
     /** Final identity and text; only SUCCESS may retain a shortened content step. */

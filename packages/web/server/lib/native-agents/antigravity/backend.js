@@ -78,9 +78,9 @@ export const createAntigravityBackend = ({
   const store = createAntigravityStore({ registry, home, now });
   const sessions = new Map();
   const admissions = new Map();
-  const subagents = createAntigravitySubagents({ publisher, now, loadHistory: store.loadHistory, readReasoning: store.completedReasoning });
+  const subagents = createAntigravitySubagents({ publisher, now, loadHistory: store.loadHistory, readReasoning: store.completedGenerations });
   const refreshReasoning = (session, projection) => {
-    try { projection.restoreReasoning(store.completedReasoning(session.nativeId)); }
+    try { projection.restoreGenerations(store.completedGenerations(session.nativeId)); }
     catch { /* Optional enrichment preserves live state; history reads report failures. */ }
   };
   // Updated only by successful discovery. The CLI still validates availability
@@ -339,14 +339,15 @@ export const createAntigravityBackend = ({
     const turn = session.turn;
     const step = frame.step_update;
     if (!turn || turn.process !== process || step.conversation_id !== session.nativeId) return;
-    await turn.projection.applyStep(step, now(), async (stepIndex) => {
+    const tool = await turn.projection.applyStep(step, now(), async (stepIndex) => {
       await registry.bindAntigravityMessage(session.id, turn.send.messageId, stepIndex, turn.send);
     });
     if (step.step_type === 'agent_response' && step.state === 'DONE') {
       refreshReasoning(session, turn.projection);
       turn.reasoningAfterTool = true;
-    } else if (turn.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
-      && ['DONE', 'ERROR', 'INVALID'].includes(step.state)) {
+    } else if ((turn.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
+      && ['DONE', 'ERROR', 'INVALID'].includes(step.state))
+      || (tool?.tool === 'edit' && tool.state.status === 'completed' && !tool.state.metadata?.diff)) {
       turn.reasoningAfterTool = false;
       refreshReasoning(session, turn.projection);
     }

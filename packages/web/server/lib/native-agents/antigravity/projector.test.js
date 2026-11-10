@@ -27,7 +27,7 @@ describe('Antigravity retained thinking and conversation messages', () => {
     const info = structuredClone(projection.records()[1].info);
     const entries = [{ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', thinking: 'Shortened', truncated_fields: ['thinking'] },
       { step_index: 99, type: 'PLANNER_RESPONSE', status: 'DONE', thinking: 'Unobserved generation' }];
-    projection.restoreReasoning(entries);
+    projection.restoreGenerations(entries);
     expect(projection.records()).toHaveLength(2);
     const live = projection.records()[1];
     expect(live.info).toEqual(info);
@@ -36,11 +36,11 @@ describe('Antigravity retained thinking and conversation messages', () => {
     expect(live.parts[0].metadata.nativeOutputTruncated).toBe(true);
     const id = live.parts[0].id;
     const time = live.parts[0].time;
-    projection.restoreReasoning([{ ...entries[0], thinking: 'Complete thinking', truncated_fields: [] }]);
+    projection.restoreGenerations([{ ...entries[0], thinking: 'Complete thinking', truncated_fields: [] }]);
     expect(live.parts[0]).toMatchObject({ id, time, text: 'Complete thinking' });
     expect(live.parts[0].metadata).toBeUndefined();
     const published = events.length;
-    projection.restoreReasoning(entries);
+    projection.restoreGenerations(entries);
     expect(events).toHaveLength(published);
     expect(live.parts[0].text).toBe('Complete thinking');
   });
@@ -52,7 +52,7 @@ describe('Antigravity retained thinking and conversation messages', () => {
       request: { messageID: 'live-user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'test' }, agent: 'build', parts: [] },
     });
     await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Answer' }, 2, async () => {});
-    projection.restoreReasoning([{ step_index: 1, status: 'DONE', thinking: 'Shortened', truncated_fields: ['thinking'] }]);
+    projection.restoreGenerations([{ step_index: 1, status: 'DONE', thinking: 'Shortened', truncated_fields: ['thinking'] }]);
     const before = projection.records()[1].parts[0];
     projection.finish({ outcome: 'success', response: 'Answer', error: '', time: 3 });
     projection.restoreMissingHistory(project([
@@ -469,6 +469,23 @@ describe('Antigravity final response reconciliation', () => {
     ]));
     expect(projection.records().find((record) => record.info.role === 'compaction').info).toMatchObject({ status: 'completed', summary: 'Complete saved summary' });
     expect(projection.records().find((record) => record.info.role === 'compaction').info.error).toBeUndefined();
+  });
+
+  it('keeps an INVALID edit failed when complete native arguments arrive', async () => {
+    const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: 'user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: '' }, 2, async () => {});
+    await projection.applyStep({ step_index: 2, step_type: 'tool', state: 'INVALID',
+      tool_info: { name: 'edit_file', parameters: { Path: '/repo/file.txt' }, output: 'Rejected', error: null },
+    }, 3, async () => {});
+    projection.restoreGenerations([{ step_index: 1, status: 'DONE', tool_calls: [
+      { name: 'edit_file', args: { Path: '/repo/file.txt', Target: 'before', Replacement: 'after' }, argumentsEncoded: false },
+    ] }]);
+    const part = projection.records().flatMap((record) => record.parts).find((part) => part.type === 'tool');
+    expect(part.state).toMatchObject({ status: 'error', error: 'Rejected' });
+    expect(part.state.metadata).not.toHaveProperty('diff');
   });
 
   it('fills partial streamed arguments from complete history without republishing unchanged records', async () => {

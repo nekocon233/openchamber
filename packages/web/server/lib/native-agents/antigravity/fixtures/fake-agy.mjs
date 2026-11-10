@@ -320,6 +320,22 @@ const run = (text) => {
     });
     return;
   }
+  if (visible === 'live-edits') {
+    const calls = [1, 2].map((number) => ({ name: 'edit_file', args: {
+      Path: path.join(cwd, `sample-${number}.txt`), Target: `before-${number}`, Replacement: `after-${number}`,
+    } }));
+    planner('Editing', calls);
+    for (const call of calls) {
+      const index = stepIndex++;
+      append({ step_index: index, type: 'GENERIC', content: 'Made 1 replacement' });
+      const done = { event: 'step_update', step_update: { conversation_id: conversationId, step_index: index,
+        state: 'DONE', step_type: 'tool', tool_info: { name: 'edit_file', parameters: { Path: call.args.Path },
+          output: 'Made 1 replacement', error: null } } };
+      frame(done);
+      frame(done);
+    }
+    return;
+  }
   if (visible === 'stop-after-commentary' || visible === 'stop-after-output-limit') {
     interruptError = visible === 'stop-after-output-limit' ? outputLimitError : 'The stream was interrupted. Please continue the task.';
     planner('Waiting for completion\n');

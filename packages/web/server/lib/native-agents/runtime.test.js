@@ -141,6 +141,29 @@ describe('native live overlay', () => {
     parts: [],
   });
 
+  it('fills completed AGY edit details while keeping live timing, output and failures', () => {
+    const input = { filePath: '/sample.txt', oldString: 'before', newString: 'after' };
+    const part = { id: 'edit', messageID: 'nag_a_test', type: 'tool', tool: 'edit', state: {
+      status: 'completed', input, output: 'saved output', time: { start: 1, end: 2 },
+      metadata: { nativeBackend: 'antigravity', nativeDiffScope: 'replacement', diff: 'saved diff', files: [] },
+    } };
+    const saved = { ...overlayRecord('nag_a_test', 'assistant', 1), parts: [part] };
+    const held = { ...part, state: { ...part.state, input: { filePath: '/sample.txt' }, output: 'live output',
+      time: { start: 3, end: 4 }, metadata: { nativeBackend: 'antigravity', nativeInputTruncated: true } } };
+    const live = { ...saved, parts: [held] };
+    const [merged] = overlay([saved], [live]);
+    expect(merged.parts[0].state).toMatchObject({ input, output: 'live output', time: { start: 3, end: 4 }, metadata: { diff: 'saved diff' } });
+    expect(merged.parts[0].state.metadata).not.toHaveProperty('nativeInputTruncated');
+    expect(live.parts[0]).toBe(held);
+    for (const status of ['running', 'error']) {
+      const failed = { ...live, parts: [{ ...held, state: { ...held.state, status, error: 'native error' } }] };
+      expect(overlay([saved], [failed])[0]).toBe(failed);
+    }
+    const truncated = { ...saved, parts: [{ ...part, state: { ...part.state, metadata: { ...part.state.metadata, nativeInputTruncated: true } } }] };
+    expect(overlay([truncated], [live])[0]).toBe(live);
+    expect(overlay([saved], [merged])[0]).toBe(merged);
+  });
+
   it('uses a completed history record over an unsettled live copy', () => {
     const history = [overlayRecord('msg', 'assistant', 1, {
       time: { created: 1, completed: 2 },

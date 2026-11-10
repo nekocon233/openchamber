@@ -19,6 +19,7 @@ import { codexVariantSettings } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
 import { createAntigravityDecisions } from './antigravity/decisions.js';
 import { resolveAgyCommand } from './antigravity/command.js';
+import { withAgyEditDetails } from './antigravity/tools.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
@@ -129,7 +130,12 @@ export const overlay = (history, live) => {
   const liveById = new Map(live.map((record) => [record.info.id, record]));
   const merged = history.map((record) => {
     const liveRecord = liveById.get(record.info.id);
-    return liveRecord ? withHistoryMeasurements(liveRecord, record) : record;
+    if (!liveRecord) return record;
+    const measured = withHistoryMeasurements(liveRecord, record);
+    if (!record.info.id.startsWith('nag_') || measured === record) return measured;
+    const saved = new Map(record.parts.map((part) => [part.id, part]));
+    const parts = measured.parts.map((part) => withAgyEditDetails(part, saved.get(part.id)));
+    return parts.some((part, index) => part !== measured.parts[index]) ? { ...measured, parts } : measured;
   });
   const known = new Set(history.map((record) => record.info.id));
   for (const record of live) if (!known.has(record.info.id)) merged.push(record);

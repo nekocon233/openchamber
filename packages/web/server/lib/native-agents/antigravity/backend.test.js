@@ -113,10 +113,31 @@ describe('Antigravity CLI adapter', () => {
     expect(backend.busySessionIds(directory)).toEqual([]);
   });
 
+  it('publishes complete edits from path-only frames while the turn is still running', async () => {
+    const { backend, directory, events } = await setup();
+    const session = await backend.createSession({ directory });
+    const reads = vi.spyOn(backend.store, 'completedGenerations');
+    await backend.prompt(session.id, { directory, messageID: 'live-edit-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-edits' }] });
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .filter((part) => part.tool === 'edit' && part.state.metadata?.diff)).toHaveLength(2));
+    expect(backend.busySessionIds(directory)).toContain(session.id);
+    expect(events.some((event) => event.payload.type === 'session.idle')).toBe(false);
+    expect(reads).toHaveBeenCalledTimes(3);
+    const edits = backend.liveRecords(session.id).flatMap((record) => record.parts).filter((part) => part.tool === 'edit');
+    expect(edits[0].state.input).toMatchObject({ oldString: 'before-1', newString: 'after-1' });
+    expect(edits[1].state.metadata).toMatchObject({ nativeDiffScope: 'replacement', diff: expect.stringContaining('+after-2') });
+    const history = await backend.loadHistory(session.id, directory);
+    const saved = history.records.flatMap((record) => record.parts).filter((part) => part.tool === 'edit');
+    expect(edits.map((part) => part.id)).toEqual(saved.map((part) => part.id));
+    expect(edits.map((part) => part.state.metadata.diff)).toEqual(saved.map((part) => part.state.metadata.diff));
+    await backend.abort(session.id);
+  });
+
   it('publishes saved thinking before the turn ends without settling a running tool or polling', async () => {
     const { backend, directory, home, events } = await setup();
     const session = await backend.createSession({ directory });
-    const reads = vi.spyOn(backend.store, 'completedReasoning');
+    const reads = vi.spyOn(backend.store, 'completedGenerations');
     await backend.prompt(session.id, { directory, messageID: 'live-thinking-user', agent: 'build',
       model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-thinking' }] });
     await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
@@ -152,7 +173,7 @@ describe('Antigravity CLI adapter', () => {
     fs.appendFileSync(log, JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE',
       thinking: 'Saved after the stream frame.', content: 'Working\n',
       tool_calls: [{ name: 'run_command', args: { CommandLine: 'wait for fixture' } }] }) + '\n');
-    const read = vi.spyOn(backend.store, 'completedReasoning').mockImplementationOnce(() => { throw new Error('Temporary read failure'); });
+    const read = vi.spyOn(backend.store, 'completedGenerations').mockImplementationOnce(() => { throw new Error('Temporary read failure'); });
     await backend.loadHistory(session.id, directory);
     expect(backend.liveRecords(session.id)[1].parts.at(-1).state.status).toBe('running');
     expect(backend.busySessionIds(directory)).toContain(session.id);

@@ -30,7 +30,7 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
     });
   };
   const refreshReasoning = (child) => {
-    try { child.projection.restoreReasoning(readReasoning(child.nativeId)); }
+    try { child.projection.restoreGenerations(readReasoning(child.nativeId)); }
     catch { /* Optional enrichment preserves the observed child records. */ }
   };
   const announce = (owner, process, step, parent) => {
@@ -107,12 +107,13 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
         publishSession(child);
         publisher.status(directory, child.session.id, 'busy');
       }
-      await child.projection.applyStep(step, now(), async () => {});
+      const tool = await child.projection.applyStep(step, now(), async () => {});
       if (step.step_type === 'agent_response' && step.state === 'DONE') {
         refreshReasoning(child);
         child.reasoningAfterTool = true;
-      } else if (child.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
-        && ['DONE', 'ERROR', 'INVALID'].includes(step.state)) {
+      } else if ((child.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
+        && ['DONE', 'ERROR', 'INVALID'].includes(step.state))
+        || (tool?.tool === 'edit' && tool.state.status === 'completed' && !tool.state.metadata?.diff)) {
         child.reasoningAfterTool = false;
         refreshReasoning(child);
       }
