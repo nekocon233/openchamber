@@ -6,7 +6,7 @@ const report = (date: string, steps = 1): UsageStats => ({
   range: { from: 1, to: 1000 }, sessions: 1, subagents: 0, prompts: 1, steps,
   tokens: { input: 10, output: 3, reasoning: 2, cacheRead: 20, cacheWrite: 5, total: 40 }, cost: 0,
   tools: { mode: 'none' }, activeDays: 1, streak: 1, activity: [{ date, steps, tokens: 40, tokensComplete: true }],
-  models: [{ providerID: 'provider', modelID: 'model', variant: null, steps, tokens: { input: 10, output: 3, reasoning: 2, cacheRead: 20, cacheWrite: 5, total: 40 }, cost: 0 }],
+  models: [{ providerID: 'provider', modelID: 'model', steps, tokens: { input: 10, output: 3, reasoning: 2, cacheRead: 20, cacheWrite: 5, total: 40 }, cost: 0 }],
 });
 
 describe('usage statistics across sources', () => {

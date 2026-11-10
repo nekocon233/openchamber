@@ -19,7 +19,7 @@ const report = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), steps: count,
     tokens: count.nullable().default(null), tokensComplete: z.boolean().default(false),
   }).refine((day) => day.tokens !== null || !day.tokensComplete)),
-  models: z.array(z.object({ providerID: z.string(), modelID: z.string(), variant: z.string().nullable(), steps: count, tokens, cost: count, coverage })),
+  models: z.array(z.object({ providerID: z.string(), modelID: z.string(), steps: count, tokens, cost: count, coverage })),
 }) satisfies z.ZodType<UsageStats>;
 
 const source = z.discriminatedUnion('status', [
