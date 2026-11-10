@@ -100,7 +100,7 @@ export const ReviewSubmitForm: React.FC<{
                 ) : null}
                 {labels.model === 'verdict' && canJudge ? (
                     <>
-                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null || !body} title={t('sourceBoard.reply.requestChangesHint')} onClick={() => void send('request-changes')}>
+                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null} onClick={() => void send('request-changes')}>
                             {busyIcon('request-changes')}
                             {t('sourceBoard.reply.requestChanges')}
                         </Button>

@@ -221,13 +221,13 @@ describe('Gitea provider authentication', () => {
 });
 
 describe('Gitea mutation input', () => {
-  it('refuses a request for changes without a body before anything is sent, as Gitea would', async () => {
+  it('allows requesting changes with or without a body and rejects blank whitespace', async () => {
     const { impl, calls } = await setup();
     const prepare = (input) => impl.mutations.prepare({
       route: '/pr/review', input, context: { target: { number: 1, headSha: HEAD } }, actor: 'actor', credential: 'credential',
     });
 
-    expect(() => prepare({ verdict: 'request-changes' })).toThrow(expect.objectContaining({ code: 'INVALID_SOURCE_CONTROL_MUTATION_CONTEXT', status: 400 }));
+    expect(prepare({ verdict: 'request-changes' }).input).toMatchObject({ verdict: 'request-changes', body: undefined });
     expect(() => prepare({ verdict: 'request-changes', body: '  ' })).toThrow(expect.objectContaining({ status: 400 }));
     expect(prepare({ verdict: 'request-changes', body: 'Please fix' }).input).toMatchObject({ verdict: 'request-changes', body: 'Please fix' });
     expect(prepare({ verdict: 'approve' }).input).toMatchObject({ verdict: 'approve', body: undefined });

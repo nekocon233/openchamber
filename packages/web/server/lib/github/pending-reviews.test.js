@@ -144,8 +144,9 @@ describe('GitHub pending reviews', () => {
     await expect(f.prepare({ kind: 'submit', reviewId: 'REVIEW1', version: first, verdict: 'comment' })).rejects.toMatchObject({ status: 409 });
   });
 
-  it('rejects empty request-changes summaries and invalid line ranges', () => {
-    expect(() => parsePendingReviewAction({ kind: 'submit', reviewId: 'R', version: 'v', verdict: 'request-changes' })).toThrow();
+  it('allows empty request-changes summaries and rejects invalid line ranges', () => {
+    expect(parsePendingReviewAction({ kind: 'submit', reviewId: 'R', version: 'v', verdict: 'request-changes' }))
+      .toEqual({ kind: 'submit', reviewId: 'R', version: 'v', verdict: 'request-changes' });
     expect(() => parsePendingReviewAction({ kind: 'comment', path: 'a', side: 'RIGHT', startLine: 3, line: 2, body: 'x' })).toThrow();
   });
 

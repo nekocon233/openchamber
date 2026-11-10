@@ -32,25 +32,6 @@ export const GITEA_EDITIONS = Object.freeze({
 const unknownOutcome = () => ({ state: 'outcome-unknown' });
 
 /**
- * The standard table on top, plus what Gitea refuses that the standard table
- * accepts: a request for changes without a body (422 on 1.21 and 1.27). The
- * standard normalization already refused a blank or oversized body, so a
- * missing one is all that is left; the digest is unchanged.
- */
-function giteaPrepare(standardMutations, label) {
-  return (request) => {
-    const prepared = standardMutations.prepare(request);
-    if (prepared.kind === 'change-request-review' && prepared.input.verdict === 'request-changes' && prepared.input.body === undefined) {
-      throw Object.assign(new Error(`body is required and must fit a ${label} comment`), {
-        code: 'INVALID_SOURCE_CONTROL_MUTATION_CONTEXT',
-        status: 400,
-      });
-    }
-    return prepared;
-  };
-}
-
-/**
  * Each standard mutation route's Gitea call and restart reconciliation. The
  * kind, normalization and digest come from the standard table; `normalized`
  * is its output.
@@ -276,7 +257,7 @@ export function createGiteaFamilyProvider({
     }),
     mutations: Object.freeze({
       routes: standardMutations.routes,
-      prepare: giteaPrepare(standardMutations, label),
+      prepare: standardMutations.prepare,
       /**
        * The provider coordinates and durable target. A replay rebuilds them
        * from the stored target, except create, which is resolved again.

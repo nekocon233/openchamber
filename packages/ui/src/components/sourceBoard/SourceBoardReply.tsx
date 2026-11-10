@@ -85,7 +85,7 @@ export const SourceBoardReply: React.FC<{
     };
 
     const review = async (verdict: ReviewVerdict) => {
-        if (!openPull || busy || (verdict === 'request-changes' && !body)) return;
+        if (!openPull || busy) return;
         setBusy(verdict);
         try {
             const input: ReviewChangeRequestInput = {
@@ -145,9 +145,7 @@ export const SourceBoardReply: React.FC<{
                             size="sm"
                             variant="outline"
                             onClick={() => void review('request-changes')}
-                            disabled={busy !== null || !body || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}
-                            // Disabled buttons show no tooltip; the hint is for the enabled one too.
-                            title={t('sourceBoard.reply.requestChangesHint')}
+                            disabled={busy !== null || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}
                         >
                             {busyIcon('request-changes') ?? <Icon name="file-edit" className="size-3.5" />}
                             {t('sourceBoard.reply.requestChanges')}

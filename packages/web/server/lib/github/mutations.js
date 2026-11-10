@@ -254,8 +254,7 @@ function normalizeOperation(operation, body, context, actor, credential, limits)
     if (!Object.hasOwn(REVIEW_EVENTS, verdict)) throw mutationError('review verdict is invalid');
     // A verdict names the commit it is for; without one it would land on whatever was pushed last.
     requiredText(context.target.headSha, 'target headSha');
-    // GitHub asks for the reason when changes are requested.
-    const text = commentText(body.body, verdict === 'request-changes', limits.commentMaxLength);
+    const text = commentText(body.body, false, limits.commentMaxLength);
     return {
       input: { verdict, body: text },
       digest: (target) => digestOf(text === undefined ? { target, verdict } : { target, verdict, body: text }),

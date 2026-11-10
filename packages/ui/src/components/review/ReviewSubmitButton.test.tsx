@@ -3,9 +3,17 @@ import { Window } from 'happy-dom';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
+import { PendingReviewSection } from '@/components/sourceBoard/PendingReviewSection';
+import { SourceBoardReply } from '@/components/sourceBoard/SourceBoardReply';
+import type { PendingReviewController } from '@/components/sourceBoard/usePendingReview';
+import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
+import type { GitHubReference, SourceControlReadContext } from '@/lib/api/types';
 import { I18nProvider } from '@/lib/i18n';
+import type { GitHubPendingReviewAction } from '@/lib/source-control/pendingReview';
+import type { ReviewChangeRequestInput } from '@/lib/source-control/types';
+import { createWebAPIs } from '../../../../web/src/api/index';
 import { ReviewSubmitForm } from './ReviewSubmitButton';
-import type { ChangeRequestReview } from './useChangeRequestReview';
+import type { ChangeRequestReview, ReviewSubmission } from './useChangeRequestReview';
 
 describe('sending a review', () => {
     let browser: Window;
@@ -74,5 +82,114 @@ describe('sending a review', () => {
 
         await act(async () => { finish(false); });
         expect(button('Send 2 comments')?.querySelector('[data-spinner]')).toBeFalsy();
+    });
+
+    test('request changes can be sent without a summary body', async () => {
+        let received: ReviewSubmission | null = null;
+        const submit: ChangeRequestReview['submit'] = async (submission) => {
+            received = submission;
+            return true;
+        };
+        await act(async () => root.render(<I18nProvider><ReviewSubmitForm review={review(submit)} provider="github" onDone={() => undefined} /></I18nProvider>));
+
+        const requestChanges = button('Request changes');
+        expect(requestChanges).toBeTruthy();
+        expect(requestChanges?.hasAttribute('disabled')).toBe(false);
+        await act(async () => { requestChanges?.click(); });
+        expect(received).toEqual({ verdict: 'request-changes', body: undefined });
+    });
+
+    test('pending review section submits request changes without a summary body', async () => {
+        let received: { action: GitHubPendingReviewAction; headSha: string } | null = null;
+        const controller: PendingReviewController = {
+            key: 'review-1',
+            loading: false,
+            busy: false,
+            readError: null,
+            error: null,
+            data: {
+                headSha: 'a'.repeat(40),
+                open: true,
+                ownPull: false,
+                review: { id: 'R1', headSha: 'a'.repeat(40), body: '', version: 'v1', comments: [] },
+            },
+            refresh: async () => undefined,
+            mutate: async (action, headSha) => {
+                received = { action, headSha };
+                return true;
+            },
+        };
+        await act(async () => root.render(<I18nProvider><PendingReviewSection controller={controller} onSubmitted={() => undefined} /></I18nProvider>));
+
+        const requestChanges = button('Request changes');
+        expect(requestChanges).toBeTruthy();
+        expect(requestChanges?.hasAttribute('disabled')).toBe(false);
+        await act(async () => { requestChanges?.click(); });
+        expect(received).toEqual({
+            action: { kind: 'submit', reviewId: 'R1', version: 'v1', verdict: 'request-changes' },
+            headSha: 'a'.repeat(40),
+        });
+    });
+
+    test('board reply requests changes without a comment body', async () => {
+        let received: ReviewChangeRequestInput | null = null;
+        const apis = createWebAPIs();
+        apis.sourceControl.changeRequestReview = async (payload) => {
+            received = payload;
+            return {
+                status: 'succeeded',
+                replayed: false,
+                actor: { provider: 'gitlab', instance: 'https://gitlab.example.com', providerAccountId: 'https://gitlab.example.com#1' },
+                target: { repositoryId: 'repo-1', bindingRevision: 1, primaryRemote: 'origin', project: { id: 'acme/app', owner: 'acme', name: 'app' }, number: 7, headSha: 'a'.repeat(40) },
+                result: { commented: false },
+            };
+        };
+        const context: SourceControlReadContext = {
+            provider: 'gitlab',
+            instance: 'https://gitlab.example.com',
+            accountId: 'https://gitlab.example.com#1',
+            repositoryId: 'repo-1',
+            bindingRevision: 1,
+            primaryRemote: 'origin',
+            directory: '/repo',
+        };
+        const reference: GitHubReference = {
+            kind: 'pull',
+            state: 'open',
+            draft: false,
+            number: 7,
+            title: 'Feature',
+            url: 'https://gitlab.example.com/acme/app/-/merge_requests/7',
+            body: '',
+            bodyTruncated: false,
+            createdAt: null,
+            updatedAt: null,
+            author: null,
+            labels: [],
+            commentCount: 0,
+            sourceRepo: { owner: 'acme', repo: 'app', source: 'origin' },
+            head: 'feature',
+            base: 'main',
+            headSha: 'a'.repeat(40),
+            headRepo: null,
+            provider: 'gitlab',
+        };
+        await act(async () => root.render(
+            <RuntimeAPIContext.Provider value={apis}>
+                <I18nProvider>
+                    <SourceBoardReply reference={reference} context={context} onRefresh={() => undefined} />
+                </I18nProvider>
+            </RuntimeAPIContext.Provider>,
+        ));
+
+        const requestChanges = button('Request changes');
+        expect(requestChanges).toBeTruthy();
+        expect(requestChanges?.hasAttribute('disabled')).toBe(false);
+        await act(async () => { requestChanges?.click(); });
+        expect(received).toMatchObject({
+            verdict: 'request-changes',
+            target: { project: { owner: 'acme', name: 'app' }, number: 7, headSha: 'a'.repeat(40) },
+        });
+        expect(received).not.toHaveProperty('body');
     });
 });

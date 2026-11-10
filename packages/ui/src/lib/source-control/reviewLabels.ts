@@ -2,7 +2,7 @@ import type { SourceControlProviderDescriptor } from './providers/descriptor';
 import type { ChangeRequestVoteLabel, ReviewVerdict } from './types';
 
 /**
- * What a verdict host reviews on: approve, or request changes with text. One
+ * What a verdict host reviews on: approve or request changes. One
  * label the host never names, so verdict hosts keep today's two buttons and
  * send `{ verdict, body }` as before.
  */
@@ -15,7 +15,7 @@ type ApprovalLabel = {
 const APPROVAL_LABEL: ApprovalLabel = {
   name: 'approval',
   implicit: true,
-  options: [{ verdict: 'approve', requiresBody: false }, { verdict: 'request-changes', requiresBody: true }],
+  options: [{ verdict: 'approve', requiresBody: false }, { verdict: 'request-changes', requiresBody: false }],
 };
 
 type ReviewLabels =

@@ -105,7 +105,7 @@ export const PendingReviewSection: React.FC<{ controller: PendingReviewControlle
     <div className="flex flex-wrap justify-end gap-2">
       <Button size="sm" variant="outline" disabled={busy || !data.open || Boolean(readError)} onClick={() => void submit('comment')}>{t('pendingReview.submitComment')}</Button>
       <Button size="sm" variant="outline" disabled={busy || !data.open || data.ownPull || Boolean(readError)} onClick={() => void submit('approve')}>{t('sourceBoard.reply.approve')}</Button>
-      <Button size="sm" disabled={busy || !data.open || data.ownPull || Boolean(readError) || !text.trim()} onClick={() => void submit('request-changes')}>
+      <Button size="sm" disabled={busy || !data.open || data.ownPull || Boolean(readError)} onClick={() => void submit('request-changes')}>
         {t('sourceBoard.reply.requestChanges')}
       </Button>
     </div>

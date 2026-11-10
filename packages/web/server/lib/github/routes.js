@@ -860,8 +860,7 @@ export function registerGitHubRoutes(app, options = {}) {
       if (verdict !== 'approve' && verdict !== 'request-changes') throw canonicalMutationError('review verdict is invalid');
       // A verdict names the commit it is for; without one it would land on whatever was pushed last.
       requiredMutationText(context.target.headSha, 'target headSha');
-      // GitHub asks for the reason when changes are requested.
-      const body = commentText(req.body?.body, verdict === 'request-changes');
+      const body = commentText(req.body?.body, false);
       return {
         verdict, body,
         digest(target) {
