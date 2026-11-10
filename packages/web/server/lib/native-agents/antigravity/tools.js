@@ -108,3 +108,19 @@ export const agyEditMetadata = (call, { completed, inputTruncated = false }) => 
   });
   return files.length ? { ...fileDiffMetadata(files), nativeDiffScope: 'replacement' } : {};
 };
+
+/** Fill a completed stream edit from complete native arguments, preserving its outcome and timing. */
+export const withAgyEditDetails = (live, saved) => {
+  if (live?.type !== 'tool' || saved?.type !== 'tool' || live.tool !== 'edit' || saved.tool !== 'edit'
+    || live.id !== saved.id || live.messageID !== saved.messageID
+    || live.state.status !== 'completed' || saved.state.status !== 'completed'
+    || live.state.metadata?.nativeBackend !== 'antigravity' || live.state.metadata?.diff
+    || saved.state.metadata?.nativeInputTruncated || !saved.state.metadata?.diff) return live;
+  const { files, diff, nativeDiffScope } = saved.state.metadata;
+  const metadata = { ...live.state.metadata, files, diff, nativeDiffScope };
+  delete metadata.nativeInputTruncated;
+  return { ...live, state: { ...live.state,
+    input: { ...live.state.input, ...saved.state.input },
+    metadata,
+  } };
+};

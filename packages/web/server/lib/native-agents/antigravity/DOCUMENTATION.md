@@ -279,8 +279,9 @@ remains the final fallback. During a running turn, completed native generation
 snapshots supply reasoning after an agent-response DONE frame and once after
 its first finished tool, covering transcript writes that lag the response
 frame. History reads also enrich observed live generations so the live overlay
-cannot hide saved thinking. These updates change only reasoning parts; running
-tools and session activity remain owned by the live stream. Complete thinking
+cannot hide saved thinking. These snapshots also supply complete edit arguments when the stream carries
+only a path. Completed edits gain their replacement previews immediately. Running
+tools, live errors, output, timing and session activity remain owned by the stream. Complete thinking
 replaces shortened snapshots, and repeated reads publish no duplicate parts.
 Running reasoning inserts also publish the existing message-parts snapshot event so
 clients place reasoning before text and tools immediately. Unified projection
@@ -321,8 +322,11 @@ an earlier progress reply; unreadable history retains the stream result fallback
 The stream omits thinking even when the transcript already contains it. A
 generation completion and its first tool completion each allow one transcript
 read; token deltas and idle time read nothing. Only DONE planner snapshots can
-enrich already observed generations, so a history read neither invents a live
-message nor settles a running tool.
+enrich already observed generations. A completed edit missing its arguments allows
+one additional read for that tool; repeated DONE frames and token deltas do no
+extra work. History overlays fill missing completed edit previews from complete
+saved inputs without replacing a live failure or a running tool. A history read
+neither invents a live message nor settles a running tool.
 
 Malformed complete lines and unknown step types mark history incomplete;
 unterminated trailing writes are not treated as corruption.

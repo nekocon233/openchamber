@@ -28,7 +28,7 @@ import {
   agyPermissionError,
 } from './protocol.js';
 import { agyBackgroundResults } from './tasks.js';
-import { mapAgyTool, agyEditMetadata } from './tools.js';
+import { mapAgyTool, agyEditMetadata, withAgyEditDetails } from './tools.js';
 import { antigravityChecklistSnapshot, AGY_CHECKLIST_PART_TOOL } from './checklist.js';
 
 const sessionKey = (nativeId) => nativeId.replaceAll('-', '');
@@ -456,21 +456,40 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       return [...records.values()];
     },
 
-    restoreReasoning(entries) {
+    restoreGenerations(entries) {
       for (const entry of entries) {
         const record = records.get(assistantId(nativeId, entry.step_index));
         if (!record) continue;
         const part = reasoningPart({ sessionId, nativeId, entry, time: record.info.time.created });
-        if (!part) continue;
-        const index = record.parts.findIndex((held) => held.id === part.id);
-        if (index === -1) record.parts.unshift(part);
-        else {
+        const index = part ? record.parts.findIndex((held) => held.id === part.id) : -1;
+        let changed = false;
+        if (part && index === -1) { record.parts.unshift(part); changed = true; }
+        else if (part) {
           const held = record.parts[index];
-          if (!held.metadata?.nativeOutputTruncated || part.metadata?.nativeOutputTruncated) continue;
-          record.parts[index] = { ...part, time: held.time };
+          if (held.metadata?.nativeOutputTruncated && !part.metadata?.nativeOutputTruncated) {
+            record.parts[index] = { ...part, time: held.time };
+            changed = true;
+          }
         }
+        entry.tool_calls?.forEach((call, offset) => {
+          const id = partId(nativeId, entry.step_index + offset + 1, 'tool');
+          const held = tools.get(id);
+          if (!held || held.messageID !== record.info.id || held.tool !== 'edit'
+            || held.state.status !== 'completed' || held.state.metadata?.diff) return;
+          const mapped = mapAgyTool(call);
+          const enriched = withAgyEditDetails(held, { ...held, tool: mapped.tool, state: { ...held.state,
+            input: mapped.input, metadata: agyEditMetadata(call, {
+              completed: held.state.status === 'completed', inputTruncated: entry.truncated_fields?.includes('tool_calls'),
+            }),
+          } });
+          if (enriched === held) return;
+          record.parts[record.parts.findIndex((candidate) => candidate.id === id)] = enriched;
+          tools.set(id, enriched);
+          changed = true;
+        });
+        if (!changed) continue;
         publish(record);
-        if (index === -1) publisher.emit(directory, 'message.parts.replaced', { sessionID: sessionId, messageID: record.info.id, parts: record.parts });
+        if (part && index === -1) publisher.emit(directory, 'message.parts.replaced', { sessionID: sessionId, messageID: record.info.id, parts: record.parts });
       }
     },
 
@@ -623,7 +642,7 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       const call = { name: info.name || step.tool_name, args: info.parameters, argumentsEncoded: false };
       const mapped = mapAgyTool(call);
       const exit = call.name === 'run_command' ? commandExitCode(info.output) : null;
-      const failed = step.state === 'ERROR' || info.error !== null || (exit !== null && exit !== 0);
+      const failed = ['ERROR', 'INVALID'].includes(step.state) || info.error !== null || (exit !== null && exit !== 0);
       const start = previous?.state.time.start ?? created(time);
       const result = step.state === 'ACTIVE' || step.state === 'RUNNING'
         ? null
@@ -653,6 +672,7 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
           if (snapshot.state === 'ready') publisher.checklist(directory, sessionId, snapshot);
         } catch { /* Unconfirmed tool results cannot replace the last committed list. */ }
       }
+      return part;
     },
 
     finish({ outcome, response, error, time, responseStep = null }) {
