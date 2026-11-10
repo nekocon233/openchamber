@@ -28,6 +28,8 @@ import { z } from 'zod';
  *
  * Each feature that could send conversation content anywhere else checks it
  * at its own server boundary:
+ * - Managed Antigravity memory injection and handoff capture are off. The CLI's
+ *   provider is configured outside OpenCode (`native-agents/runtime.js`).
  * - Unified native conversations refuse creation, prompts, compaction and
  *   continuing question replies. Their context can cross between independently
  *   configured CLI providers (`native-agents/conversations/runtime.js`).

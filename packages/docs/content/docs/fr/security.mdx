@@ -165,6 +165,7 @@ Pour vérifier que ça a marché, ouvrez Paramètres → Fournisseurs : un avis 
 
 ### Ce qui change
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - Les sessions, la configuration en un clic et la configuration des fournisseurs DeepSeek Harness sont indisponibles. Leurs modèles sont configurés séparément dans dsh, en dehors de la politique de fournisseurs OpenCode.
 - Les conversations natives unifiées ne peuvent être ni créées ni poursuivies en mode entreprise, y compris par compression du contexte ou réponse relançant un tour. Leurs passations peuvent atteindre des fournisseurs CLI configurés hors d'OpenCode. Les conversations enregistrées restent répertoriées ; la lecture et le nettoyage des sources suivent la politique de chaque CLI.
 - La modification des combinaisons d’agents natifs et les sous-agents entre CLI sont indisponibles, y compris les appels d’une CLI déjà en cours. Leurs modèles peuvent joindre des fournisseurs configurés hors d’OpenCode. Les combinaisons enregistrées ne contournent pas cette restriction.

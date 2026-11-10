@@ -165,6 +165,7 @@ environment:
 
 ### 会有哪些变化
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - DeepSeek Harness 会话、一键配置和模型服务配置不可用。其模型在 dsh 中单独配置，不受 OpenCode 提供商策略管理。
 - 企业模式下不能创建或继续统一原生会话，也不能压缩上下文或通过问题回复继续执行。交接可能跨越在 OpenCode 之外配置的 CLI 提供商。已保存会话仍会列出；原始记录的读取和清理遵循各 CLI 的现有策略。
 - 企业模式下不能更改原生代理组合或跨 CLI 调用子代理，已运行 CLI 的回调同样受限。这些模型选择可能访问在 OpenCode 之外配置的提供商，保存的组合也不能绕过此限制。

@@ -11,7 +11,7 @@ import { withMemoryFileLock } from './file-lock.js';
 import { projectPathFromId, projectConfigFileStemOf } from '../projects/project-id.js';
 
 const terminalBackend = z.enum(['claude', 'codex']);
-const backend = z.enum(['claude', 'codex', 'deepseek']);
+const backend = z.enum(['claude', 'codex', 'deepseek', 'antigravity']);
 const identity = z.object({
   backend, sessionId: z.string().min(1).max(128), directory: z.string().min(1),
   delivery: z.enum(['managed', 'hook']).default('managed'),
@@ -25,7 +25,7 @@ const progressEntry = checkpoint.extend({ projectId: z.string(), revision: z.num
 const stateSchema = z.object({ version: z.literal(1), revision: z.number().int().nonnegative(), progress: z.array(progressEntry) });
 const missingFile = z.object({ code: z.literal('ENOENT') });
 const sourceId = (value) => createHash('sha256').update(value).digest('hex').slice(0, 32);
-const nativeIdentity = (value) => ({ ...value, sessionId: value.sessionId.replace(/^(?:ncl|ncx)_/, '') });
+const nativeIdentity = (value) => ({ ...value, sessionId: value.sessionId.replace(/^(?:ncl|ncx|nag)_/, '') });
 const actorKey = (value) => `${value.backend}:${value.sessionId}`;
 
 /** One backend owns durable memory and progress for both native CLI adapters. */
@@ -92,7 +92,7 @@ export const createNativeMemorySharing = ({
     const [memories, state] = await Promise.all([agentMemoryRuntime.readAll(projectId || null), read(projectId).catch(() => null)]);
     const port = getPort();
     let cli = port ? `openchamber memory --port ${port}` : 'openchamber memory';
-    if (input.backend === 'deepseek' && input.delivery === 'managed') {
+    if (['deepseek', 'antigravity'].includes(input.backend) && input.delivery === 'managed') {
       const executable = await getNodeExecutable();
       if (!executable) throw new NativeAgentError('A runtime executable is required for managed memory commands', { status: 503, code: 'NATIVE_MEMORY_NODE_MISSING' });
       const quote = (value) => process.platform === 'win32' ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, `'\\''`)}'`;
@@ -166,7 +166,7 @@ export const createNativeMemorySharing = ({
   return {
     enabled: isEnabled,
     context,
-    release: (sessionId) => managed.delete(`${sessionId.startsWith('ncl_') ? 'claude' : sessionId.startsWith('ncx_') ? 'codex' : 'deepseek'}:${sessionId.replace(/^(?:ncl|ncx)_/, '')}`),
+    release: (sessionId) => managed.delete(`${sessionId.startsWith('ncl_') ? 'claude' : sessionId.startsWith('ncx_') ? 'codex' : sessionId.startsWith('nag_') ? 'antigravity' : 'deepseek'}:${sessionId.replace(/^(?:ncl|ncx|nag)_/, '')}`),
     async setProgressVisible(sessionId, directory, visible) {
       await updateProgress(sessionId, directory, (entry) => ({ ...entry, hidden: !visible }));
     },

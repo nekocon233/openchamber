@@ -165,6 +165,7 @@ environment:
 
 ### 달라지는 점
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - DeepSeek Harness 세션, 원클릭 설정, 공급자 설정은 사용할 수 없습니다. 해당 모델은 dsh에서 별도로 설정되며 OpenCode 공급자 정책의 적용 대상이 아닙니다.
 - 엔터프라이즈 모드에서는 통합 네이티브 대화를 생성하거나 이어갈 수 없으며, 문맥 압축이나 실행을 재개하는 질문 답변도 제한됩니다. 문맥 인계가 OpenCode 외부에서 설정된 CLI 공급자에 전달될 수 있기 때문입니다. 저장된 대화는 목록에 남으며, 원본 읽기와 정리는 각 CLI의 기존 정책을 따릅니다.
 - 네이티브 에이전트 조합 변경과 CLI 간 하위 에이전트 호출은 사용할 수 없으며, 이미 실행 중인 CLI의 호출도 차단됩니다. 선택한 모델이 OpenCode 외부에서 설정된 공급자에 연결될 수 있기 때문입니다. 저장된 조합으로도 이 제한을 우회할 수 없습니다.

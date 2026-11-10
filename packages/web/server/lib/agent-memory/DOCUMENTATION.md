@@ -1,6 +1,6 @@
 # Shared agent memory
 
-`runtime.js` owns durable global preferences and project knowledge. OpenCode, Claude Code, Codex and managed DeepSeek Harness
+`runtime.js` owns durable global preferences and project knowledge. OpenCode, Claude Code, Codex and managed DeepSeek Harness and Antigravity
 sessions use this store. `agentMemoryToolEnabled` is off by default;
 the capability and Settings entry are available without the retired
 `OPENCHAMBER_MEMORY_ENABLE` experiment flag. Disabling memory stops agent reads,
@@ -36,18 +36,21 @@ Late checkpoints cannot replace a newer observation for the same session.
 Handoff read failure leaves readable long-term memory available and explicitly
 marks progress unavailable. No background polling runs.
 
-Managed DeepSeek context names an absolute runtime executable and the private
+Managed DeepSeek and Antigravity context names an absolute runtime executable and the private
 `native-cli.mjs` entry, so memory reads/writes do not depend on a global
 `openchamber` command. That entry delegates only list/read/save/delete to the
 existing CLI command and authentication, always emits JSON and fails nonzero;
 it cannot manage hooks or run another CLI command. Packaged Electron stages a
 standalone `native-memory-cli.mjs` outside ASAR and supplies its server-only path.
 
-DeepSeek participation is limited to OpenChamber-managed sessions on the
-connected server. Hook enrollment and connection readiness still describe only
-Claude Code and Codex; no DSH terminal profile is modified. Antigravity sessions
-currently receive no managed memory context or handoff capture and have no
-terminal hook enrollment.
+DeepSeek and Antigravity participation is limited to OpenChamber-managed sessions
+on the connected server. Hook enrollment and connection readiness still describe
+only Claude Code and Codex. Neither DSH nor AGY terminal profiles are modified.
+AGY uses its native source identity and the final response owner for its handoff;
+completion waits for that capture before releasing the turn. Definite prompt
+refusals release managed context; uncertain sends keep their existing admission
+recovery without replay. Managed AGY memory stays off in enterprise mode because
+its provider is configured outside OpenCode.
 
 ## Native terminal hooks
 

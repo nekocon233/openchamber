@@ -165,6 +165,7 @@ environment:
 
 ### Co się zmienia
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - Sesje DeepSeek Harness, konfiguracja jednym kliknięciem i konfiguracja dostawców są niedostępne. Ich modele są konfigurowane osobno w dsh, poza zasadami dostawców OpenCode.
 - W trybie firmowym nie można tworzyć ani kontynuować ujednoliconych rozmów natywnych, także przez kompresję kontekstu lub odpowiedzi wznawiające turę. Przekazanie kontekstu może dotrzeć do dostawców CLI skonfigurowanych poza OpenCode. Zapisane rozmowy pozostają na liście; odczyt i czyszczenie źródeł podlegają dotychczasowej polityce danego CLI.
 - Zmiany kombinacji natywnych agentów i wywołania podagentów między CLI są niedostępne, również z już działającego CLI. Wybrane modele mogą korzystać z dostawców skonfigurowanych poza OpenCode. Zapisane kombinacje nie omijają tego ograniczenia.

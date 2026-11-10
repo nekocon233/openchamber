@@ -326,21 +326,26 @@ export const createNativeAgentsRuntime = ({
     return null;
   };
 
-  // Publish the CLI record before automatic title generation. Keep the entry
-  // from before confirmation so only the first completion can request it.
-  // A Claude title supplied at creation is written to the new transcript.
-  const onTurnFinished = (sessionId, directory, turn) => {
+  const checkpointTurn = async (sessionId, directory, turn) => {
     const observedAt = now();
     if (memory) {
-      void (async () => {
-        if (!await memory.enabled() || !turn) return memory.release(sessionId);
+      try {
+        if (!await memory.enabled() || !turn
+          || (decode(sessionId).backend === NATIVE_BACKEND_ANTIGRAVITY && isEnterpriseMode())) return memory.release(sessionId);
         await memory.checkpoint({
           backend: decode(sessionId).backend, sessionId, directory, delivery: 'managed',
           turnId: turn.id, summary: turn.summary.slice(0, 12000),
           status: turn.status === 'completed' ? 'completed' : 'interrupted', observedAt,
         });
-      })().catch(() => memory.release(sessionId));
+      } catch { memory.release(sessionId); }
     }
+  };
+
+  // Publish the CLI record before automatic title generation. Keep the entry
+  // from before confirmation so only the first completion can request it.
+  // A Claude title supplied at creation is written to the new transcript.
+  const onTurnFinished = (sessionId, directory, turn) => {
+    void checkpointTurn(sessionId, directory, turn);
     const initialSession = (async () => {
       try {
         const entry = await registry.getSession(sessionId);
@@ -469,6 +474,7 @@ export const createNativeAgentsRuntime = ({
     resolveNodeExecutable: () => resolveExecutable('node'),
     resolveCommand: resolveAntigravityCommand,
     registry, publisher, readGlobalInstructions, decorateSession: decorate, now,
+    onTurnFinished: checkpointTurn,
     onInteraction: async (proposal) => {
       if ((await registry.getSession(proposal.sessionId))?.delegation) return;
       if (!await registry.getSession(proposal.sessionId)) await adoptSession(proposal.sessionId, proposal.directory);
@@ -640,8 +646,14 @@ export const createNativeAgentsRuntime = ({
     if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
       signal?.throwIfAborted();
       await antigravityDecisions.beforePrompt(sessionId, request.messageID);
-      const parts = withInstructions(request.parts, request.instructions);
-      await antigravity.prompt(sessionId, { ...request, parts }, signal);
+      const knowledge = memory && !isEnterpriseMode() ? await memory.context({ backend, sessionId, directory: request.directory, delivery: 'managed' }).catch(() => null) : null;
+      const parts = withInstructions(request.parts, [request.instructions, knowledge?.text].filter(Boolean).join('\n\n') || undefined);
+      try {
+        await antigravity.prompt(sessionId, { ...request, parts }, signal);
+      } catch (error) {
+        if (error.code !== 'NATIVE_PROMPT_OUTCOME_UNKNOWN') memory?.release(sessionId);
+        throw error;
+      }
       return;
     }
     if (signal) signal.throwIfAborted();

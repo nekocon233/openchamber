@@ -165,6 +165,7 @@ Para conferir se funcionou, abra Configurações → Provedores: um aviso de mod
 
 ### O que muda
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - As sessões, a configuração com um clique e a configuração de provedores do DeepSeek Harness ficam indisponíveis. Os modelos são configurados separadamente no dsh, fora da política de provedores do OpenCode.
 - Conversas nativas unificadas não podem ser criadas nem continuadas no modo empresarial, incluindo compactação de contexto e respostas que retomem um turno. As transferências podem alcançar provedores CLI configurados fora do OpenCode. As conversas salvas continuam na lista; a leitura e a limpeza das fontes seguem a política de cada CLI.
 - Alterações nas combinações de agentes nativos e chamadas de subagentes entre CLIs ficam indisponíveis, inclusive chamadas de uma CLI já em execução. Os modelos escolhidos podem usar provedores configurados fora do OpenCode. Combinações salvas não contornam essa restrição.

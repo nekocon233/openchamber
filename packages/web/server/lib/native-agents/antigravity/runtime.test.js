@@ -15,7 +15,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const setup = async ({ checklist = false } = {}) => {
+const setup = async ({ checklist = false, memory = null } = {}) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-runtime-')));
   let unauthenticated = false;
   const directory = path.join(root, 'project');
@@ -28,11 +28,13 @@ const setup = async ({ checklist = false } = {}) => {
   fs.copyFileSync(new URL('./fixtures/fake-agy.mjs', import.meta.url), executable);
   fs.chmodSync(executable, 0o755);
   const events = [];
+  const requestsFile = path.join(root, 'requests.jsonl');
   const runtime = createNativeAgentsRuntime({
     dataDir: root,
+    memory,
     resolveExecutable: async (cli) => cli === 'agy' ? executable : cli === 'node' && checklist ? process.execPath : null,
     resolveAntigravityCommand: async () => ({ executable, argsPrefix: [] }),
-    buildChildEnv: () => ({ ...process.env, HOME: home, AGY_FIXTURE_HOME: fixtureHome, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
+    buildChildEnv: () => ({ ...process.env, HOME: home, AGY_FIXTURE_HOME: fixtureHome, AGY_FIXTURE_REQUESTS: requestsFile, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     readGlobalInstructions: async () => 'RUNTIME RULES',
@@ -40,7 +42,7 @@ const setup = async ({ checklist = false } = {}) => {
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   cleanups.push(() => runtime.shutdown());
   const session = await runtime.createSession({ backend: 'antigravity', directory, title: 'Runtime agy' });
-  return { runtime, session, directory, events, setUnauthenticated: () => { unauthenticated = true; } };
+  return { runtime, session, directory, events, requestsFile, setUnauthenticated: () => { unauthenticated = true; } };
 };
 
 const prompt = async (runtime, session, directory, text = 'runtime') => {
@@ -54,6 +56,62 @@ const prompt = async (runtime, session, directory, text = 'runtime') => {
 };
 
 describe('Antigravity native runtime', () => {
+  it('injects hidden managed memory and checkpoints only the final reply once', async () => {
+    const memory = { enabled: async () => true, context: vi.fn(async () => ({ text: 'Shared memory index' })),
+      checkpoint: vi.fn(async () => {}), release: vi.fn() };
+    const { runtime, session, directory, requestsFile } = await setup({ memory });
+    await prompt(runtime, session, directory, 'history-recovery');
+    expect(memory.context).toHaveBeenCalledWith({ backend: 'antigravity', sessionId: session.id, directory, delivery: 'managed' });
+    expect(memory.checkpoint).toHaveBeenCalledTimes(1);
+    expect(memory.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ backend: 'antigravity', sessionId: session.id,
+      directory, delivery: 'managed', status: 'completed', summary: 'Complete final answer\n' }));
+    expect(fs.readFileSync(requestsFile, 'utf8')).toContain('Shared memory index');
+    const history = await runtime.loadMessages(session.id, directory, { limit: 20 });
+    expect(JSON.stringify(history.records)).not.toContain('Shared memory index');
+    expect(memory.checkpoint).toHaveBeenCalledTimes(1);
+    await expect(runtime.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, model: { providerID: 'antigravity-native', modelID: 'invalid-model' },
+      agent: 'build', parts: [{ type: 'text', text: 'must not send' }] })).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_ERROR' });
+    expect(memory.release).toHaveBeenCalledWith(session.id);
+  });
+
+  it('captures the final response even when history appends an earlier child report', async () => {
+    const memory = { enabled: async () => true, context: async () => ({ text: '' }), checkpoint: vi.fn(async () => {}), release: vi.fn() };
+    const { runtime, session, directory } = await setup({ memory });
+    await prompt(runtime, session, directory, 'retained-agent-content');
+    expect(memory.checkpoint).toHaveBeenCalledTimes(1);
+    expect(memory.checkpoint.mock.calls[0][0]).toMatchObject({ summary: 'Report received.\n', status: 'completed' });
+  });
+
+  it('keeps managed AGY memory off in enterprise mode while ordinary standalone chat remains available', async () => {
+    const memory = { enabled: async () => true, context: vi.fn(async () => ({ text: 'private handoff' })),
+      checkpoint: vi.fn(async () => {}), release: vi.fn() };
+    const { runtime, session, directory } = await setup({ memory });
+    const previous = process.env.OPENCHAMBER_ENTERPRISE_MODE;
+    process.env.OPENCHAMBER_ENTERPRISE_MODE = '1';
+    try {
+      await prompt(runtime, session, directory, 'ordinary standalone chat');
+      expect(memory.context).not.toHaveBeenCalled();
+      expect(memory.checkpoint).not.toHaveBeenCalled();
+      expect(memory.release).toHaveBeenCalledWith(session.id);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCHAMBER_ENTERPRISE_MODE;
+      else process.env.OPENCHAMBER_ENTERPRISE_MODE = previous;
+    }
+  });
+
+  it('keeps replies readable when shared memory is unavailable and checkpoints stops as interrupted', async () => {
+    const memory = { enabled: async () => true, context: vi.fn(async () => { throw new Error('memory read failed'); }),
+      checkpoint: vi.fn(async () => { throw new Error('memory write failed'); }), release: vi.fn() };
+    const { runtime, session, directory } = await setup({ memory });
+    await prompt(runtime, session, directory, 'plain reply');
+    expect(memory.release).toHaveBeenCalledWith(session.id);
+    expect((await runtime.loadMessages(session.id, directory, { limit: 20 })).records.at(-1).parts[0].text).toBe('Reply to plain reply\n');
+    await runtime.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'stop-me' }] });
+    await runtime.abort(session.id, directory);
+    expect(memory.checkpoint.mock.calls.at(-1)[0].status).toBe('interrupted');
+  });
+
   it('registers the checklist independently, publishes changes and restores them over HTTP after shutdown', async () => {
     const { runtime, session, directory, events } = await setup({ checklist: true });
     expect((await runtime.capabilities()).backends.antigravity.tasks.checklist).toBe(true);

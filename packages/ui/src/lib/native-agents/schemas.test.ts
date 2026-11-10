@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 
 import { nativeCapabilitiesSchema, nativeCatalogSchema, nativeMessageSchema, nativeSessionListSchema } from './schemas';
+import { nativeMemoryStatusSchema } from './memory-schemas';
+
+test('accepts AGY managed handoffs while terminal enrollment stays Claude and Codex only', () => {
+  const progress = { backend: 'antigravity', sessionId: 'source', projectId: 'project', summary: 'Completed', status: 'completed', observedAt: 1, revision: 1 };
+  expect(nativeMemoryStatusSchema.parse({ enabled: true, canManage: true, backends: [], progress: [progress], sources: [] }).progress[0]).toEqual(progress);
+  expect(nativeMemoryStatusSchema.safeParse({ enabled: true, canManage: true, backends: [{ status: 'ok', backend: 'antigravity', installed: true,
+    ready: true, reviewRequired: false, lastSeen: 1 }], progress: [], sources: [] }).success).toBe(false);
+});
 
 test('native assistant metadata preserves measured, unknown and older-server telemetry', () => {
   const info = { id: 'reply', sessionID: 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00', role: 'assistant',

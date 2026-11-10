@@ -70,6 +70,7 @@ export const createAntigravityBackend = ({
   readGlobalInstructions,
   decorateSession,
   onInteraction = async () => undefined,
+  onTurnFinished = () => {},
   now = Date.now,
   home = null,
   startupTimeoutMs = 30_000,
@@ -249,6 +250,14 @@ export const createAntigravityBackend = ({
         const tasks = await store.taskSnapshot(session.id, session.nativeId, session.directory);
         if (tasks) publisher.tasks(session.directory, session.id, tasks);
       } catch { /* Optional recovery must not discard the live result; history reads report failures. */ }
+      const reply = turn.projection.finalReply();
+      try {
+        await onTurnFinished(session.id, session.directory, {
+          id: reply?.info.id,
+          summary: reply?.parts.findLast((part) => part.type === 'text' && !part.synthetic && !part.metadata?.nativeSubagentMessage)?.text ?? '',
+          status: outcome === 'success' ? 'completed' : 'interrupted',
+        });
+      } catch (failure) { eventFailure(failure); }
       session.turn = null;
       session.abortRequested = false;
       subagents.release(session.id, turn.process);

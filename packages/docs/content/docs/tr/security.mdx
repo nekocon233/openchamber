@@ -165,6 +165,7 @@ environment:
 
 ### Neler değişir
 
+- OpenChamber-managed Antigravity memory sharing is off. Its CLI provider is configured outside OpenCode; standalone chat keeps its existing behavior.
 - DeepSeek Harness oturumları, tek tıkla kurulum ve sağlayıcı yapılandırması kullanılamaz. Modelleri dsh içinde ayrı yapılandırılır ve OpenCode sağlayıcı politikasının kapsamı dışındadır.
 - Birleşik yerel konuşmalar kurumsal modda oluşturulamaz veya sürdürülemez; bağlam sıkıştırma ve bir turu sürdüren soru yanıtları da buna dahildir. Devirler, OpenCode dışında yapılandırılmış CLI sağlayıcılarına ulaşabilir. Kaydedilmiş konuşmalar listede kalır; kaynakları okuma ve temizleme her CLI'ın mevcut politikasına uyar.
 - Yerel aracı birleşimlerini değiştirmek ve CLI’lar arasında alt aracı çağırmak kullanılamaz; çalışan bir CLI’dan gelen çağrılar da engellenir. Seçilen modeller OpenCode dışında yapılandırılan sağlayıcılara ulaşabilir. Kaydedilmiş birleşimler bu kısıtlamayı aşamaz.
