@@ -1426,7 +1426,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'Titel ist erforderlich',
   'gitView.pullRequest.createHint': 'Erstellen und verwalten Sie Pull-Requests aus diesem Branch.',
   "gitView.pullRequest.tab.project": "Projekt-PRs",
-  "gitView.pullRequest.tab.branch": "Aktueller Branch",
   "gitView.pullRequest.backToList": "Zurück zur Liste",
   "gitView.pullRequest.searchLimit": "Die Suche zeigt bis zu {count} Ergebnisse. Grenzen Sie die Suche ein, um genauere Treffer zu sehen.",
   "gitView.pullRequest.serverRestartRequired": "Starten Sie OpenChamber neu, um das Serverupdate für Projekt-PRs zu laden, und versuchen Sie es erneut.",

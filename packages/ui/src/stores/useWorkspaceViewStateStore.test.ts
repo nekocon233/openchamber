@@ -20,7 +20,7 @@ afterAll(() => {
 
 test('each project and runtime retains its own columns without notifying an unchanged selection', () => {
   const a = owner('host-a', '/a'); const b = owner('host-a', '/b');
-  views.getState().update('pullRequest', a, previous => ({ ...previous, tab: 'branch', people: 'created' }));
+  views.getState().update('pullRequest', a, previous => ({ ...previous, tab: 'ci', people: 'created' }));
   const selection = read(views.getState(), 'pullRequest', a);
   views.getState().update('pullRequest', b, previous => ({ ...previous, people: 'any' }));
   expect(read(views.getState(), 'pullRequest', a)).toBe(selection);
@@ -35,7 +35,7 @@ test('columns, opened entries and unfinished text round trip through page hide a
   drafts.getState().write(a, 'Unfinished reply', '');
   dom.dispatchEvent(new dom.Event('pagehide'));
   await views.persist.rehydrate(); await drafts.persist.rehydrate();
-  expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ tab: 'branch', people: 'created' });
+  expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ tab: 'ci', people: 'created' });
   expect(read(views.getState(), 'ci', a)).toEqual({ filter: 'failure', query: 'lint', selectedRunId: '9001', loadedCount: 30 });
   expect(read(views.getState(), 'knowledge', a)).toMatchObject({ tab: 'plans', query: 'design', entry: { section: 'plans', id: 'p1' } });
   expect(drafts.getState().drafts[a]?.value).toBe('Unfinished reply');
@@ -51,6 +51,30 @@ test('a malformed window does not erase valid projects or valid fields', async (
   await views.persist.rehydrate();
   expect(read(views.getState(), 'knowledge', a)).toMatchObject({ tab: 'todos', query: '', entry: { section: 'todos', id: '1' } });
   expect(Object.keys(views.getState().snapshots.knowledge)).toEqual([a]);
+});
+
+test('retired branch tabs and Changes returns restore the project PR view without losing reading state', async () => {
+  flushDeferredSafeStorage();
+  const a = owner('host-a', '/retired-branch');
+  const b = owner('host-a', '/ci-project');
+  const source = { kind: 'pr', number: 42, sourceRepo: { owner: 'acme', repo: 'app' } };
+  const returnTo = {
+    workspaceDirectory: '/retired-branch', sourceDirectory: '/retired-branch', tab: 'branch',
+    url: 'https://github.com/acme/app/pull/42', repositoryIdentity: 'bound-repository', source, navigation: null,
+  };
+  dom.localStorage.setItem('openchamber.workspace-views.v1', JSON.stringify({ state: { snapshots: {
+    pullRequest: {
+      [a]: { tab: 'branch', people: 'created', query: 'retained query', selectedUrl: returnTo.url },
+      [b]: { tab: 'ci', people: 'any' },
+    },
+    ci: { [a]: { filter: 'branch', query: 'build' } },
+    changes: { [a]: { pullRequest: source, pullRequestIdentity: returnTo.repositoryIdentity, returnTo } },
+  } }, version: 0 }));
+  await views.persist.rehydrate();
+  expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ tab: 'project', people: 'created', query: 'retained query', selectedUrl: returnTo.url });
+  expect(read(views.getState(), 'pullRequest', b)).toMatchObject({ tab: 'ci', people: 'any' });
+  expect(read(views.getState(), 'ci', a)).toMatchObject({ filter: 'branch', query: 'build' });
+  expect(read(views.getState(), 'changes', a)).toMatchObject({ pullRequest: source, returnTo: { ...returnTo, tab: 'project' } });
 });
 
 test('a save acknowledgement keeps newer typing and other drafts', () => {

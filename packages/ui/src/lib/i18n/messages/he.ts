@@ -1297,7 +1297,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'חובה להזין כותרת',
   'gitView.pullRequest.createHint': 'יצירה וניהול של בקשות משיכה מהענף הזה.',
   "gitView.pullRequest.tab.project": "בקשות משיכה בפרויקט",
-  "gitView.pullRequest.tab.branch": "הענף הנוכחי",
   "gitView.pullRequest.backToList": "חזרה לרשימה",
   "gitView.pullRequest.searchLimit": "החיפוש מציג עד {count} תוצאות. יש לצמצם את החיפוש לקבלת התאמות מדויקות יותר.",
   "gitView.pullRequest.serverRestartRequired": "יש להפעיל מחדש את OpenChamber כדי לטעון את עדכון השרת לבקשות המשיכה של הפרויקט, ואז לנסות שוב.",

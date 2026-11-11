@@ -851,12 +851,13 @@ the pending map, and retained previews belong to their original runtime.
 
 `usePullRequestSelectionStore.ts` keeps optional return targets for PR-to-Changes
 navigation, keyed by runtime and diff directory. A target includes the exact PR,
-bound read context, originating workspace directory and project/branch tab.
+bound read context and originating workspace directory.
 Returning queues a request under that workspace and consumes the diff target.
 The PR view consumes the request after restoring its selection. These two maps
 are in memory only and each holds at most 100 entries. Repeated navigation
 replaces the old target; stale objects cannot consume a newer request.
-The destination is a project tab, branch tab or linked preview. A linked target
+The destination is a project tab or linked preview. Saved branch-tab destinations
+restore the project tab with the same PR identity. A linked target
 keeps its original open request, and may carry the session owner's return action
 when Changes navigates to a different Git directory. A new explicit PR open
 retires a pending return for that workspace; a return retires a pending open.

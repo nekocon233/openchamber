@@ -47,7 +47,6 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
       return;
     }
     setTab(returning.tab);
-    if (returning.tab === 'branch') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [context, returning, setTab]);
   React.useEffect(() => {
     if (!ciPending) return;
@@ -60,10 +59,9 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
           items={[
             { id: 'project', label: t('gitView.pullRequest.tab.project') },
             { id: 'ci', label: t('gitView.pullRequest.tab.ci') },
-            { id: 'branch', label: t('gitView.pullRequest.tab.branch') },
           ]}
           activeId={tab}
-          onSelect={(id) => setTab(id === 'branch' ? 'branch' : id === 'ci' ? 'ci' : 'project')}
+          onSelect={(id) => setTab(id === 'ci' ? 'ci' : 'project')}
           variant="active-pill"
           layoutMode="fit"
         />
@@ -73,9 +71,6 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
       </React.Activity>
       <React.Activity mode={tab === 'ci' ? 'visible' : 'hidden'}>
         <ProjectCiList directory={directory} workspaceDirectory={workspaceDirectory} active={tab === 'ci'} />
-      </React.Activity>
-      <React.Activity mode={tab === 'branch' ? 'visible' : 'hidden'}>
-        <CurrentBranchPullRequestView directory={workspaceDirectory} />
       </React.Activity>
     </div>
   );

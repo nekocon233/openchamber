@@ -1530,7 +1530,6 @@ export const dict: Record<I18nKey, string> = {
   "gitView.pr.toast.titleRequired": "Необхідно вказати назву",
   "gitView.pullRequest.createHint": "Створюйте PR з цієї гілки та керуйте ними.",
   "gitView.pullRequest.tab.project": "PR проєкту",
-  "gitView.pullRequest.tab.branch": "Поточна гілка",
   "gitView.pullRequest.backToList": "Назад до списку",
   "gitView.pullRequest.searchLimit": "Пошук показує щонайбільше {count} результатів. Звузьте пошук, щоб отримати точніші збіги.",
   "gitView.pullRequest.serverRestartRequired": "Перезапустіть OpenChamber, щоб завантажити оновлення сервера для PR проєкту, і повторіть спробу.",

@@ -23,7 +23,7 @@ const pullSourceSchema = z.object({
 });
 const schemas = {
   pullRequest: z.object({
-    tab: z.enum(['project', 'ci', 'branch']).catch('project'),
+    tab: z.enum(['project', 'ci']).catch('project'),
     people: z.enum(['reviewRequested', 'created', 'any']).catch('reviewRequested'),
     query: text,
     selectedUrl: nullableText,
@@ -48,7 +48,7 @@ const schemas = {
     collapsedDirectories: paths,
     returnTo: z.object({
       workspaceDirectory: z.string().min(1), sourceDirectory: z.string().min(1),
-      tab: z.enum(['project', 'branch', 'linked']), url: z.string().url(),
+      tab: z.preprocess(value => value === 'branch' ? 'project' : value, z.enum(['project', 'linked'])), url: z.string().url(),
       repositoryIdentity: z.string(), source: pullSourceSchema,
       navigation: navigationReturnSchema.nullable(),
     }).nullable().catch(null),

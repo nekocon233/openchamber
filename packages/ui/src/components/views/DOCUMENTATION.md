@@ -27,8 +27,9 @@ or discarded.
 
 ## Project pull requests and CI runs
 
-On GitHub projects, `PullRequestView` remembers Project PRs, CI runs, or Current branch
-per project, defaulting to Project PRs. Current branch is the third tab for the existing branch preview and creation flow, and shows a clickable latest-CI strip above the form or default-branch notice whenever the branch has no open PR. Project PRs
+On GitHub projects, `PullRequestView` remembers Project PRs or CI runs
+per project, defaulting to Project PRs. Saved Current branch selections restore
+Project PRs. Project PRs
 uses the bound primary repository alone, across all branches, and only lists
 open PRs ordered by latest update. Its category tabs are Awaiting my review,
 Created by me, and All, using the bound GitHub account. The project's saved category is selected, with Awaiting my review as the default;
@@ -48,7 +49,7 @@ and number, accepts closed and merged PRs, and shares `PullRequestDetail` with
 the ordinary project list. URL suffixes and anchors do not create another
 preview of the same PR.
 
-The linked preview keeps the normal project and branch views hidden in Activity.
+The linked preview keeps the project PR and CI views hidden in Activity.
 Back restores their selection, filters, scroll and reply draft. Hiding, moving,
 closing and reopening the pane also retains the linked preview; its effects
 disconnect while hidden. A binding or account change replaces only the affected
@@ -127,7 +128,7 @@ inline. Return tooltips and accessible labels retain the full PR identity.
 Linked previews register that same origin, with their original open request as
 the `linked` destination. Back to PR returns to the exact retained linked view,
 including its scroll and unsent reply. A newer explicit open replaces a queued
-return, and a normal project or branch return clears any link preview that was
+return, and a normal project return clears any link preview that was
 opened over Changes. Normal tabs never consume a linked-preview return.
 When a linked PR comes from another Git directory, Changes uses that exact
 source binding. Its return action restores the original conversation or draft

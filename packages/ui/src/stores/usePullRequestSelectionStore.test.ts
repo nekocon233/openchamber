@@ -111,7 +111,7 @@ describe('pull request diff requests', () => {
     store.requestDiff(context.directory, source, { workspaceDirectory: '/workspace', tab: 'project', context, reference });
     const old = usePullRequestSelectionStore.getState().diffReturnTargets.get(key);
     if (!old) throw new Error('Return target missing');
-    store.requestDiff(context.directory, { ...source, number: 13 }, { workspaceDirectory: '/workspace', tab: 'branch', context, reference: { ...reference, number: 13 } });
+    store.requestDiff(context.directory, { ...source, number: 13 }, { workspaceDirectory: '/workspace', tab: 'project', context, reference: { ...reference, number: 13 } });
     expect(store.requestReturn(old)).toBe(false);
     expect(usePullRequestSelectionStore.getState().diffReturnTargets.get(key)?.reference.number).toBe(13);
     store.requestDiff(context.directory, source);

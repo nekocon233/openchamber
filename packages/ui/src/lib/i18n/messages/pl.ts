@@ -3757,7 +3757,6 @@ export const dict: Record<I18nKey, string> = {
   'gitView.sync.syncCounts': '{ahead} do wypchnięcia, {behind} do pobrania',
   'gitView.pr.checks.label': 'Sprawdzenia',
   "gitView.pullRequest.tab.project": "PR-y projektu",
-  "gitView.pullRequest.tab.branch": "Bieżąca gałąź",
   "gitView.pullRequest.backToList": "Powrót do listy",
   "gitView.pullRequest.searchLimit": "Wyszukiwanie pokazuje maksymalnie {count} wyników. Zawęź wyszukiwanie, aby uzyskać dokładniejsze wyniki.",
   "gitView.pullRequest.serverRestartRequired": "Uruchom ponownie OpenChamber, aby załadować aktualizację serwera obsługującą PR-y projektu, i spróbuj ponownie.",

@@ -1297,7 +1297,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'العنوان مطلوب',
   'gitView.pullRequest.createHint': 'أنشئ طلبات السحب وأدِرها من هذا الفرع.',
   "gitView.pullRequest.tab.project": "طلبات سحب المشروع",
-  "gitView.pullRequest.tab.branch": "الفرع الحالي",
   "gitView.pullRequest.backToList": "العودة إلى القائمة",
   "gitView.pullRequest.searchLimit": "يعرض البحث ما يصل إلى {count} نتيجة. ضيّق نطاق البحث للحصول على نتائج أكثر تحديدًا.",
   "gitView.pullRequest.serverRestartRequired": "أعد تشغيل OpenChamber لتحميل تحديث الخادم الخاص بطلبات سحب المشروع، ثم أعد المحاولة.",

@@ -1420,7 +1420,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'Başlık gerekli',
   'gitView.pullRequest.createHint': 'Bu branch\'ten pull request oluştur ve yönet.',
   "gitView.pullRequest.tab.project": "Proje PR’ları",
-  "gitView.pullRequest.tab.branch": "Geçerli dal",
   "gitView.pullRequest.backToList": "Listeye dön",
   "gitView.pullRequest.searchLimit": "Arama en fazla {count} sonuç gösterir. Daha belirli sonuçlar için aramanızı daraltın.",
   "gitView.pullRequest.serverRestartRequired": "Proje PR’ları için sunucu güncellemesini yüklemek üzere OpenChamber’ı yeniden başlatıp tekrar deneyin.",

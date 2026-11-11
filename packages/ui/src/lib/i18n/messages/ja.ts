@@ -1532,7 +1532,6 @@ export const dict: Record<I18nKey, string> = {
   'gitView.pr.toast.titleRequired': 'タイトルが必要です',
   'gitView.pullRequest.createHint': 'このブランチからプルリクエストを作成・管理します。',
   "gitView.pullRequest.tab.project": "プロジェクトの PR",
-  "gitView.pullRequest.tab.branch": "現在のブランチ",
   "gitView.pullRequest.backToList": "一覧に戻る",
   "gitView.pullRequest.searchLimit": "検索結果は最大 {count} 件です。検索条件を絞り込むと、より具体的な結果を確認できます。",
   "gitView.pullRequest.serverRestartRequired": "プロジェクトの PR に対応するサーバー更新を読み込むため、OpenChamber を再起動してから再試行してください。",
