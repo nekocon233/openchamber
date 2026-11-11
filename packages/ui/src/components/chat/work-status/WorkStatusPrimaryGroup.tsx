@@ -28,6 +28,9 @@ import {
 import { useReportWorkStatusPresence } from './presenceContext';
 import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 import { WorkStatusPrPrewarm } from './useWorkStatusPrPrewarm';
+import { PrChecksValue } from './PrChecksValue';
+import { ciRunLookOf, useBranchLatestCiRun } from '@/components/views/git/ciRunsStore';
+import { CiRunStatusGlyph } from '@/components/views/git/CiRunDetail';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
 import { formatChangeRequestReference } from '@/lib/source-control/identity';
 import { ProjectActionsButton } from '@/components/layout/ProjectActionsButton';
@@ -169,6 +172,11 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   // here would multiply GitHub requests per open session, which is exactly the
   // fan-out the PR-status concurrency gate exists to prevent.
   const prSummary = useFreshestSourceControlVisualSummaryForBranch(gitDirectory, branch);
+  const branchCi = useBranchLatestCiRun(
+    gitDirectory,
+    branch,
+    Boolean(showRepository && gitDirectory && branch && !prSummary),
+  );
 
   const sessionMessages = useSessionMessages(sessionId ?? '', directory ?? undefined);
   const { context: contextLimit } = useContextWindowLimits(sessionId, directory ?? undefined);
@@ -240,7 +248,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   // restate the number directly above it.
   const showCostBreakdown = cost !== null && subagentCount > 0 && subagentCost > 0;
   const hasSession = showSession && (contextUsage !== null || cost !== null || Boolean(goalRow));
-  const hasRepository = showRepository && Boolean(branch || changed || prSummary || attentionLabel || showProjectActions);
+  const hasRepository = showRepository && Boolean(branch || changed || prSummary || branchCi.run || attentionLabel || showProjectActions);
 
   useReportWorkStatusPresence('session-repository', hasSession || hasRepository);
 
@@ -398,7 +406,30 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
                 />
               ) : null}
             </>
-          ) : null}
+          ) : branchCi.run ? (() => {
+            const ciRun = branchCi.run;
+            const ciLook = ciRunLookOf(ciRun.status, ciRun.conclusion);
+            const valueTone = ciLook.kind === 'failed'
+              ? 'error'
+              : ciLook.kind === 'running' || ciLook.kind === 'queued'
+                ? 'warning'
+                : ciLook.kind === 'passed'
+                  ? 'success'
+                  : 'muted';
+            return (
+              <WorkStatusRow
+                leading={<CiRunStatusGlyph status={ciRun.status} conclusion={ciRun.conclusion} />}
+                onClick={directory ? () => nav.openCiRun(ciRun.id, gitDirectory ?? undefined) : undefined}
+                ariaLabel={t('chat.workStatus.action.openCi')}
+                label={`${ciRun.workflowName} #${ciRun.runNumber}`}
+                value={ciRun.jobSummary && ciRun.jobSummary.total > 0 ? (
+                  <PrChecksValue checks={ciRun.jobSummary} />
+                ) : (
+                  <WorkStatusValue tone={valueTone}>{t(ciLook.labelKey)}</WorkStatusValue>
+                )}
+              />
+            );
+          })() : null}
 
           {/* Last: the readouts above describe the project, this runs something in it. */}
           {showProjectActions ? <ProjectActionsButton /> : null}

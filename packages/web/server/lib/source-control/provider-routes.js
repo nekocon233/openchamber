@@ -449,6 +449,7 @@ export function registerProviderRoutes(app, {
           if (!trustedContext) return res.status(501).json({ error: 'Bound source control status is unavailable' });
           return await read({ req, res, impl, instance, directory, trustedContext });
         } catch (error) {
+          if (error?.code === 'SOURCE_CONTROL_CAPABILITY_UNSUPPORTED') return unsupportedCapability(res);
           if (isReadContextError(error)) return res.status(error.status ?? 400).json(sourceControlErrorBody(error));
           if (!impl) return res.status(error.status ?? 500).json(sourceControlErrorBody(error));
           return sendProviderResponse(res, error) ?? sendResourceError(res, impl, error);
@@ -1101,6 +1102,51 @@ export function registerProviderRoutes(app, {
       });
     }, {
       validate: (req) => (!namesProject(req) ? 'owner and repo are required' : null),
+    });
+
+    boundRead('ci', '/ci/runs', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const read = requireResource(impl, 'listCiRuns');
+      const session = await sessionFor(impl, instance, trustedContext.accountId);
+      const rawStatus = requestText(req.query?.status);
+      const status = ['all', 'active', 'failure', 'success'].includes(rawStatus) ? rawStatus : 'all';
+      return res.json(await read({
+        session,
+        directory,
+        page: requestNumber(req.query?.page) ?? 1,
+        status,
+        branch: requestText(req.query?.branch) || undefined,
+        query: requestText(req.query?.query) || undefined,
+        context: trustedContext,
+        remote: trustedContext.primaryRemote,
+      }));
+    });
+
+    boundRead('ci', '/ci/run', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const read = requireResource(impl, 'ciRunDetail');
+      const session = await sessionFor(impl, instance, trustedContext.accountId);
+      return res.json(await read({
+        session,
+        directory,
+        runId: requestIssueNumber(req.query?.runId),
+        context: trustedContext,
+        remote: trustedContext.primaryRemote,
+      }));
+    }, {
+      validate: (req) => (!requestIssueNumber(req.query?.runId) ? 'valid runId is required' : null),
+    });
+
+    boundRead('ci', '/ci/job-log', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const read = requireResource(impl, 'ciJobLog');
+      const session = await sessionFor(impl, instance, trustedContext.accountId);
+      return res.json(await read({
+        session,
+        directory,
+        jobId: requestIssueNumber(req.query?.jobId),
+        context: trustedContext,
+        remote: trustedContext.primaryRemote,
+      }));
+    }, {
+      validate: (req) => (!requestIssueNumber(req.query?.jobId) ? 'valid jobId is required' : null),
     });
 
     // The ambient account route is retired: account presentation comes from

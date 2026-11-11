@@ -282,6 +282,9 @@ export function createProvider({
       referenceStatuses: resources.referenceStatuses,
       readChangeRequestHead: resources.readChangeRequestHead,
       resolveChangeRequestSource: resources.resolveChangeRequestSource,
+      listCiRuns: resources.listCiRuns,
+      ciRunDetail: resources.ciRunDetail,
+      ciJobLog: resources.ciJobLog,
 
       /**
        * Live state of known pull requests, issues and discussions for tracked

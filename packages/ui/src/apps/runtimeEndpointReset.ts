@@ -22,6 +22,7 @@ import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionSt
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { repositoryBindingOwner } from '@/lib/source-control/repository-binding';
 import { useChangeRequestContextStore } from '@/stores/useChangeRequestContextStore';
+import { useCiRunsStore } from '@/components/views/git/ciRunsStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
@@ -113,6 +114,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   useSourceControlAuthStore.getState().resetForRuntimeSwitch();
   repositoryBindingOwner.reset();
   useChangeRequestContextStore.getState().resetForRuntimeSwitch();
+  useCiRunsStore.getState().resetForRuntimeSwitch();
   useGitHubPrStatusStore.getState().resetForRuntimeSwitch();
   usePullRequestSelectionStore.getState().resetOpenRequests();
   useWalkthroughStore.getState().reset();

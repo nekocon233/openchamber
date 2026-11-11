@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './nl.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -54,6 +55,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "Takenlijst bijwerken",
   "chat.toolPart.checklist.empty": "Takenlijst gewist.",
+  ...ciRunsI18n['nl'],
   ...diffFileFilterI18n['nl'],
   "agents.combinations.loadFailed": "Combinaties konden niet worden geladen. Open de instellingen opnieuw en probeer het nogmaals.",
   "agents.combinations.saveFailed": "Combinaties konden niet worden opgeslagen. Probeer het opnieuw.",

@@ -66,6 +66,8 @@ const CACHED_READS = new Map([
   ['/issues/comments', 15 * SECOND],
   ['/pulls/list', 30 * SECOND],
   ['/pulls/context', 15 * SECOND],
+  ['/ci/runs', 15 * SECOND],
+  ['/ci/run', 10 * SECOND],
   ['/items/list', 30 * SECOND],
   ['/items/get', 15 * SECOND],
 ]);
@@ -75,7 +77,7 @@ const CACHED_READS = new Map([
 const POST_READS = new Set(['/references/across']);
 
 // Reads that list items, rather than read one: a list refresh forgets these.
-const LIST_READS = new Set(['/references', '/references/status', '/issues/list', '/pulls/list', '/items/list']);
+const LIST_READS = new Set(['/references', '/references/status', '/issues/list', '/pulls/list', '/ci/runs', '/ci/run', '/items/list']);
 
 // A tracker's reads of one item (the tracker routes and the legacy Linear ones).
 const TRACKER_ITEM_READS = new Set(['/items/get', '/issues/get']);

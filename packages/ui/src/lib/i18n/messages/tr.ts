@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './tr.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -55,6 +56,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "Görev listesini güncelle",
   "chat.toolPart.checklist.empty": "Görev listesi temizlendi.",
+  ...ciRunsI18n['tr'],
   ...diffFileFilterI18n['tr'],
   "agents.combinations.loadFailed": "Kombinasyonlar yüklenemedi. Ayarları yeniden açıp tekrar deneyin.",
   "agents.combinations.saveFailed": "Kombinasyonlar kaydedilemedi. Tekrar deneyin.",

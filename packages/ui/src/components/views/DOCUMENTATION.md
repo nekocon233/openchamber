@@ -25,15 +25,16 @@ rows while retaining complete group and directory paths for bulk actions;
 passing a filtered status to its action handlers would change what gets staged
 or discarded.
 
-## Project pull requests
+## Project pull requests and CI runs
 
-On GitHub projects, `PullRequestView` remembers Project PRs or Current branch
-per project, defaulting to Project PRs. Current branch is the second tab for the existing branch preview and creation flow. Project PRs
+On GitHub projects, `PullRequestView` remembers Project PRs, CI runs, or Current branch
+per project, defaulting to Project PRs. Current branch is the third tab for the existing branch preview and creation flow, and shows a clickable latest-CI strip above the form or default-branch notice whenever the branch has no open PR. Project PRs
 uses the bound primary repository alone, across all branches, and only lists
 open PRs ordered by latest update. Its category tabs are Awaiting my review,
 Created by me, and All, using the bound GitHub account. The project's saved category is selected, with Awaiting my review as the default;
-the existing search applies within that category. It needs no checkout branch or comparison base. GitLab keeps
-its existing branch view; VS Code reports repository browsing as unsupported.
+the existing search applies within that category. It needs no checkout branch or comparison base.
+`ProjectCiList` on the CI runs tab queries workflow runs of that same bound primary repository across `All runs`, `Running`, `Failed`, and `Current branch`, with text/qualifier/URL search, 20-second polling while visible runs are active, and persisted filter, query, loaded depth, scroll position, and selected run ID in `useWorkspaceViewStateStore`. Selecting a run opens `CiRunDetail` in place with `Back to list`, 15-second active polling, live step counts, failure annotations, on-demand bounded job log inspection, linked PR handoff, and failed-job attachment into `useInlineCommentDraftStore`. `useCiRunsStore` keys list, detail, and log entries by runtime and exact repository binding, retains loaded data across failed refreshes, pins mounted subscribers against idle eviction, and clears on runtime switch. GitLab keeps
+its existing branch view; VS Code reports repository browsing and CI reads as unsupported.
 Hosted and native mobile expose this view through the workspace PR tab. The
 existing comparison picker remains in Changes.
 

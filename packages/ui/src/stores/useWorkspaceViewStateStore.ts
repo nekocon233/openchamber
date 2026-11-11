@@ -23,13 +23,19 @@ const pullSourceSchema = z.object({
 });
 const schemas = {
   pullRequest: z.object({
-    tab: z.enum(['project', 'branch']).catch('project'),
+    tab: z.enum(['project', 'ci', 'branch']).catch('project'),
     people: z.enum(['reviewRequested', 'created', 'any']).catch('reviewRequested'),
     query: text,
     selectedUrl: nullableText,
     loadedCount: z.number().int().nonnegative().catch(0),
     checksOpen: z.boolean().catch(false),
     link: z.object({ sourceDirectory: z.string().min(1), url: z.string().url() }).nullable().catch(null),
+  }),
+  ci: z.object({
+    filter: z.enum(['all', 'active', 'failure', 'branch']).catch('all'),
+    query: text,
+    selectedRunId: nullableText,
+    loadedCount: z.number().int().nonnegative().catch(0),
   }),
   changes: z.object({
     initialized: z.boolean().catch(false),
@@ -98,7 +104,7 @@ type Snapshots = { [K in WorkspaceViewKind]: Record<string, WorkspaceViewStates[
 
 // Defaults are shared so an absent owner never allocates during selection.
 export const WORKSPACE_VIEW_DEFAULTS: WorkspaceViewStates = {
-  pullRequest: schemas.pullRequest.parse({}), changes: schemas.changes.parse({}),
+  pullRequest: schemas.pullRequest.parse({}), ci: schemas.ci.parse({}), changes: schemas.changes.parse({}),
   knowledge: schemas.knowledge.parse({}), comment: schemas.comment.parse({}),
   thread: schemas.thread.parse({}),
   diffFile: schemas.diffFile.parse({}),
@@ -120,7 +126,7 @@ export const workspaceRepositoryIdentity = (context: SourceControlReadContext): 
   context.provider, context.instance, context.accountId, context.repositoryId, context.primaryRemote, context.bindingRevision,
 ]);
 
-const emptySnapshots = (): Snapshots => ({ pullRequest: {}, changes: {}, knowledge: {}, comment: {}, thread: {}, diffFile: {}, pullRequestForm: {}, scroll: {} });
+const emptySnapshots = (): Snapshots => ({ pullRequest: {}, ci: {}, changes: {}, knowledge: {}, comment: {}, thread: {}, diffFile: {}, pullRequestForm: {}, scroll: {} });
 
 const parseSnapshots = (value: unknown): Snapshots => {
   const result = emptySnapshots();

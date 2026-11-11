@@ -19,6 +19,13 @@ export interface PullRequestOpenRequest {
   failureBehavior: BoardLinkFailureBehavior;
 }
 
+interface CiRunOpenRequest {
+  runtimeKey: string;
+  workspaceDirectory: string;
+  sourceDirectory: string;
+  runId: string;
+}
+
 export type PullRequestReturnLocation = {
   workspaceDirectory: string;
 } & ({ tab: 'project' | 'branch' } | { tab: 'linked'; request: PullRequestOpenRequest });
@@ -55,8 +62,11 @@ interface PullRequestSelection {
 
 interface PullRequestSelectionState {
   openRequests: Map<string, PullRequestOpenRequest>;
+  ciOpenRequests: Map<string, CiRunOpenRequest>;
   requestOpen: (request: Omit<PullRequestOpenRequest, 'runtimeKey'>) => boolean;
   settleOpenRequest: (request: PullRequestOpenRequest) => void;
+  requestCiRun: (workspaceDirectory: string, sourceDirectory: string, runId: string) => boolean;
+  settleCiRunRequest: (request: CiRunOpenRequest) => void;
   resetOpenRequests: () => void;
   selections: Map<string, PullRequestSelection>;
   /** A pull request another surface asked Changes to show, per directory. */
@@ -90,6 +100,7 @@ const remember = (state: PullRequestSelectionState, key: string, selection: Pull
 // Keys are runtime/directory/branch tuples supplied by usePullRequestComparison.
 export const usePullRequestSelectionStore = create<PullRequestSelectionState>((set, get) => ({
   openRequests: new Map(),
+  ciOpenRequests: new Map(),
   requestOpen: (request) => {
     const workspaceDirectory = normalizePath(request.workspaceDirectory);
     const sourceDirectory = normalizePath(request.sourceDirectory);
@@ -100,7 +111,9 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     set(state => {
       const returnRequests = new Map(state.returnRequests);
       returnRequests.delete(key);
-      return { returnRequests, openRequests: rememberRequest(state.openRequests,
+      const ciOpenRequests = new Map(state.ciOpenRequests);
+      ciOpenRequests.delete(key);
+      return { returnRequests, ciOpenRequests, openRequests: rememberRequest(state.openRequests,
         key, { ...request, runtimeKey, workspaceDirectory, sourceDirectory }) };
     });
     return true;
@@ -112,7 +125,39 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     openRequests.delete(key);
     return { openRequests };
   }),
-  resetOpenRequests: () => set({ openRequests: new Map() }),
+  requestCiRun: (rawWorkspaceDirectory, rawSourceDirectory, rawRunId) => {
+    const workspaceDirectory = normalizePath(rawWorkspaceDirectory);
+    const sourceDirectory = normalizePath(rawSourceDirectory);
+    const runId = rawRunId.trim();
+    if (!workspaceDirectory || !sourceDirectory || !/^[1-9]\d*$/.test(runId)) return false;
+    const runtimeKey = getRuntimeKey();
+    const key = pullRequestNavigationKey(runtimeKey, workspaceDirectory);
+    set((state) => {
+      const openRequests = new Map(state.openRequests);
+      openRequests.delete(key);
+      const returnRequests = new Map(state.returnRequests);
+      returnRequests.delete(key);
+      return {
+        openRequests,
+        returnRequests,
+        ciOpenRequests: rememberRequest(state.ciOpenRequests, key, {
+          runtimeKey,
+          workspaceDirectory,
+          sourceDirectory,
+          runId,
+        }),
+      };
+    });
+    return true;
+  },
+  settleCiRunRequest: (request) => set((state) => {
+    const key = pullRequestNavigationKey(request.runtimeKey, request.workspaceDirectory);
+    if (state.ciOpenRequests.get(key) !== request) return state;
+    const ciOpenRequests = new Map(state.ciOpenRequests);
+    ciOpenRequests.delete(key);
+    return { ciOpenRequests };
+  }),
+  resetOpenRequests: () => set({ openRequests: new Map(), ciOpenRequests: new Map() }),
   selections: new Map(),
   diffRequests: new Map(),
   changesRepositories: new Map(),

@@ -35,6 +35,10 @@ import type {
   ChangeRequestSubmitRequirement,
   ChangeRequestVoteLabel,
   CISummary,
+  CiJobLogResult,
+  CiRunStatusFilter,
+  CiWorkflowRunDetail,
+  CiWorkflowRunPage,
   Label,
   ChangeRequestStatus,
   CreateChangeRequestInput,
@@ -2248,6 +2252,15 @@ export interface SourceControlAPI {
    * colour (`features.listStatuses`). Throws on failure.
    */
   changeRequestListStatuses(context: SourceControlReadContext, refs: RepositoryItemRef[]): Promise<ChangeRequestListStatusesResult>;
+  /** Paginated workflow runs of the bound primary repository (`ci`). */
+  ciRunsList(
+    context: SourceControlReadContext,
+    options?: { page?: number; status?: CiRunStatusFilter; branch?: string; query?: string },
+  ): Promise<CiWorkflowRunPage>;
+  /** Full detail of one workflow run, its jobs, steps and failure annotations (`ci`). */
+  ciRunDetail(context: SourceControlReadContext, runId: string): Promise<CiWorkflowRunDetail>;
+  /** Bounded plain-text tail of one workflow job's log (`ci`). */
+  ciJobLog(context: SourceControlReadContext, jobId: string): Promise<CiJobLogResult>;
 }
 
 export interface RemoteClientRecord {

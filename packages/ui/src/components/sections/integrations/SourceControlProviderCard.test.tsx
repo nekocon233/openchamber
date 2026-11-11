@@ -168,7 +168,7 @@ describe('SourceControlProviderCard', () => {
     referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected,
     issuesList: unexpected, issueGet: unexpected, issueComments: unexpected, projectUpstream: unexpected,
     projectBranches: unexpected, references: unexpected, referenceDetail: unexpected,
-    changeRequestListStatuses: unexpected,
+    changeRequestListStatuses: unexpected, ciRunsList: unexpected, ciRunDetail: unexpected, ciJobLog: unexpected,
   };
   const apis: RuntimeAPIs = {
     runtime: { platform: 'web', isVSCode: false, isDesktop: false }, sourceControl,

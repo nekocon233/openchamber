@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './pl.settings';
@@ -56,6 +57,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict: Record<I18nKey, string> = {
   "chat.toolPart.checklist.title": "Zaktualizuj listę zadań",
   "chat.toolPart.checklist.empty": "Lista zadań została wyczyszczona.",
+  ...ciRunsI18n['pl'],
   ...diffFileFilterI18n['pl'],
   ...settingsDict,
   "quota.magpie.error.unsupported": "Limity Magpie są niedostępne przy połączeniu z zewnętrzną instancją OpenCode.",

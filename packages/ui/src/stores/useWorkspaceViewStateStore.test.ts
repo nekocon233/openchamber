@@ -31,10 +31,12 @@ test('each project and runtime retains its own columns without notifying an unch
 test('columns, opened entries and unfinished text round trip through page hide and hydration', async () => {
   const a = owner('host-a', '/a');
   views.getState().update('knowledge', a, previous => ({ ...previous, tab: 'plans', query: 'design', searchOpen: true, entry: { section: 'plans', id: 'p1' } }));
+  views.getState().update('ci', a, previous => ({ ...previous, filter: 'failure', query: 'lint', selectedRunId: '9001', loadedCount: 30 }));
   drafts.getState().write(a, 'Unfinished reply', '');
   dom.dispatchEvent(new dom.Event('pagehide'));
   await views.persist.rehydrate(); await drafts.persist.rehydrate();
   expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ tab: 'branch', people: 'created' });
+  expect(read(views.getState(), 'ci', a)).toEqual({ filter: 'failure', query: 'lint', selectedRunId: '9001', loadedCount: 30 });
   expect(read(views.getState(), 'knowledge', a)).toMatchObject({ tab: 'plans', query: 'design', entry: { section: 'plans', id: 'p1' } });
   expect(drafts.getState().drafts[a]?.value).toBe('Unfinished reply');
 });

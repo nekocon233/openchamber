@@ -52,10 +52,61 @@ import {
   reconcileUnknownMutationOutcome,
 } from './sourceControlMutationOutcome';
 import { BranchPullRequestPreview } from './BranchPullRequestPreview';
+import { CiRunStatusGlyph } from './CiRunDetail';
+import { formatElapsedDuration } from './checkRunState';
+import { ciRunLookOf, isActiveCiRunStatus, useBranchLatestCiRun } from './ciRunsStore';
 import { useChangeIdPreflight } from './changeIdPreflight';
 import { ReviewPushFields } from './ReviewPushFields';
 import { useBranchPush } from './useBranchPush';
 import { joinProjectPath } from '@/lib/source-control/projectPath';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
+import { useDurationTickerNow } from '@/hooks/useDurationTicker';
+import type { CiWorkflowRun } from '@/lib/api/types';
+
+const BranchLatestCiStrip: React.FC<{
+  run: CiWorkflowRun;
+  branch: string;
+  onOpen: () => void;
+}> = ({ run, branch, onOpen }) => {
+  const { t } = useI18n();
+  const running = isActiveCiRunStatus(run.status);
+  const now = useDurationTickerNow(running);
+  const look = ciRunLookOf(run.status, run.conclusion);
+  const durationLabel = running
+    ? formatElapsedDuration(run.startedAt, undefined, now)
+    : formatElapsedDuration(run.startedAt, run.completedAt);
+  const summary = run.jobSummary;
+  const completedJobs = summary ? summary.success + summary.failure : 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={t('ciRuns.branchStrip.openAria', { number: run.runNumber, branch })}
+      className="flex w-full min-w-0 items-center gap-2 rounded-md oc-tile oc-tile-hover px-2.5 py-2 text-start transition-colors"
+    >
+      <CiRunStatusGlyph status={run.status} conclusion={run.conclusion} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5 typography-ui-label text-foreground">
+          <span dir="auto" className="oc-ui-start-align truncate">{run.workflowName}</span>
+          <span dir="ltr" className="shrink-0 font-mono text-muted-foreground">#{run.runNumber}</span>
+        </div>
+        <div dir="auto" className="oc-ui-start-align truncate typography-micro text-muted-foreground">
+          {run.title}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5 typography-micro tabular-nums text-muted-foreground">
+        {summary && summary.total > 0 ? (
+          <span>{t('ciRuns.row.jobsProgress', { completed: completedJobs, total: summary.total })}</span>
+        ) : (
+          <span>{t(look.labelKey)}</span>
+        )}
+        {durationLabel ? <span>· <span dir="ltr">{durationLabel}</span></span> : null}
+        <Icon name="arrow-right-s" className="size-4 opacity-60" />
+      </div>
+    </button>
+  );
+};
 
 const statusColor = (state: string | undefined | null): string => {
   switch (state) {
@@ -887,16 +938,34 @@ export const PullRequestSection: React.FC<{
   };
 
   const containerClassName = 'border-0 bg-transparent rounded-none px-4 py-3';
+  const branchCi = useBranchLatestCiRun(
+    directory,
+    branch,
+    Boolean(directory && branch && !livePr && readContext?.provider === 'github'),
+  );
+  const openBranchCiDetail = React.useCallback(() => {
+    if (!branchCi.run) return;
+    usePullRequestSelectionStore.getState().requestCiRun(
+      workspaceDirectory ?? directory,
+      directory,
+      branchCi.run.id,
+    );
+  }, [branchCi.run, directory, workspaceDirectory]);
 
   if (!canShow) {
     return (
       <section className={containerClassName}>
         {/* No title of its own: the panel header already names the surface. */}
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <div className="min-w-0 typography-meta text-muted-foreground">
-            {t('gitView.pullRequest.availableOnFeatureBranches')}
+        <div className="flex flex-col gap-3 pt-1">
+          {branchCi.run ? (
+            <BranchLatestCiStrip run={branchCi.run} branch={branch} onOpen={openBranchCiDetail} />
+          ) : null}
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 typography-meta text-muted-foreground">
+              {t('gitView.pullRequest.availableOnFeatureBranches')}
+            </div>
+            {repositoryHost ? <SourceControlAccountControl identity={repositoryHost} /> : null}
           </div>
-          {repositoryHost ? <SourceControlAccountControl identity={repositoryHost} /> : null}
         </div>
       </section>
     );
@@ -1144,6 +1213,9 @@ export const PullRequestSection: React.FC<{
               </div>
             ) : (
               <div className="flex flex-col gap-3">
+                {branchCi.run ? (
+                  <BranchLatestCiStrip run={branchCi.run} branch={branch} onOpen={openBranchCiDetail} />
+                ) : null}
                 {pr && isHistoricalPr ? (
                   <div className="flex min-w-0 items-center gap-2 rounded-md oc-tile-inset px-2.5 py-2">
                     <Icon

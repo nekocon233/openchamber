@@ -43,27 +43,31 @@ describe('provider read cache', () => {
     app.get('/api/source-control/github/references/detail', count('detail'));
     app.get('/api/source-control/github/references/status', count('status'));
     app.get('/api/source-control/github/references', count('search'));
+    app.get('/api/source-control/github/ci/runs', count('ciRuns'));
+    app.get('/api/source-control/github/ci/run', count('ciRun'));
     const reads = () => Promise.all([
       request(app).get('/api/source-control/github/references/detail').query({ owner: 'Acme', repo: 'App', number: 7 }),
       request(app).get('/api/source-control/github/references/detail').query({ owner: 'acme', repo: 'app', number: 8 }),
       request(app).get('/api/source-control/github/references/status').query({ pulls: 'acme/app#7,acme/app#9' }),
       request(app).get('/api/source-control/github/references').query({ kind: 'pull', query: 'https://github.com/acme/app/pull/7' }),
       request(app).get('/api/source-control/github/references').query({ kind: 'pull', state: 'open' }),
+      request(app).get('/api/source-control/github/ci/runs').query({ status: 'all', page: 1 }),
+      request(app).get('/api/source-control/github/ci/run').query({ runId: 1001 }),
     ]);
     await reads();
-    expect(calls).toEqual({ detail: 2, status: 1, search: 2 });
+    expect(calls).toEqual({ detail: 2, status: 1, search: 2, ciRuns: 1, ciRun: 1 });
 
     // One item: its detail, a status read that asked for it, and the Tracker's
     // lookup of its link go; #8 and the plain list stay.
     await request(app).post('/api/source-control/github/read-cache/refresh').query({ scope: 'item', owner: 'acme', repo: 'app', number: 7 }).expect(200);
     await reads();
-    expect(calls).toEqual({ detail: 3, status: 2, search: 3 });
+    expect(calls).toEqual({ detail: 3, status: 2, search: 3, ciRuns: 1, ciRun: 1 });
     expect(refreshed).toEqual([{ provider: 'github', owner: 'acme', repo: 'app', number: 7 }]);
 
-    // The lists: the searches and statuses go, the details stay.
+    // The lists: the searches, statuses and CI reads go, the PR details stay.
     await request(app).post('/api/source-control/github/read-cache/refresh').query({ scope: 'lists' }).expect(200);
     await reads();
-    expect(calls).toEqual({ detail: 3, status: 3, search: 5 });
+    expect(calls).toEqual({ detail: 3, status: 3, search: 5, ciRuns: 2, ciRun: 2 });
     // Neither asks every followed item again.
     expect(changed).toEqual([]);
   });

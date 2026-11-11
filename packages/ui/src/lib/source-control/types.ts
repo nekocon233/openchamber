@@ -510,6 +510,7 @@ export interface CIRun extends SourceControlIdentity {
     url?: string;
     name?: string;
     workflowName?: string;
+    runnerName?: string;
     conclusion?: string | null;
     steps?: CIStep[];
   };
@@ -520,6 +521,55 @@ export interface CIRun extends SourceControlIdentity {
 export interface CI {
   summary: CISummary;
   runs?: CIRun[];
+}
+
+export type CiRunStatusFilter = 'all' | 'active' | 'failure' | 'success';
+
+export interface CiWorkflowRunPullRef {
+  number: number;
+  url: string;
+}
+
+export interface CiWorkflowRun extends SourceControlIdentity {
+  id: string;
+  runNumber: number;
+  runAttempt: number;
+  project: Project;
+  workflowName: string;
+  title: string;
+  commitMessage?: string;
+  status: string;
+  conclusion: string | null;
+  event: string;
+  headBranch: string | null;
+  headSha: string;
+  url: string;
+  actor: SourceControlUser | null;
+  createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  pullRequests: CiWorkflowRunPullRef[];
+  jobSummary?: CISummary;
+}
+
+export interface CiWorkflowRunPage extends PageResult<CiWorkflowRun> {
+  project: Project | null;
+}
+
+export interface CiWorkflowRunDetail {
+  identity: SourceControlIdentity;
+  project: Project | null;
+  run: CiWorkflowRun | null;
+  ci: CI | null;
+}
+
+export interface CiJobLogResult {
+  identity: SourceControlIdentity;
+  jobId: string;
+  available: boolean;
+  content: string;
+  truncated: boolean;
 }
 
 export interface PageResult<TItem> {

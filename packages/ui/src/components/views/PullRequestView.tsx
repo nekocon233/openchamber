@@ -26,6 +26,7 @@ import type { SourceControlReadContext } from '@/lib/source-control/types';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
+import { ProjectCiList } from './git/ProjectCiList';
 import { ProjectPullRequestList } from './git/ProjectPullRequestList';
 import { pullRequestNavigationKey, usePullRequestSelectionStore, type PullRequestOpenRequest } from '@/stores/usePullRequestSelectionStore';
 import { LinkedPullRequestView } from './git/LinkedPullRequestView';
@@ -36,7 +37,9 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
   const owner = useWorkspaceViewOwner(workspaceDirectory);
   const [tab, setTab] = useWorkspaceViewState('pullRequest', owner.project, 'tab');
   const runtimeKey = useGitStore(state => state.runtimeKey);
-  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, workspaceDirectory)));
+  const navKey = pullRequestNavigationKey(runtimeKey, workspaceDirectory);
+  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(navKey));
+  const ciPending = usePullRequestSelectionStore(state => state.ciOpenRequests.get(navKey));
   React.useEffect(() => {
     if (!returning || returning.tab === 'linked' || !context) return;
     if (!hasSameSourceControlReadContext(returning.context, context)) {
@@ -46,22 +49,30 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
     setTab(returning.tab);
     if (returning.tab === 'branch') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [context, returning, setTab]);
+  React.useEffect(() => {
+    if (!ciPending) return;
+    setTab('ci');
+  }, [ciPending, setTab]);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-border/60 px-4 py-2">
         <SortableTabsStrip
           items={[
             { id: 'project', label: t('gitView.pullRequest.tab.project') },
+            { id: 'ci', label: t('gitView.pullRequest.tab.ci') },
             { id: 'branch', label: t('gitView.pullRequest.tab.branch') },
           ]}
           activeId={tab}
-          onSelect={(id) => setTab(id === 'branch' ? 'branch' : 'project')}
+          onSelect={(id) => setTab(id === 'branch' ? 'branch' : id === 'ci' ? 'ci' : 'project')}
           variant="active-pill"
           layoutMode="fit"
         />
       </div>
       <React.Activity mode={tab === 'project' ? 'visible' : 'hidden'}>
-        <ProjectPullRequestList directory={directory} workspaceDirectory={workspaceDirectory} active />
+        <ProjectPullRequestList directory={directory} workspaceDirectory={workspaceDirectory} active={tab === 'project'} />
+      </React.Activity>
+      <React.Activity mode={tab === 'ci' ? 'visible' : 'hidden'}>
+        <ProjectCiList directory={directory} workspaceDirectory={workspaceDirectory} active={tab === 'ci'} />
       </React.Activity>
       <React.Activity mode={tab === 'branch' ? 'visible' : 'hidden'}>
         <CurrentBranchPullRequestView directory={workspaceDirectory} />
@@ -73,38 +84,47 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
 /** A link temporarily previews its own repository without replacing the workspace's retained list. */
 export const PullRequestView: React.FC<{ directory: string; visible?: boolean }> = ({ directory, visible = true }) => {
   const runtimeKey = useGitStore(state => state.runtimeKey);
-  const pending = usePullRequestSelectionStore(state => state.openRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
-  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
+  const navKey = pullRequestNavigationKey(runtimeKey, directory);
+  const pending = usePullRequestSelectionStore(state => state.openRequests.get(navKey));
+  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(navKey));
+  const ciPending = usePullRequestSelectionStore(state => state.ciOpenRequests.get(navKey));
   const [opened, setOpened] = React.useState<PullRequestOpenRequest | null>(null);
   const owner = useWorkspaceViewOwner(directory);
   const [savedLink, setSavedLink] = useWorkspaceViewState('pullRequest', owner.workspace, 'link');
   const restoredLink = React.useMemo<PullRequestOpenRequest | null>(() => savedLink ? {
     ...savedLink, runtimeKey, workspaceDirectory: directory, failureBehavior: 'manual',
   } : null, [directory, runtimeKey, savedLink]);
-  // Normal tabs consume their own return request when Activity reconnects.
+  // Normal tabs consume their own return or CI request when Activity reconnects.
   // Drop the link before those child effects can remove the request.
-  if (visible && returning && returning.tab !== 'linked' && opened) setOpened(null);
-  const request = visible && returning
-    ? returning.tab === 'linked' ? returning.request : null
-    : (visible ? pending : null) ?? (opened?.runtimeKey === runtimeKey ? opened : restoredLink);
+  if (visible && ((returning && returning.tab !== 'linked') || ciPending) && opened) setOpened(null);
+  const request = visible && ciPending
+    ? null
+    : visible && returning
+      ? returning.tab === 'linked' ? returning.request : null
+      : (visible ? pending : null) ?? (opened?.runtimeKey === runtimeKey ? opened : restoredLink);
   React.useEffect(() => {
     if (!visible || !pending) return;
-    if (usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== pending) return;
+    if (usePullRequestSelectionStore.getState().openRequests.get(navKey) !== pending) return;
     setOpened(pending);
     setSavedLink({ sourceDirectory: pending.sourceDirectory, url: pending.url });
     usePullRequestSelectionStore.getState().settleOpenRequest(pending);
-  }, [directory, pending, runtimeKey, setSavedLink, visible]);
+  }, [navKey, pending, setSavedLink, visible]);
   React.useEffect(() => {
     if (!visible || !returning || returning.tab !== 'linked') return;
-    if (usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== returning) return;
+    if (usePullRequestSelectionStore.getState().returnRequests.get(navKey) !== returning) return;
     setOpened(returning.request);
     setSavedLink({ sourceDirectory: returning.request.sourceDirectory, url: returning.request.url });
     usePullRequestSelectionStore.getState().settleReturnRequest(returning);
-  }, [directory, returning, runtimeKey, setSavedLink, visible]);
+  }, [navKey, returning, setSavedLink, visible]);
   React.useLayoutEffect(() => {
     if (visible && returning && returning.tab !== 'linked'
-      && usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)) === returning) setSavedLink(null);
-  }, [directory, returning, runtimeKey, setSavedLink, visible]);
+      && usePullRequestSelectionStore.getState().returnRequests.get(navKey) === returning) setSavedLink(null);
+  }, [navKey, returning, setSavedLink, visible]);
+  React.useLayoutEffect(() => {
+    if (visible && ciPending && usePullRequestSelectionStore.getState().ciOpenRequests.get(navKey) === ciPending) {
+      setSavedLink(null);
+    }
+  }, [ciPending, navKey, setSavedLink, visible]);
   const closeLink = React.useCallback(() => {
     const pending = usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, directory));
     if (request) {
@@ -134,12 +154,23 @@ const RepositoryPullRequestView: React.FC<{ directory: string; visible: boolean 
   const binding = useRepositoryBinding(gitDirectory, sourceControl);
   const host = useRepositoryHost(gitDirectory ?? directory);
   const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(getRuntimeKey(), directory)));
+  const ciPending = usePullRequestSelectionStore(state => state.ciOpenRequests.get(pullRequestNavigationKey(getRuntimeKey(), directory)));
+  const selectNestedRepo = useGitStore((state) => state.selectNestedRepo);
   React.useEffect(() => {
     if (host?.provider === 'gitlab' && returning && returning.tab !== 'linked') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [host?.provider, returning]);
+  React.useEffect(() => {
+    if (!visible || !ciPending) return;
+    if (!directory || host?.provider === 'gitlab') {
+      usePullRequestSelectionStore.getState().settleCiRunRequest(ciPending);
+      return;
+    }
+    if (rootIsGitRepo === false && Array.isArray(nestedRepos) && nestedRepos.includes(ciPending.sourceDirectory) && gitDirectory !== ciPending.sourceDirectory) {
+      selectNestedRepo(directory, ciPending.sourceDirectory);
+    }
+  }, [ciPending, directory, gitDirectory, host?.provider, nestedRepos, rootIsGitRepo, selectNestedRepo, visible]);
   const context = binding.contexts.find((candidate) => candidate.provider === 'github');
   const scopeKey = JSON.stringify([getRuntimeKey(), gitDirectory ?? directory, context ? sourceControlReadContextParts(context) : null]);
-  const selectNestedRepo = useGitStore((state) => state.selectNestedRepo);
 
   if (!directory || (rootIsGitRepo === false && isGitRepo !== true)) {
     return <React.Activity mode={visible ? 'visible' : 'hidden'}><CurrentBranchPullRequestView directory={directory} /></React.Activity>;

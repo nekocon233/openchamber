@@ -19,6 +19,11 @@ import type {
   ChangeRequestStatus,
   CI,
   CISummary,
+  CiJobLogResult,
+  CiRunStatusFilter,
+  CiWorkflowRun,
+  CiWorkflowRunDetail,
+  CiWorkflowRunPage,
   Issue,
   IssueComment,
   CreateChangeRequestInput,
@@ -741,6 +746,7 @@ const parseSourceCI = (ci: CI | null | undefined, identity: SourceControlIdentit
         || (run.job.url !== undefined && !isHttpUrl(run.job.url))
         || (run.job.name !== undefined && !isStringValue(run.job.name))
         || (run.job.workflowName !== undefined && !isStringValue(run.job.workflowName))
+        || (run.job.runnerName !== undefined && !isStringValue(run.job.runnerName))
         || (run.job.conclusion !== undefined && run.job.conclusion !== null && !isStringValue(run.job.conclusion)))) {
         throw new Error('Source control response contained an invalid CI job');
       }
@@ -796,6 +802,108 @@ const parseSourceCI = (ci: CI | null | undefined, identity: SourceControlIdentit
       output: run.output,
       annotations: run.annotations,
     })),
+  };
+};
+
+const parseCiWorkflowRun = (run: CiWorkflowRun, identity: SourceControlIdentity): CiWorkflowRun => {
+  if (!run
+    || !isValidId(run.id)
+    || !isPositiveSafeInteger(run.runNumber)
+    || !isPositiveSafeInteger(run.runAttempt)
+    || !isNonEmptyString(run.workflowName)
+    || !isNonEmptyString(run.title)
+    || !isNonEmptyString(run.status)
+    || (run.conclusion !== null && !isNonEmptyString(run.conclusion))
+    || !isNonEmptyString(run.event)
+    || (run.headBranch !== null && !isNonEmptyString(run.headBranch))
+    || !isNonEmptyString(run.headSha)
+    || !isHttpUrl(run.url)
+    || !hasMatchingIdentity(run, identity)
+    || (run.commitMessage !== undefined && !isStringValue(run.commitMessage))
+    || (run.createdAt !== undefined && !isNonEmptyString(run.createdAt))
+    || (run.updatedAt !== undefined && !isNonEmptyString(run.updatedAt))
+    || (run.startedAt !== undefined && !isNonEmptyString(run.startedAt))
+    || (run.completedAt !== undefined && !isNonEmptyString(run.completedAt))
+    || !Array.isArray(run.pullRequests)
+    || run.pullRequests.some((pr) => !pr || !isPositiveSafeInteger(pr.number) || !isHttpUrl(pr.url))) {
+    throw new Error('Source control response contained an invalid CI workflow run');
+  }
+  if (run.jobSummary !== undefined) validateCISummary(run.jobSummary);
+  const result: CiWorkflowRun = {
+    ...identity,
+    id: String(run.id),
+    runNumber: run.runNumber,
+    runAttempt: run.runAttempt,
+    project: parseSourceProject(run.project, identity),
+    workflowName: run.workflowName,
+    title: run.title,
+    status: run.status,
+    conclusion: run.conclusion,
+    event: run.event,
+    headBranch: run.headBranch,
+    headSha: run.headSha,
+    url: run.url,
+    actor: run.actor ? parseSourceUser(run.actor, identity) : null,
+    pullRequests: run.pullRequests.map((pr) => ({ number: pr.number, url: pr.url })),
+  };
+  if (run.commitMessage !== undefined) result.commitMessage = run.commitMessage;
+  if (run.createdAt) result.createdAt = run.createdAt;
+  if (run.updatedAt) result.updatedAt = run.updatedAt;
+  if (run.startedAt) result.startedAt = run.startedAt;
+  if (run.completedAt) result.completedAt = run.completedAt;
+  if (run.jobSummary) {
+    result.jobSummary = {
+      state: run.jobSummary.state,
+      total: run.jobSummary.total,
+      success: run.jobSummary.success,
+      failure: run.jobSummary.failure,
+      pending: run.jobSummary.pending,
+      inProgress: run.jobSummary.inProgress,
+      queued: run.jobSummary.queued,
+      startedAt: run.jobSummary.startedAt,
+    };
+  }
+  return result;
+};
+
+const parseCiWorkflowRunPage = (payload: CiWorkflowRunPage, identity: SourceControlIdentity): CiWorkflowRunPage => {
+  if (!payload || !Array.isArray(payload.items) || payload.project === undefined) {
+    throw new Error('Source control response contained invalid CI workflow runs');
+  }
+  const page = parsePage(payload, payload.items.map((item) => parseCiWorkflowRun(item, identity)));
+  return {
+    ...page,
+    project: payload.project === null ? null : parseSourceProject(payload.project, identity),
+  };
+};
+
+const parseCiWorkflowRunDetail = (payload: CiWorkflowRunDetail, identity: SourceControlIdentity): CiWorkflowRunDetail => {
+  if (!payload || !hasMatchingIdentity(payload.identity, identity)
+    || payload.project === undefined || payload.run === undefined || payload.ci === undefined) {
+    throw new Error('Source control response contained an invalid CI workflow run detail');
+  }
+  return {
+    identity,
+    project: payload.project === null ? null : parseSourceProject(payload.project, identity),
+    run: payload.run === null ? null : parseCiWorkflowRun(payload.run, identity),
+    ci: parseSourceCI(payload.ci, identity),
+  };
+};
+
+const parseCiJobLogResult = (payload: CiJobLogResult, identity: SourceControlIdentity): CiJobLogResult => {
+  if (!payload || !hasMatchingIdentity(payload.identity, identity)
+    || !isNonEmptyString(payload.jobId)
+    || !isBooleanValue(payload.available)
+    || !isStringValue(payload.content)
+    || !isBooleanValue(payload.truncated)) {
+    throw new Error('Source control response contained an invalid CI job log');
+  }
+  return {
+    identity,
+    jobId: payload.jobId,
+    available: payload.available,
+    content: payload.content,
+    truncated: payload.truncated,
   };
 };
 
@@ -1690,5 +1798,36 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
     referencesAcross: (contexts, referenceOptions) => fetchRepositoryReferencesAcross(fetch, contexts, referenceOptions),
     referenceDetail: (context, item) => fetchRepositoryReferenceDetail(fetch, context, item),
     changeRequestListStatuses: (context, refs) => fetchChangeRequestListStatuses(fetch, context, refs),
+    ciRunsList: async (context, listOptions): Promise<CiWorkflowRunPage> => {
+      const normalized = normalizeIdentity(context);
+      const query = boundReadQuery(context);
+      query.set('page', String(listOptions?.page ?? 1));
+      const status: CiRunStatusFilter = listOptions?.status ?? 'all';
+      query.set('status', status);
+      if (listOptions?.branch) query.set('branch', listOptions.branch);
+      if (listOptions?.query) query.set('query', listOptions.query);
+      const payload = await request<CiWorkflowRunPage & ErrorResponse>(fetch, normalized, '/ci/runs', {}, query);
+      return parseCiWorkflowRunPage(payload, normalized);
+    },
+    ciRunDetail: async (context, runId): Promise<CiWorkflowRunDetail> => {
+      const normalized = normalizeIdentity(context);
+      if (!/^[1-9]\d*$/.test(String(runId).trim())) {
+        throw new Error('Source control CI runId must be a positive integer');
+      }
+      const query = boundReadQuery(context);
+      query.set('runId', String(runId).trim());
+      const payload = await request<CiWorkflowRunDetail & ErrorResponse>(fetch, normalized, '/ci/run', {}, query);
+      return parseCiWorkflowRunDetail(payload, normalized);
+    },
+    ciJobLog: async (context, jobId): Promise<CiJobLogResult> => {
+      const normalized = normalizeIdentity(context);
+      if (!/^[1-9]\d*$/.test(String(jobId).trim())) {
+        throw new Error('Source control CI jobId must be a positive integer');
+      }
+      const query = boundReadQuery(context);
+      query.set('jobId', String(jobId).trim());
+      const payload = await request<CiJobLogResult & ErrorResponse>(fetch, normalized, '/ci/job-log', {}, query);
+      return parseCiJobLogResult(payload, normalized);
+    },
   };
 };
