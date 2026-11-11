@@ -28,6 +28,40 @@ describe('Antigravity live subagents', () => {
     expect(events.some((event) => event.payload.type === 'session.idle')).toBe(false);
   });
 
+  it('recovers completed child write content and bounds retry reads when preview input stays truncated', async () => {
+    const publisher = createNativeEventPublisher({ publishNativeEvent: () => {} });
+    let reads = 0;
+    const controller = createAntigravitySubagents({ publisher, now: () => 100, loadHistory: async () => null,
+      readReasoning: (nativeId) => {
+        reads += 1;
+        return nativeId === childId ? [{ step_index: 1, status: 'DONE', type: 'PLANNER_RESPONSE',
+          truncated_fields: reads < 4 ? ['tool_calls'] : [],
+          tool_calls: [
+            { name: 'write_file', args: { Path: '/repo/child.ts', Content: 'export const child = 1;\n' }, argumentsEncoded: false },
+            { name: 'run_command', args: { CommandLine: 'first' }, argumentsEncoded: false },
+            { name: 'run_command', args: { CommandLine: 'second' }, argumentsEncoded: false },
+          ] }] : [];
+      },
+    });
+    const process = {};
+    const record = buildSessionRecord({ id: 'nag_' + rootId, backend: 'antigravity', directory: '/repo', title: 'Root', created: 1, updated: 1 });
+    const owner = { id: record.id, nativeId: rootId, directory: '/repo', record, turn: { process } };
+    await controller.handle(owner, process, step(rootId, { subagent_info: { subagents: [reference(childId)] } }));
+    await controller.handle(owner, process, step(childId, { step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: '' }));
+    await controller.handle(owner, process, step(childId, { step_index: 2, step_type: 'tool', state: 'DONE',
+      tool_info: { name: 'write_file', parameters: { Path: '/repo/child.ts' }, output: '', error: null } }));
+    await controller.handle(owner, process, step(childId, { step_index: 3, step_type: 'tool', state: 'DONE',
+      tool_info: { name: 'run_command', parameters: { CommandLine: 'first' }, output: 'Command exited with code 0.\nok', error: null } }));
+    expect(reads).toBe(3);
+    // Retry was spent on step 3, so step 4 does not re-read the transcript.
+    await controller.handle(owner, process, step(childId, { step_index: 4, step_type: 'tool', state: 'DONE',
+      tool_info: { name: 'run_command', parameters: { CommandLine: 'second' }, output: 'Command exited with code 0.\nok', error: null } }));
+    expect(reads).toBe(3);
+    controller.refreshReasoning('nag_' + childId);
+    const write = controller.records('nag_' + childId)[1].parts.find((part) => part.type === 'tool');
+    expect(write.state.input).toEqual({ filePath: '/repo/child.ts', content: 'export const child = 1;\n' });
+  });
+
   it('joins multiple and nested children by live identity and keeps unobserved completion unknown', async () => {
     const events = [];
     let time = 100;

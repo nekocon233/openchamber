@@ -351,6 +351,54 @@ const run = (text) => {
     }
     return;
   }
+  if (visible === 'live-writes-lagged') {
+    const generation = stepIndex++;
+    const editPath = path.join(cwd, 'lagged-edit.txt');
+    const writePath = path.join(cwd, 'lagged-write.txt');
+    const calls = [
+      { name: 'edit_file', args: { Path: editPath, Target: 'old-line\n', Replacement: 'new-line\n' } },
+      { name: 'write_file', args: { Path: writePath, Content: 'first\nsecond\n' } },
+      { name: 'run_command', args: { CommandLine: 'verify files' } },
+    ];
+    fs.appendFileSync(transcript, `${JSON.stringify({
+      step_index: generation, created_at: new Date().toISOString(), status: 'DONE',
+      type: 'PLANNER_RESPONSE', content: '', truncated_fields: ['tool_calls'],
+      tool_calls: calls.map((call) => ({ name: call.name, args: Object.fromEntries(
+        Object.entries(call.args).map(([key, val]) => [key, JSON.stringify(val)]),
+      ) })),
+    })}\n`);
+    frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: generation,
+      state: 'DONE', step_type: 'agent_response', text_delta: '', usage } });
+    const editStep = stepIndex++;
+    const writeStep = stepIndex++;
+    const cmdStep = stepIndex++;
+    append({ step_index: editStep, type: 'GENERIC', content: 'Made 1 replacement' });
+    append({ step_index: writeStep, type: 'GENERIC', content: 'Created file.' });
+    append({ step_index: cmdStep, type: 'GENERIC', status: 'RUNNING', content: 'Running' });
+    for (const [index, name, filePath] of [[editStep, 'edit_file', editPath], [writeStep, 'write_file', writePath]]) {
+      const done = { event: 'step_update', step_update: { conversation_id: conversationId, step_index: index,
+        state: 'DONE', step_type: 'tool', tool_info: { name, parameters: { Path: filePath }, output: '', error: null } } };
+      frame(done);
+      frame(done);
+    }
+    frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: cmdStep,
+      state: 'ACTIVE', step_type: 'tool', tool_info: { name: 'run_command', parameters: { CommandLine: 'verify files' }, output: '', error: null } } });
+    const release = path.join(home, 'release-file-details');
+    const watcher = fs.watch(home, () => {
+      if (!fs.existsSync(release)) return;
+      watcher.close();
+      fs.appendFileSync(fullTranscript, `${JSON.stringify({
+        step_index: generation, created_at: new Date().toISOString(), status: 'DONE',
+        type: 'PLANNER_RESPONSE', content: '', tool_calls: calls, usage,
+      })}\n`);
+      append({ step_index: cmdStep, type: 'GENERIC', content: 'Command exited with code 0.\nok' });
+      const completed = { event: 'step_update', step_update: { conversation_id: conversationId, step_index: cmdStep,
+        state: 'DONE', step_type: 'tool', tool_info: { name: 'run_command', parameters: { CommandLine: 'verify files' }, output: 'Command exited with code 0.\nok', error: null } } };
+      frame(completed);
+      frame(completed);
+    });
+    return;
+  }
   if (visible === 'stop-after-commentary' || visible === 'stop-after-output-limit') {
     interruptError = visible === 'stop-after-output-limit' ? outputLimitError : 'The stream was interrupted. Please continue the task.';
     planner('Waiting for completion\n');

@@ -220,6 +220,49 @@ test('the concise transcript shows a call as Name(argument) over one result line
     expect(container.querySelectorAll('[style*="--tools-edit-removed-bg"]')).toHaveLength(1);
     expect(container.querySelectorAll('[style*="--tools-edit-added-bg"]')).toHaveLength(1);
 
+    const completeWrite = toolPart('prt_write_complete', 'write', {
+      status: 'completed', input: { filePath: '/workspace/src/created.ts', content: 'export const a = 1;\nexport const b = 2;' },
+      output: 'Created file.', metadata: { nativeBackend: 'antigravity' }, time: { start: 1, end: 2 },
+    });
+    await render(completeWrite);
+    expect(row()?.textContent).toBe('Write(/workspace/src/created.ts)+2');
+    expect(container.textContent).toContain('1+export const a = 1;');
+    expect(container.textContent).toContain('2+export const b = 2;');
+
+    const pathOnlyWrite = toolPart('prt_write_path_only', 'write', {
+      status: 'completed', input: { Path: '/workspace/src/pending.ts', filePath: '/workspace/src/pending.ts' },
+      output: 'Created file.', metadata: { nativeBackend: 'antigravity' }, time: { start: 1, end: 2 },
+    });
+    await render(pathOnlyWrite);
+    expect(row()?.textContent).toBe('Write(/workspace/src/pending.ts)');
+    expect(container.querySelectorAll('[style*="--tools-edit-added-bg"]')).toHaveLength(0);
+    await render(pathOnlyWrite, true);
+    expect(container.textContent).not.toContain('+Path:');
+    expect(container.textContent).not.toContain('File path:');
+    expect(container.textContent).toContain('Created file.');
+
+    const truncatedWrite = toolPart('prt_write_truncated', 'write', {
+      status: 'completed', input: { filePath: '/workspace/src/partial.ts', content: 'partial line' },
+      output: 'Created file.', metadata: { nativeBackend: 'antigravity', nativeInputTruncated: true }, time: { start: 1, end: 2 },
+    });
+    await render(truncatedWrite);
+    expect(row()?.textContent).toBe('Write(/workspace/src/partial.ts)');
+    expect(container.textContent).not.toContain('partial line');
+    await render(truncatedWrite, true);
+    expect(container.textContent).not.toContain('partial line');
+    expect(container.textContent).toContain('Created file.');
+
+    const failedWrite = toolPart('prt_write_failed', 'write', {
+      status: 'error', input: { filePath: '/workspace/src/exists.ts', content: 'export const blocked = true;' },
+      error: 'exists.ts already exists.', metadata: { nativeBackend: 'antigravity' }, time: { start: 1, end: 2 },
+    });
+    await render(failedWrite);
+    expect(row()?.textContent).toBe('Write(/workspace/src/exists.ts)exists.ts already exists.');
+    expect(row()?.textContent).not.toContain('+1');
+    await render(failedWrite, true);
+    expect(container.textContent).toContain('exists.ts already exists.');
+    expect(container.textContent).not.toContain('--- /dev/null');
+
     await render(failed);
     expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');
 

@@ -19,7 +19,7 @@ import { codexVariantSettings } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
 import { createAntigravityDecisions } from './antigravity/decisions.js';
 import { resolveAgyCommand } from './antigravity/command.js';
-import { withAgyEditDetails } from './antigravity/tools.js';
+import { withAgyFileDetails } from './antigravity/tools.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
@@ -134,7 +134,7 @@ export const overlay = (history, live) => {
     const measured = withHistoryMeasurements(liveRecord, record);
     if (!record.info.id.startsWith('nag_') || measured === record) return measured;
     const saved = new Map(record.parts.map((part) => [part.id, part]));
-    const parts = measured.parts.map((part) => withAgyEditDetails(part, saved.get(part.id)));
+    const parts = measured.parts.map((part) => withAgyFileDetails(part, saved.get(part.id)));
     return parts.some((part, index) => part !== measured.parts[index]) ? { ...measured, parts } : measured;
   });
   const known = new Set(history.map((record) => record.info.id));

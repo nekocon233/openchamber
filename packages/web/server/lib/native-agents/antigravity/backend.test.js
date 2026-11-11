@@ -142,6 +142,32 @@ describe('Antigravity CLI adapter', () => {
     await backend.abort(session.id);
   });
 
+  it('recovers path-only writes and lagged full-transcript edits on the next settled step without polling', async () => {
+    const { backend, directory, home, events } = await setup();
+    const session = await backend.createSession({ directory });
+    const reads = vi.spyOn(backend.store, 'completedGenerations');
+    await backend.prompt(session.id, { directory, messageID: 'live-lagged-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'live-writes-lagged' }] });
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .some((part) => part.tool === 'bash' && part.state.status === 'running')).toBe(true));
+    expect(reads).toHaveBeenCalledTimes(3);
+    const beforeParts = backend.liveRecords(session.id).flatMap((record) => record.parts);
+    expect(beforeParts.find((part) => part.tool === 'edit')?.state.metadata?.diff).toBeUndefined();
+    expect(beforeParts.find((part) => part.tool === 'write')?.state.input?.content).toBeUndefined();
+    fs.writeFileSync(path.join(home, 'release-file-details'), 'release');
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .find((part) => part.tool === 'write')?.state.input?.content).toBe('first\nsecond\n'));
+    expect(reads).toHaveBeenCalledTimes(4);
+    expect(backend.busySessionIds(directory)).toContain(session.id);
+    expect(events.some((event) => event.payload.type === 'session.idle')).toBe(false);
+    const liveParts = backend.liveRecords(session.id).flatMap((record) => record.parts);
+    const edit = liveParts.find((part) => part.tool === 'edit');
+    const write = liveParts.find((part) => part.tool === 'write');
+    expect(edit.state.metadata).toMatchObject({ nativeDiffScope: 'replacement', diff: expect.stringContaining('+new-line') });
+    expect(write.state.input).toEqual({ filePath: path.join(directory, 'lagged-write.txt'), content: 'first\nsecond\n' });
+    await backend.abort(session.id);
+  });
+
   it('publishes saved thinking before the turn ends without settling a running tool or polling', async () => {
     const { backend, directory, home, events } = await setup();
     const session = await backend.createSession({ directory });

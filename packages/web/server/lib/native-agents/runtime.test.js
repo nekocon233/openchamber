@@ -141,25 +141,43 @@ describe('native live overlay', () => {
     parts: [],
   });
 
-  it('fills completed AGY edit details while keeping live timing, output and failures', () => {
+  it('fills completed AGY edit and write details while keeping live timing, output and failures', () => {
     const input = { filePath: '/sample.txt', oldString: 'before', newString: 'after' };
     const part = { id: 'edit', messageID: 'nag_a_test', type: 'tool', tool: 'edit', state: {
       status: 'completed', input, output: 'saved output', time: { start: 1, end: 2 },
       metadata: { nativeBackend: 'antigravity', nativeDiffScope: 'replacement', diff: 'saved diff', files: [] },
     } };
-    const saved = { ...overlayRecord('nag_a_test', 'assistant', 1), parts: [part] };
-    const held = { ...part, state: { ...part.state, input: { filePath: '/sample.txt' }, output: 'live output',
+    const writeInput = { filePath: '/created.txt', content: 'hello\nworld\n' };
+    const writePart = { id: 'write', messageID: 'nag_a_test', type: 'tool', tool: 'write', state: {
+      status: 'completed', input: writeInput, output: 'Created file.', time: { start: 1, end: 2 },
+      metadata: { nativeBackend: 'antigravity' },
+    } };
+    const saved = { ...overlayRecord('nag_a_test', 'assistant', 1), parts: [part, writePart] };
+    const held = { ...part, state: { ...part.state, input: { Path: '/sample.txt', filePath: '/sample.txt' }, output: 'live output',
       time: { start: 3, end: 4 }, metadata: { nativeBackend: 'antigravity', nativeInputTruncated: true } } };
-    const live = { ...saved, parts: [held] };
+    const heldWrite = { ...writePart, state: { ...writePart.state, input: { filePath: '/created.txt', content: 'partial' }, output: '',
+      time: { start: 5, end: 6 }, metadata: { nativeBackend: 'antigravity', nativeInputTruncated: true } } };
+    const live = { ...saved, parts: [held, heldWrite] };
     const [merged] = overlay([saved], [live]);
     expect(merged.parts[0].state).toMatchObject({ input, output: 'live output', time: { start: 3, end: 4 }, metadata: { diff: 'saved diff' } });
+    expect(merged.parts[0].state.input).toEqual(input);
     expect(merged.parts[0].state.metadata).not.toHaveProperty('nativeInputTruncated');
+    expect(merged.parts[1].state).toMatchObject({ input: writeInput, output: '', time: { start: 5, end: 6 } });
+    expect(merged.parts[1].state.input).toEqual(writeInput);
+    expect(merged.parts[1].state.metadata).not.toHaveProperty('nativeInputTruncated');
     expect(live.parts[0]).toBe(held);
+    expect(live.parts[1]).toBe(heldWrite);
     for (const status of ['running', 'error']) {
-      const failed = { ...live, parts: [{ ...held, state: { ...held.state, status, error: 'native error' } }] };
+      const failed = { ...live, parts: [
+        { ...held, state: { ...held.state, status, error: 'native error' } },
+        { ...heldWrite, state: { ...heldWrite.state, status, error: 'native error' } },
+      ] };
       expect(overlay([saved], [failed])[0]).toBe(failed);
     }
-    const truncated = { ...saved, parts: [{ ...part, state: { ...part.state, metadata: { ...part.state.metadata, nativeInputTruncated: true } } }] };
+    const truncated = { ...saved, parts: [
+      { ...part, state: { ...part.state, metadata: { ...part.state.metadata, nativeInputTruncated: true } } },
+      { ...writePart, state: { ...writePart.state, metadata: { ...writePart.state.metadata, nativeInputTruncated: true } } },
+    ] };
     expect(overlay([truncated], [live])[0]).toBe(live);
     expect(overlay([saved], [merged])[0]).toBe(merged);
   });
