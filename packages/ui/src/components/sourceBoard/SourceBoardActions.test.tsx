@@ -37,6 +37,7 @@ const { SyncProvider } = await import('@/sync/sync-context');
 const { useSessionUIStore } = await import('@/sync/session-ui-store');
 const { rememberMergeMethod } = await import('@/components/views/git/mergeMethodPreference');
 const { SourceBoardActions } = await import('./SourceBoardActions');
+const { toast } = await import('@/components/ui/toast');
 
 const CONTEXT: SourceControlReadContext = {
     provider: 'github', instance: 'github.com', directory: '/fixture/repository', repositoryId: 'repository-one',
@@ -69,13 +70,13 @@ const deferred = () => {
     return { promise, release };
 };
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-const render = async (pull = PULL, context: SourceControlReadContext | null = CONTEXT) => {
+const render = async (pull = PULL, context: SourceControlReadContext | null = CONTEXT, returnOnSubmit = true) => {
     root ??= createRoot(host);
     await act(async () => root?.render(
         <I18nProvider><RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="">
             <SourceBoardActions item={{ source: 'github', reference: pull }} project={null} context={context}
                 onStartWorktree={() => { throw new Error('This test must never start a worktree'); }} onChanged={() => { refreshes++; }}
-                onMerged={() => { completions.push(refreshes); }} />
+                onMergeSubmitted={returnOnSubmit ? () => { completions.push(refreshes); } : undefined} />
         </SyncProvider></RuntimeAPIContext.Provider></I18nProvider>,
     ));
     await settle();
@@ -156,7 +157,7 @@ test('force merge uses a separate destructive confirmation and the selected meth
     } });
     expect(mergeCalls[0].idempotencyKey.length).toBeGreaterThan(0);
     expect(refreshes).toBe(1);
-    expect(completions).toEqual([1]);
+    expect(completions).toEqual([0]);
 });
 
 test('ordinary merge never includes force and canceling force never dispatches or refreshes', async () => {
@@ -170,16 +171,49 @@ test('ordinary merge never includes force and canceling force never dispatches o
     await click(button('Merge', dialog())); await settle();
     expect(mergeCalls).toHaveLength(1);
     expect('force' in mergeCalls[0]).toBe(false);
-    expect(completions).toEqual([1]);
+    expect(completions).toEqual([0]);
 });
 
-test('an accepted merge that has not completed refreshes without returning from the detail', async () => {
+test('a queued merge returns on dispatch and refreshes when its result arrives', async () => {
     merged = false;
     await render(); await click(button('Squash and merge'));
     await click(button('Merge', dialog())); await settle();
     expect(mergeCalls).toHaveLength(1);
     expect(refreshes).toBe(1);
-    expect(completions).toEqual([]);
+    expect(completions).toEqual([0]);
+});
+
+test('dispatch returns before delivery and a reopened detail cannot submit the same PR twice', async () => {
+    const gate = deferred(); mergeGate = gate.promise;
+    await render(); await click(button('Squash and merge'));
+    await click(button('Merge', dialog()));
+    expect(mergeCalls).toHaveLength(1);
+    expect(completions).toEqual([0]);
+    expect(refreshes).toBe(0);
+    await act(async () => root?.unmount()); root = null;
+    await render();
+    expect(button('Squash and merge').disabled).toBe(true);
+    expect(button('Force merge').disabled).toBe(true);
+    await act(async () => { gate.release(); }); await settle();
+    expect(refreshes).toBe(1);
+    expect(completions).toEqual([0]);
+    expect(button('Squash and merge').disabled).toBe(false);
+    expect(mergeCalls).toHaveLength(1);
+});
+
+test('a failure after returning keeps repository-labelled feedback and releases the PR', async () => {
+    const gate = deferred(); mergeGate = gate.promise;
+    mergeFailure = new Error('Background merge was refused');
+    await render(); await click(button('Squash and merge'));
+    await click(button('Merge', dialog()));
+    expect(completions).toEqual([0]);
+    await act(async () => root?.unmount()); root = null;
+    await act(async () => { gate.release(); }); await settle();
+    expect(toast.getHistory().some(item => 'title' in item && item.type === 'error' && item.description === 'Background merge was refused'
+        && String(item.title).includes('fixture/repository #17'))).toBe(true);
+    expect(refreshes).toBe(1);
+    await render();
+    expect(button('Squash and merge').disabled).toBe(false);
 });
 
 test('force merge requires explicit support, GitHub, an open non-draft pull and a head SHA', async () => {
@@ -257,16 +291,16 @@ test('provider failure refreshes once without retrying or changing merge mode', 
     expect(mergeCalls[0].force).toBe(true);
     expect(refreshes).toBe(1);
     expect(button('Force merge').disabled).toBe(false);
-    expect(completions).toEqual([]);
+    expect(completions).toEqual([0]);
 });
 
 for (const failed of [false, true]) {
     test(`a late ${failed ? 'failure' : 'success'} cannot refresh a different pull or unlock a duplicate dispatch`, async () => {
         const gate = deferred(); mergeGate = gate.promise;
         mergeFailure = failed ? new Error('Old pull request failed') : null;
-        await render(); await click(button('Force merge')); await confirm();
+        await render(PULL, CONTEXT, false); await click(button('Force merge')); await confirm();
         expect(mergeCalls).toHaveLength(1);
-        await render({ ...PULL, number: 18 });
+        await render({ ...PULL, number: 18 }, CONTEXT, false);
         await click(button('Force merge'));
         expect(mergeCalls).toHaveLength(1);
         expect(document.querySelector('[role="dialog"]')).toBeNull();

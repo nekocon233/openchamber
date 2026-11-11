@@ -10,6 +10,8 @@ import { useI18n } from '@/lib/i18n';
 import { useGitStore } from '@/stores/useGitStore';
 import { usePendingReviewDraftStore } from '@/stores/usePendingReviewDraftStore';
 import { newMutationKey } from './mutationKey';
+import { toast } from '@/components/ui';
+import { beginPullRequestAction, usePullRequestActionPending } from './pullRequestActions';
 
 const cache = createValueCache<GitHubPendingReviewState>(64);
 const errorSchema = z.object({ code: z.string() });
@@ -35,7 +37,9 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
   const last = React.useRef<{ key: string | null; data: GitHubPendingReviewState } | null>(null);
   React.useEffect(() => { if (value.status === 'ready') last.current = { key, data: value.value }; }, [key, value]);
   const data = value.status === 'ready' ? value.value : last.current?.key === key ? last.current.data : null;
-  const busy = usePendingReviewDraftStore(state => key ? state.busy[key] ?? false : false);
+  const draftBusy = usePendingReviewDraftStore(state => key ? state.busy[key] ?? false : false);
+  const actionPending = usePullRequestActionPending(context, pull);
+  const busy = draftBusy || actionPending;
   const [failure, setFailure] = React.useState<{ key: string; message: string } | null>(null);
 
   const refresh = React.useCallback(async () => {
@@ -48,10 +52,15 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
     return () => window.removeEventListener('focus', revalidate);
   }, [enabled, key, read]);
 
-  const mutate = React.useCallback(async (action: GitHubPendingReviewAction, headSha: string, onSucceeded?: () => void): Promise<boolean> => {
+  const mutate = React.useCallback(async (action: GitHubPendingReviewAction, headSha: string, onSucceeded?: (currentRuntime: boolean) => void, onDispatched?: () => void): Promise<boolean> => {
     if (!scope || !key || getRuntimeKey() !== runtimeKey) return false;
     const drafts = usePendingReviewDraftStore.getState();
     if (!drafts.begin(key)) return false;
+    const operation = beginPullRequestAction(scope.context, scope.pull);
+    if (!operation) { drafts.end(key); return false; }
+    const backgroundApproval = action.kind === 'submit' && action.verdict === 'approve' && Boolean(onDispatched);
+    const reference = `${scope.pull.owner}/${scope.pull.repo} #${scope.pull.number}`;
+    let toastId: string | number | undefined;
     const fingerprint = JSON.stringify([headSha, action]);
     const signature = pendingReviewActionSignature(headSha, action);
     const previous = drafts.attempts[key]?.find(attempt => attempt.signature === signature);
@@ -64,16 +73,25 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
     }
     const idempotencyKey = previous ? previous.key : newMutationKey();
     if (!drafts.setAttempt(key, { signature, fingerprint, key: idempotencyKey })) {
-      setFailure({ key, message: t('pendingReview.draftLimit') }); drafts.end(key); return false;
+      setFailure({ key, message: t('pendingReview.draftLimit') }); drafts.end(key); operation.finish(); return false;
     }
     setFailure(null);
     try {
       if (!sourceControl.githubPendingReviewAction) throw new Error(t('pendingReview.actionFailed'));
-      await sourceControl.githubPendingReviewAction({ ...scope.context, idempotencyKey,
+      const request = sourceControl.githubPendingReviewAction({ ...scope.context, idempotencyKey,
         target: { project: { owner: scope.pull.owner, name: scope.pull.repo }, number: scope.pull.number, headSha }, action: requestAction });
+      if (backgroundApproval) {
+        toastId = operation.showProgress(t('sourceBoard.reply.toast.approving', { reference }));
+        onDispatched?.();
+      }
+      await request;
       usePendingReviewDraftStore.getState().clearAttempt(key, signature);
-      onSucceeded?.();
-      if (getRuntimeKey() === runtimeKey) await cache.ensure(key, read, { force: true }).catch(() => {});
+      if (action.kind === 'submit' && operation.isRuntimeCurrent()) {
+        if (backgroundApproval) toast.success(t('sourceBoard.reply.toast.approved', { reference }), { id: toastId });
+        else toast.success(t('pendingReview.submitted'));
+      }
+      onSucceeded?.(operation.isRuntimeCurrent());
+      if (operation.isRuntimeCurrent()) await cache.ensure(key, read, { force: true }).catch(() => {});
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : t('pendingReview.actionFailed');
@@ -85,9 +103,10 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
         usePendingReviewDraftStore.getState().clearAttempt(key, signature);
       }
       setFailure({ key, message });
-      if (getRuntimeKey() === runtimeKey) await cache.ensure(key, read, { force: true }).catch(() => {});
+      if (backgroundApproval && operation.isRuntimeCurrent()) toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference }), { id: toastId, description: message });
+      if (operation.isRuntimeCurrent()) await cache.ensure(key, read, { force: true }).catch(() => {});
       return false;
-    } finally { usePendingReviewDraftStore.getState().end(key); }
+    } finally { usePendingReviewDraftStore.getState().end(key); operation.finish(); }
   }, [key, read, runtimeKey, scope, sourceControl, t]);
 
   return { key, data, busy, mutate, refresh,

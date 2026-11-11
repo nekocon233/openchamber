@@ -52,7 +52,7 @@ const ReviewComment: React.FC<{ comment: GitHubPendingReviewComment; controller:
 };
 
 /** A review is submitted once, with every saved inline comment and its summary. */
-export const PendingReviewSection: React.FC<{ controller: PendingReviewController; onSubmitted: () => void; onApproved?: () => void }> = ({ controller, onSubmitted, onApproved }) => {
+export const PendingReviewSection: React.FC<{ controller: PendingReviewController; onSubmitted: () => void; onApproveSubmitted?: () => void }> = ({ controller, onSubmitted, onApproveSubmitted }) => {
   const { t } = useI18n();
   const confirmation = useConfirmDialog();
   const summaryKey = `${controller.key}:summary`;
@@ -68,12 +68,10 @@ export const PendingReviewSection: React.FC<{ controller: PendingReviewControlle
   const submit = async (verdict: 'comment' | 'approve' | 'request-changes') => {
     const action: GitHubPendingReviewAction = { kind: 'submit', reviewId: review.id, version: review.version, verdict };
     if (text.trim()) action.body = text;
-    await controller.mutate(action, data.headSha, () => {
+    await controller.mutate(action, data.headSha, currentRuntime => {
       usePendingReviewDraftStore.getState().clearText(summaryKey);
-      toast.success(t('pendingReview.submitted'));
-      onSubmitted();
-      if (verdict === 'approve') onApproved?.();
-    });
+      if (currentRuntime) onSubmitted();
+    }, verdict === 'approve' ? onApproveSubmitted : undefined);
   };
   const discard = async () => {
     const approved = await confirmation.confirm({ title: t('pendingReview.discard'), message: t('pendingReview.discardConfirm'), action: t('pendingReview.discard'), destructive: true });

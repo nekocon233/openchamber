@@ -23,6 +23,7 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
   const receipts = new Map<string, string>();
   let failRead = false;
   let pauseRead: Promise<void> | null = null;
+  let pauseWrite: Promise<void> | null = null;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
@@ -35,6 +36,7 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
     }
     const payload = requestSchema.parse(JSON.parse(String(init.body)));
     calls.push(payload);
+    if (pauseWrite) await pauseWrite;
     const existing = receipts.get(payload.idempotencyKey);
     if (existing) {
       if (calls.filter(call => call.idempotencyKey === payload.idempotencyKey).length === 2) throw new TypeError('Lost replay response');
@@ -111,6 +113,22 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
     });
     expect(current().busy).toBe(true);
     await act(async () => { releaseRead(); expect(await submission).toBe(true); });
+    expect(current().busy).toBe(false);
+
+    let releaseWrite = () => {};
+    pauseWrite = new Promise<void>(resolve => { releaseWrite = resolve; });
+    let notifyDispatch = () => {};
+    const dispatched = new Promise<void>(resolve => { notifyDispatch = resolve; });
+    let succeeded = false;
+    await act(async () => {
+      submission = current().mutate({ kind: 'submit', reviewId: 'R-A', version: '2', verdict: 'approve' }, headSha,
+        () => { succeeded = true; }, notifyDispatch);
+      await dispatched;
+    });
+    expect(succeeded).toBe(false);
+    expect(current().busy).toBe(true);
+    await act(async () => { releaseWrite(); expect(await submission).toBe(true); });
+    expect(succeeded).toBe(true);
     expect(current().busy).toBe(false);
   } finally {
     await act(async () => root.unmount());

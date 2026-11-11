@@ -141,7 +141,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               pullStatus={browser.pullStatusOf(selectedPull)}
               now={browser.now}
               onChanged={browser.list.retry}
-              onCompleted={goBack}
+              onSubmitted={goBack}
               refreshDetail={browser.refreshGithubDetail}
               pullLinks={<SourceBoardPullLinks pull={selectedPull} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
                 returnTo={{ workspaceDirectory, tab: 'project' }} />}
