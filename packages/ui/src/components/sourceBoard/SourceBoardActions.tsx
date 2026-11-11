@@ -96,6 +96,7 @@ type SourceBoardActionsProps = {
     context: SourceControlReadContext | null;
     onStartWorktree: (project: SourceBoardProject, selection: ReferencePickerSelection) => void;
     onChanged: () => void;
+    onMerged?: () => void;
     /** Left of the actions: where a Linear issue's session starts, with a way to pick another project. */
     startIn?: React.ReactNode;
     /** The phone shell's page closes once a session starts; the desktop page closes on its own. */
@@ -120,7 +121,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
     runtimeKey: string;
     runtimeGeneration: number;
     mergePending: React.RefObject<boolean>;
-}> = ({ item, project, context, onStartWorktree, onChanged, startIn, onLeave, runtimeKey, runtimeGeneration, mergePending }) => {
+}> = ({ item, project, context, onStartWorktree, onChanged, onMerged, startIn, onLeave, runtimeKey, runtimeGeneration, mergePending }) => {
     const { t } = useI18n();
     const { sourceControl, linear } = useRuntimeAPIs();
     const confirmation = useConfirmDialog();
@@ -193,6 +194,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
         mergePending.current = true;
         setBusy(force ? 'force-merge' : 'merge');
         let dispatched = false;
+        let merged = false;
         try {
             const approved = await confirmation.confirm({
                 title: t(force ? 'sourceBoard.merge.forceConfirmTitle' : context.provider === 'gitlab' ? 'sourceBoard.merge.confirmTitle.gitlab' : 'sourceBoard.merge.confirmTitle.github', { reference }),
@@ -213,14 +215,18 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
             if (force) input.force = true;
             const receipt = await sourceControl.changeRequestMerge(input);
             if (!isCurrent()) return;
-            if (receipt.result.merged) toast.success(t('sourceBoard.toast.merged', { reference }));
+            merged = receipt.result.merged;
+            if (merged) toast.success(t('sourceBoard.toast.merged', { reference }));
             else toast.message(t('sourceBoard.toast.notMerged', { reference }), { description: receipt.result.message });
         } catch (error) {
             if (isCurrent()) toast.error(t('sourceBoard.toast.mergeFailed', { reference }), { description: error instanceof Error ? error.message : String(error) });
         } finally {
             mergePending.current = false;
             if (mounted.current) setBusy(null);
-            if (dispatched && isCurrent()) onChanged();
+            if (dispatched && isCurrent()) {
+                onChanged();
+                if (merged) onMerged?.();
+            }
         }
     };
 

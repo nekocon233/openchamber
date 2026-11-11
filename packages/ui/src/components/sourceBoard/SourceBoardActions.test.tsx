@@ -57,8 +57,10 @@ let capabilityFailure = false;
 let capabilityGate: Promise<void> | null = null;
 let mergeGate: Promise<void> | null = null;
 let mergeFailure: Error | null = null;
+let merged = true;
 let mergeCalls: MergeChangeRequestInput[] = [];
 let refreshes = 0;
+let completions: number[] = [];
 let sourceControl: SourceControlAPI;
 let apis: ReturnType<typeof createTestRuntimeAPIs>;
 const deferred = () => {
@@ -72,7 +74,8 @@ const render = async (pull = PULL, context: SourceControlReadContext | null = CO
     await act(async () => root?.render(
         <I18nProvider><RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="">
             <SourceBoardActions item={{ source: 'github', reference: pull }} project={null} context={context}
-                onStartWorktree={() => { throw new Error('This test must never start a worktree'); }} onChanged={() => { refreshes++; }} />
+                onStartWorktree={() => { throw new Error('This test must never start a worktree'); }} onChanged={() => { refreshes++; }}
+                onMerged={() => { completions.push(refreshes); }} />
         </SyncProvider></RuntimeAPIContext.Provider></I18nProvider>,
     ));
     await settle();
@@ -91,7 +94,7 @@ const dialog = () => {
 const confirm = () => click(button('Force merge', dialog()));
 
 beforeEach(() => {
-    forceCapability = true; capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; mergeCalls = []; refreshes = 0;
+    forceCapability = true; capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; merged = true; mergeCalls = []; refreshes = 0; completions = [];
     initializeRuntimeEndpoint({ apiBaseUrl: 'http://source-board.test', runtimeKey: 'source-board-one' });
     useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
     rememberMergeMethod('squash');
@@ -114,7 +117,7 @@ beforeEach(() => {
             if (mergeGate) await mergeGate;
             if (mergeFailure) throw mergeFailure;
             return { status: 'succeeded', actor: { provider: input.provider, instance: input.instance, providerAccountId: 'provider-user-seven' },
-                replayed: false, result: { merged: true }, target: {
+                replayed: false, result: { merged }, target: {
                     ...input.target, project: { ...input.target.project, id: 'fixture/repository' }, repositoryId: input.repositoryId,
                     bindingRevision: input.bindingRevision, primaryRemote: input.primaryRemote,
                 } };
@@ -153,6 +156,7 @@ test('force merge uses a separate destructive confirmation and the selected meth
     } });
     expect(mergeCalls[0].idempotencyKey.length).toBeGreaterThan(0);
     expect(refreshes).toBe(1);
+    expect(completions).toEqual([1]);
 });
 
 test('ordinary merge never includes force and canceling force never dispatches or refreshes', async () => {
@@ -161,10 +165,21 @@ test('ordinary merge never includes force and canceling force never dispatches o
     await click(button('Cancel', dialog()));
     expect(mergeCalls).toEqual([]);
     expect(refreshes).toBe(0);
+    expect(completions).toEqual([]);
     await click(button('Squash and merge'));
     await click(button('Merge', dialog())); await settle();
     expect(mergeCalls).toHaveLength(1);
     expect('force' in mergeCalls[0]).toBe(false);
+    expect(completions).toEqual([1]);
+});
+
+test('an accepted merge that has not completed refreshes without returning from the detail', async () => {
+    merged = false;
+    await render(); await click(button('Squash and merge'));
+    await click(button('Merge', dialog())); await settle();
+    expect(mergeCalls).toHaveLength(1);
+    expect(refreshes).toBe(1);
+    expect(completions).toEqual([]);
 });
 
 test('force merge requires explicit support, GitHub, an open non-draft pull and a head SHA', async () => {
@@ -242,6 +257,7 @@ test('provider failure refreshes once without retrying or changing merge mode', 
     expect(mergeCalls[0].force).toBe(true);
     expect(refreshes).toBe(1);
     expect(button('Force merge').disabled).toBe(false);
+    expect(completions).toEqual([]);
 });
 
 for (const failed of [false, true]) {
@@ -256,6 +272,7 @@ for (const failed of [false, true]) {
         expect(document.querySelector('[role="dialog"]')).toBeNull();
         await act(async () => { gate.release(); }); await settle();
         expect(refreshes).toBe(0);
+        expect(completions).toEqual([]);
         expect(mergeCalls).toHaveLength(1);
     });
 }
