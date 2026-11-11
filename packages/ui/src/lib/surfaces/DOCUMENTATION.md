@@ -21,11 +21,9 @@ Full-screen extension pages are separate from this rail registry. `contributes.p
   `availability: 'has-content'` surfaces (chat) are hidden from the
   rail until a tab of their mode exists, and stay visible for as long as one
   does — they must not disappear while in use.
-- The `tasks` surface is `always` so the entry point stays discoverable; its
-  pane (`components/chat/native-tasks/NativeTasksPane`) explains when the
-  selected session has no native Claude task data instead of hiding the rail
-  icon per session. On mobile the same pane is the workspace drawer's `tasks`
-  tab, which does not consume this registry.
+- Native task information is shown in Work Status. The retired `tasks` mode
+  and its mobile workspace tab have no entry point. Persisted task tabs,
+  dimensions and placements are discarded by the known-mode validator.
 - In classic layout, `defaultWidth` is the panel width in px, used until the user resizes that
   surface (640 for the wide surfaces, 540 for most, 480 for Git; guest panels
   540). A resize is remembered in px per mode in
@@ -230,8 +228,9 @@ waits for the release.
 ## Tracker
 
 The `pr` surface is the Tracker. Its strip lists instances like files and
-chats do. The first tab is always the checked-out branch's: its pull or merge
-request, or the form that creates one (`views/PullRequestView.tsx`). It sorts
+chats do. The first tab is always the workspace's repository view
+(`views/PullRequestView.tsx`): project PRs and CI runs on GitHub, or the branch
+workflow on GitLab. It sorts
 first, has no close button, and `closeContextPanelTabs` and the per-surface
 tab budget never remove it. Every other tab is one issue, pull or merge
 request or tracker item (`views/TrackerItemView.tsx`), opened by

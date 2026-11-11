@@ -4,7 +4,6 @@ import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 import { useSessionNativeChecklist } from '@/sync/session-native-checklist';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
-import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
 const SECTION_ID = 'taskChecklist';
 
@@ -19,8 +18,7 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
   const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'deepseek' || backend === 'antigravity'));
-  const state = useSessionNativeChecklist(sessionId, directory, { enabled, visible: false });
-  const { openTasks } = useWorkStatusNavigation(directory);
+  const state = useSessionNativeChecklist(sessionId, directory, { enabled });
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   const items = snapshot?.items ?? [];
   useReportWorkStatusPresence(SECTION_ID, enabled);
@@ -46,8 +44,6 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
             label={item.subject}
             selectableLabel
             value={<WorkStatusValue tone={ITEM_STATUS_TONES[item.status]}>{t(ITEM_STATUS_KEYS[item.status])}</WorkStatusValue>}
-            onClick={() => openTasks('checklist')}
-            ariaLabel={t('chat.nativeTasks.openChecklist')}
           />
         ))}
       </div>

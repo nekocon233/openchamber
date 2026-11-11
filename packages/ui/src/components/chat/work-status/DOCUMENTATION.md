@@ -128,91 +128,57 @@ whose children are already in a store at mount, these load asynchronously, so
 that edge would fire on every open and override a reader who collapsed them.
 `defaultExpanded` decides the first view and the stored section state decides
 every one after it.
-Checklist and todo row text is selectable and copyable in both the summary and
-task pane. Selecting a row label does not open the task pane; an ordinary click
-or keyboard activation still does.
+Checklist and todo row text is selectable and copyable. Native task rows are
+read-only; their contents remain in Work Status.
 
-### Native task surface
+### Native task sections
 
-Antigravity also uses the checklist pane and summary when the server advertises
+Antigravity uses the checklist section when the server advertises
 `tasks.checklist`. Completed structured calls own the list; an older session
 without a call explains that no checklist has been recorded. Updates follow
-events, opening and manual refresh, with no Antigravity idle polling. Checklist
-rows remain read-only. Its CLI adapter owns receipt and history validation.
+events, opening and reconnect, with no Antigravity idle polling. Its CLI adapter
+owns receipt and history validation.
 
-Antigravity exposes saved background commands in the same task pane and
-background section. These `history` snapshots show recorded outcomes and
-bounded output, with unknown status when completion was not retained. They
-do not establish live activity or expose per-task Stop. The native adapter
-publishes an updated snapshot when a turn settles; manual refresh and reconnect
-also reload it, with no idle polling.
-Task identifiers and command output retain left-to-right order in RTL layouts.
+Antigravity saved background commands appear in the background section. These
+`history` snapshots show recorded outcomes, with unknown status when completion
+was not retained. They do not establish live activity. The native adapter
+publishes an updated snapshot when a turn settles and reconnect reloads it.
 
-Native tasks live in the context panel's `tasks` rail surface
-(`lib/surfaces/registry.ts`, mode `tasks`), rendered by
-`components/chat/native-tasks/NativeTasksPane` inside `ContextPanel`.
-DeepSeek exposes its committed task checklist in this pane and the work-status
-summary. Both follow the executing source of a unified conversation. A later
-turn without a new task write retains the last list; an explicit empty write
-clears it. Older hosts without the capability report unsupported.
-`WorkStatusChecklistSection`, `WorkStatusBackgroundTasksSection`,
-`WorkStatusPlanSection` and `WorkStatusTodosSection` open that surface on their
-matching tab via `openContextSurface` plus the shared tab selection in
-`native-tasks/task-ui-store`; a section's item rows are what carries that
-action, so the plan document, which is not a list, has none. All three remain
-discoverable when empty, failed or unsupported. `taskChecklist` is one section
-and one settings checkbox across Claude, DeepSeek and Codex. `WorkStatusPanel`
-mounts only the reader for the executing source backend; both checklist readers
-share its title, visibility, position and expanded state. Codex steps retain their
-process-only semantics and the separate plan-document section. Stable
-`taskChecklist`, `taskBackground` and `taskPlan` ids use the existing section
-visibility and order settings. Legacy `taskTodos` preferences normalize to
+DeepSeek exposes its committed task checklist through the same section. It
+follows the executing source of a unified conversation. A later turn without a
+new task write retains the last list; an explicit empty write clears it. Older
+hosts without the capability report unsupported.
+
+`taskChecklist` is one section and one settings checkbox across Claude, DeepSeek
+and Codex. `WorkStatusPanel` mounts only the reader for the executing backend;
+both checklist readers share its title, visibility, position and expanded state.
+Codex steps retain their process-only semantics and separate plan document.
+Stable `taskChecklist`, `taskBackground` and `taskPlan` ids retain their section
+visibility and order preferences. Legacy `taskTodos` preferences normalize to
 `taskChecklist`: the first saved position wins, either hidden entry hides the
 combined section, and canonical expansion wins over the legacy value. UI-store
 v27 rewrites these preferences on hydration; settings hydration uses the same
-section-id normalization. Settings search
-opens `WorkStatusSectionsDialog` directly and highlights its mounted checkbox,
-even when the panel cannot fit.
-
-On phones and tablets the workspace drawer hosts the same pane as its `tasks`
-tab (`apps/MobileWorkspaceDrawer.tsx`), passing `onClose` so a child-session
-link can dismiss the drawer. The pane follows the currently selected session;
-Codex and non-native sessions get an explicit explanation instead of a task
-list, and VS Code's unsupported native runtime reports unsupported. An older
-server without task capability flags shows an explicit unsupported message
-rather than a successful empty list. There is no header button or dialog:
-the rail, the drawer tab and the work-status summaries are the entry points.
+normalization. Settings search opens `WorkStatusSectionsDialog` and highlights
+its mounted checkbox, even when the panel cannot fit.
 
 The sync modules own task records, source identity, revisions and refresh. The
-UI does not infer activity from checklist status or recent task outcomes. An
-unknown background snapshot shows known edge details while explaining that CLI
-task information is still pending; it supplies no active count. Ambient tasks
-remain visible without contributing to session activity. Non-active records keep
-the CLI's reported status; disappearing from the full set does not mean success.
+UI derives activity from the live task channel. An unknown background snapshot
+shows known records without supplying an active count. Ambient tasks remain
+visible without contributing to session activity. Non-active records retain the
+CLI's reported status; disappearing from a full set does not imply success.
 
-Summaries load once and follow events without polling. An external process's
-shared-list edits without an event become visible when the user opens the task
-surface or refreshes it. Only the visible surface requests the owner's shared
-45-second refresh. Hidden panel content unmounts through the panel's existing
-visibility gate. Checklist partial and failed reads retain valid records with
-explicit incomplete or stale feedback; they never become an empty success.
+Sections load once and follow events without polling. Hidden Work Status
+content unmounts through its existing visibility gate. Partial and failed reads
+retain valid records with incomplete or stale feedback. Reopening Work Status
+retries a failed read. Native task data APIs and whole-session Stop retain their
+existing contracts.
 
-Task details mount on expansion. Output loads on that edge and on manual
-refresh, at the server's 256 KiB limit. Collapse, surface close, session/runtime
-switch or query-generation replacement aborts the read and rejects late results.
-Truncation, empty output, unavailable output and failure remain distinct. The UI
-never accepts output paths or polls every task log.
+### Why tasks stay in Work Status
 
-Stop calls only `nativeAgents.stopTask` for the captured session, directory,
-query generation and task id. Server-provided `canStop` and `outputAvailable`
-flags already include CLI capability and current-query eligibility. Pending and
-accepted stop requests disable repeated submission, including after changing the
-pane's tabs or closing and reopening the surface. This temporary UI state holds
-one scope only, prunes non-active task ids when snapshots confirm them, and
-clears on session/runtime or query changes. Acceptance means waiting for CLI
-confirmation, not a locally invented terminal result. Failure remains on the
-affected task and can be retried.
-The existing whole-session Stop action is unchanged.
+The standalone task window duplicated the lists already visible here. Keeping
+one display removes that navigation step and leaves task progress beside the
+session's other live status.
+
 
 ### Antigravity quota and activity
 
