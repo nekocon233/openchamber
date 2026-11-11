@@ -1342,7 +1342,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'Le titre est requis',
   'gitView.pullRequest.createHint': 'Créez et gérez les PR depuis cette branche.',
   "gitView.pullRequest.tab.project": "PR du projet",
-  "gitView.pullRequest.tab.branch": "Branche actuelle",
   "gitView.pullRequest.backToList": "Retour à la liste",
   "gitView.pullRequest.searchLimit": "La recherche affiche au maximum {count} résultats. Affinez votre recherche pour obtenir des résultats plus précis.",
   "gitView.pullRequest.serverRestartRequired": "Redémarrez OpenChamber pour charger la mise à jour du serveur permettant de consulter les PR du projet, puis réessayez.",

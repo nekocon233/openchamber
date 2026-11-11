@@ -1554,7 +1554,6 @@ export const dict: Record<I18nKey, string> = {
   'gitView.pr.toast.titleRequired': '標題不能為空',
   'gitView.pullRequest.createHint': '從目前分支建立並管理 Pull Request。',
   "gitView.pullRequest.tab.project": "專案 PR",
-  "gitView.pullRequest.tab.branch": "目前分支",
   "gitView.pullRequest.backToList": "返回清單",
   "gitView.pullRequest.searchLimit": "搜尋最多顯示 {count} 筆結果。請縮小搜尋範圍以查看更精確的符合項目。",
   "gitView.pullRequest.serverRestartRequired": "請重新啟動 OpenChamber 以載入專案 PR 的伺服器更新，然後重試。",

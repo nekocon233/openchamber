@@ -28,7 +28,7 @@ interface CiRunOpenRequest {
 
 export type PullRequestReturnLocation = {
   workspaceDirectory: string;
-} & ({ tab: 'project' | 'branch' } | { tab: 'linked'; request: PullRequestOpenRequest });
+} & ({ tab: 'project' } | { tab: 'linked'; request: PullRequestOpenRequest });
 
 type PullRequestDiffOrigin = PullRequestReturnLocation & {
   reference: GitHubPullReference;

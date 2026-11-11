@@ -1537,7 +1537,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'Title is required',
   'gitView.pullRequest.createHint': 'Create and manage pull requests from this branch.',
   "gitView.pullRequest.tab.project": "Project PRs",
-  "gitView.pullRequest.tab.branch": "Current branch",
   "gitView.pullRequest.backToList": "Back to list",
   "gitView.pullRequest.searchLimit": "Search shows up to {count} results. Narrow your search to see more specific matches.",
   "gitView.pullRequest.serverRestartRequired": "Restart OpenChamber to load the server update for project PRs, then retry.",

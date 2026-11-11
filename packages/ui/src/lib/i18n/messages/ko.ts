@@ -1536,7 +1536,6 @@ export const dict: Record<I18nKey, string> = {
   'gitView.pr.toast.titleRequired': '제목 필수',
   'gitView.pullRequest.createHint': '이 브랜치에서 PR을 만들고 관리하세요.',
   "gitView.pullRequest.tab.project": "프로젝트 PR",
-  "gitView.pullRequest.tab.branch": "현재 브랜치",
   "gitView.pullRequest.backToList": "목록으로 돌아가기",
   "gitView.pullRequest.searchLimit": "검색 결과는 최대 {count}개까지 표시됩니다. 검색 범위를 좁혀 더 정확한 결과를 확인하세요.",
   "gitView.pullRequest.serverRestartRequired": "프로젝트 PR을 위한 서버 업데이트를 적용하려면 OpenChamber를 다시 시작한 후 재시도하세요.",

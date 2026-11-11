@@ -1355,7 +1355,6 @@ export const dict = {
   'gitView.pr.toast.titleRequired': 'Titel is verplicht',
   'gitView.pullRequest.createHint': 'Maak en beheer pull requests vanuit deze branch.',
   "gitView.pullRequest.tab.project": "Project-PR’s",
-  "gitView.pullRequest.tab.branch": "Huidige branch",
   "gitView.pullRequest.backToList": "Terug naar de lijst",
   "gitView.pullRequest.searchLimit": "De zoekopdracht toont maximaal {count} resultaten. Verfijn je zoekopdracht voor specifiekere resultaten.",
   "gitView.pullRequest.serverRestartRequired": "Start OpenChamber opnieuw om de serverupdate voor project-PR’s te laden en probeer het opnieuw.",

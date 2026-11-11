@@ -111,7 +111,7 @@ export const BranchPullRequestPreview: React.FC<{
                         context={context}
                         projectOwnsDirectory={() => true}
                         currentDirectory={workspaceDirectory}
-                        returnTo={{ workspaceDirectory, tab: 'branch' }}
+                        returnTo={{ workspaceDirectory, tab: 'project' }}
                     />
                 )}
             />

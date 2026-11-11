@@ -253,9 +253,9 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     expect(left.querySelector('input')).toBe(search);
     expect(search.value).toBe('retained search');
 
-    const branch = [...left.querySelectorAll('button')].find(button => button.textContent === 'Current branch');
-    if (!branch) throw new Error('Missing branch tab');
-    await act(async () => branch.click());
+    const ci = [...left.querySelectorAll('button')].find(button => button.textContent === 'CI runs');
+    if (!ci) throw new Error('Missing CI tab');
+    await act(async () => ci.click());
     await openLink(90);
     await until(() => Boolean(releaseSlow));
     const releaseOld = takeSlowRead();
@@ -264,7 +264,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     await act(async () => releaseOld());
     expect(linked()?.textContent).not.toContain('other PR 90');
     await goBack();
-    expect(branch.getAttribute('aria-selected')).toBe('true');
+    expect(ci.getAttribute('aria-selected')).toBe('true');
 
     await openLink(99);
     await until(() => Boolean(linked()?.querySelector('[role="alert"]')));

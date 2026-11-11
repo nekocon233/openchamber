@@ -52,11 +52,11 @@ export const PullRequestBackButton: React.FC<{
         url: restored.url, failureBehavior: 'manual',
       });
       else {
-        if (owner.project) useWorkspaceViewStateStore.getState().update('pullRequest', owner.project, previous => ({ ...previous, tab: restored.tab === 'branch' ? 'branch' : 'project' }));
+        if (owner.project) useWorkspaceViewStateStore.getState().update('pullRequest', owner.project, previous => ({ ...previous, tab: 'project' }));
         const workspace = workspaceViewKey(runtimeKey, restored.workspaceDirectory);
         if (workspace) useWorkspaceViewStateStore.getState().update('pullRequest', workspace, previous => ({ ...previous, link: null }));
         const list = workspaceViewKey(runtimeKey, restored.workspaceDirectory, workspaceRepositoryIdentity(context));
-        if (list && restored.tab === 'project') useWorkspaceViewStateStore.getState().update('pullRequest', list, previous => ({ ...previous, selectedUrl: restored.url }));
+        if (list) useWorkspaceViewStateStore.getState().update('pullRequest', list, previous => ({ ...previous, selectedUrl: restored.url }));
       }
       setSaved(null);
       openPullRequest(restored.workspaceDirectory);
