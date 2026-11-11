@@ -64,17 +64,19 @@ ordinary merge control, with the same selected method and a destructive
 confirmation. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
 owns capability gating, target changes and pending-operation behavior.
 
-Confirmed merges and approvals in project details and linked previews invoke
-their existing Back action. This includes administrator merges and approvals
-that submit a pending review. The navigation clears only the completed detail's
-selection and preserves the destination's retained state. Cancelled, failed or
-queued merges, partial reviews with unposted text, comments and change requests
-stay in the detail. Board and current-branch navigation keep their existing
-behavior. Completion is scoped to the active detail's repository/account, PR and
-runtime generation; hidden or replaced details cannot navigate another view.
+Merges and approvals in project details and linked previews invoke their existing
+Back action immediately after dispatch. This includes administrator merges and
+approvals that submit a pending review. Confirmation still precedes merge
+dispatch; cancelling it keeps the detail. The navigation clears only the
+submitted detail's selection and preserves the destination's retained state.
+Progress and results continue in repository-labelled toasts after returning;
+failures and queued merges never navigate again. Unposted text remains saved.
+Comments, requests for changes, board and current-branch navigation keep their
+existing behavior. The [shared action owner](../sourceBoard/DOCUMENTATION.md)
+retains pending locks and runtime-scoped feedback across detail unmounts.
 
 Selecting a PR replaces the list with its preview in the same panel. Back
-restores the query, filters and scroll position; the two tabs retain the list
+restores the query, filters and scroll position; the tabs retain the list
 state too. Every detail and action names the selected item's repository and
 number. `ContextSurfacePanes` retains every visited PR tab by runtime and
 workspace directory in its `MovablePane`. Switching conversations or projects,
@@ -87,7 +89,7 @@ unmounted, so opening one project does not fetch the others.
 uses that workspace's selected Git repository, and the current-branch view
 resolves its metadata from the owning workspace. Worktree metadata from another
 conversation cannot supply its base branch. React
-Activity boundaries hide the window and each of its two tabs without dropping
+Activity boundaries hide the window and its tabs without dropping
 their component or DOM state; their effects and subscriptions disconnect while
 hidden. The repository binding observer stays outside those boundaries so its
 authority remains current and hiding the last reader cannot clear the view's
@@ -132,13 +134,12 @@ source binding. Its return action restores the original conversation or draft
 and opens the original workspace's pane. Draft identity, prepared chat directory,
 attached context and directory-scoped model choices survive the round trip.
 
-### Why completion uses the existing Back action
+### Why dispatch uses the existing Back action
 
-A successful mutation receipt supplies completion; list refresh or a PR leaving
-a category does not. Reusing Back preserves each entry point's destination and
-clears its saved selection even when refreshing provider data fails. Pending
-review submission notifies the view before re-reading review state, while its
-mutation lock stays held through that read.
+Dispatch lets the user continue through other PRs while a result is pending.
+Reusing Back preserves each entry point's destination and clears its saved
+selection. Receipts still own draft acknowledgement and data refresh; they
+cannot trigger a second navigation or close another PR.
 
 ## Usage statistics
 

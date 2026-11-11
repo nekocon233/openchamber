@@ -17,6 +17,7 @@ import { PendingReviewSection } from './PendingReviewSection';
 import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
 import { workspaceReplyDraftKey } from '@/stores/useWorkspaceDraftStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { beginPullRequestAction, usePullRequestActionPending } from './pullRequestActions';
 
 type Busy = 'comment' | 'thread' | ReviewVerdict | null;
 
@@ -34,9 +35,9 @@ export const SourceBoardReply: React.FC<{
      * was read.
      */
     onRefresh: () => void;
-    onApproved?: () => void;
+    onApproveSubmitted?: () => void;
     active?: boolean;
-}> = ({ reference, context, onRefresh, onApproved, active = true }) => {
+}> = ({ reference, context, onRefresh, onApproveSubmitted, active = true }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const replyInput = useWorkspaceDraft(workspaceReplyDraftKey(getRuntimeKey(), context, reference));
@@ -45,6 +46,8 @@ export const SourceBoardReply: React.FC<{
 
     const label = referenceNumberLabel(reference);
     const project = { owner: reference.sourceRepo.owner, name: reference.sourceRepo.repo };
+    const pullRef = reference.kind === 'pull' ? { owner: project.owner, repo: project.name, number: reference.number } : null;
+    const actionPending = usePullRequestActionPending(context, pullRef);
     const openPull = reference.kind === 'pull' && reference.state === 'open' ? reference : null;
     const pendingReview = usePendingReview(context, reference.kind === 'pull' && reference.provider !== 'gitlab'
         ? { owner: reference.sourceRepo.owner, repo: reference.sourceRepo.repo, number: reference.number } : null, active);
@@ -54,7 +57,7 @@ export const SourceBoardReply: React.FC<{
     const shortcut = formatShortcutForDisplay('mod+enter');
 
     const comment = async () => {
-        if (!body || busy) return;
+        if (!body || busy || actionPending) return;
         setBusy('comment');
         try {
             const payload = { ...context, idempotencyKey: newMutationKey(), target: { project, number: reference.number }, body };
@@ -71,7 +74,7 @@ export const SourceBoardReply: React.FC<{
     };
 
     const startThread = async () => {
-        if (!body || busy || !canStartThread) return;
+        if (!body || busy || actionPending || !canStartThread) return;
         setBusy('thread');
         try {
             await sourceControl.changeRequestStartThread({ ...context, idempotencyKey: newMutationKey(), target: { project, number: reference.number }, body });
@@ -87,7 +90,12 @@ export const SourceBoardReply: React.FC<{
 
     const review = async (verdict: ReviewVerdict) => {
         if (!openPull || busy) return;
+        const action = beginPullRequestAction(context, pullRef);
+        if (!action) return;
         setBusy(verdict);
+        let toastId: string | number | undefined;
+        const background = verdict === 'approve' && Boolean(onApproveSubmitted);
+        const feedbackReference = background ? `${project.owner}/${project.name} ${label}` : label;
         try {
             const input: ReviewChangeRequestInput = {
                 ...context,
@@ -97,23 +105,30 @@ export const SourceBoardReply: React.FC<{
                 verdict,
             };
             if (body) input.body = body;
-            const receipt = await sourceControl.changeRequestReview(input);
+            const request = sourceControl.changeRequestReview(input);
+            if (background) {
+                toastId = action.showProgress(t('sourceBoard.reply.toast.approving', { reference: feedbackReference }));
+                onApproveSubmitted?.();
+            }
+            const receipt = await request;
             const doneKey = verdict === 'approve' ? 'sourceBoard.reply.toast.approved' : 'sourceBoard.reply.toast.changesRequested';
             if (body && !receipt.result.commented) {
                 // GitLab posts the verdict and its text separately: the verdict
                 // stands, the text stays here to post again.
-                toast.warning(t(doneKey, { reference: label }), { description: t('sourceBoard.reply.toast.textNotPosted') });
+                if (action.isRuntimeCurrent()) toast.warning(t(doneKey, { reference: feedbackReference }), { id: toastId, description: t('sourceBoard.reply.toast.textNotPosted') });
             } else {
                 replyInput.acknowledge(text);
-                toast.success(t(doneKey, { reference: label }));
+                if (action.isRuntimeCurrent()) toast.success(t(doneKey, { reference: feedbackReference }), { id: toastId });
             }
-            onRefresh();
-            if (verdict === 'approve' && (!body || receipt.result.commented)) onApproved?.();
+            if (action.isRuntimeCurrent()) onRefresh();
         } catch (error) {
-            toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference: label }), { description: error instanceof Error ? error.message : String(error) });
-            onRefresh();
+            if (action.isRuntimeCurrent()) {
+                toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference: feedbackReference }), { id: toastId, description: error instanceof Error ? error.message : String(error) });
+                onRefresh();
+            }
         } finally {
             setBusy(null);
+            action.finish();
         }
     };
 
@@ -129,7 +144,7 @@ export const SourceBoardReply: React.FC<{
 
     return (
       <>
-        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onApproved={onApproved} />
+        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onApproveSubmitted={onApproveSubmitted} />
         <section className="flex flex-col gap-2 border-t border-border/60 pt-4" aria-label={t('sourceBoard.reply.label')}>
             <Textarea
                 value={text}
@@ -137,7 +152,7 @@ export const SourceBoardReply: React.FC<{
                 onKeyDown={onKeyDown}
                 placeholder={t('sourceBoard.reply.placeholder')}
                 aria-label={t('sourceBoard.reply.label')}
-                disabled={busy !== null}
+                disabled={busy !== null || actionPending}
                 rows={3}
             />
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -147,12 +162,12 @@ export const SourceBoardReply: React.FC<{
                             size="sm"
                             variant="outline"
                             onClick={() => void review('request-changes')}
-                            disabled={busy !== null || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}
+                            disabled={busy !== null || actionPending || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}
                         >
                             {busyIcon('request-changes') ?? <Icon name="file-edit" className="size-3.5" />}
                             {t('sourceBoard.reply.requestChanges')}
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => void review('approve')} disabled={busy !== null || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}>
+                        <Button size="sm" variant="outline" onClick={() => void review('approve')} disabled={busy !== null || actionPending || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}>
                             {busyIcon('approve') ?? <Icon name="check" className="size-3.5" />}
                             {t('sourceBoard.reply.approve')}
                         </Button>
@@ -163,7 +178,7 @@ export const SourceBoardReply: React.FC<{
                         size="sm"
                         variant="outline"
                         onClick={() => void startThread()}
-                        disabled={busy !== null || !body}
+                        disabled={busy !== null || actionPending || !body}
                         title={t('sourceBoard.reply.startThreadHint')}
                     >
                         {busyIcon('thread') ?? <Icon name="chat-thread" className="size-3.5" />}
@@ -173,7 +188,7 @@ export const SourceBoardReply: React.FC<{
                 <Button
                     size="sm"
                     onClick={() => void comment()}
-                    disabled={busy !== null || !body}
+                    disabled={busy !== null || actionPending || !body}
                     title={t('sourceBoard.reply.commentShortcut', { shortcut })}
                 >
                     {busyIcon('comment') ?? <Icon name="chat-1" className="size-3.5" />}

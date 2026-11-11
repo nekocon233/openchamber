@@ -22,10 +22,10 @@ export const PullRequestDetail: React.FC<{
   pullStatus: CachedValue<GitHubPullStatus | null>;
   now: number;
   onChanged: () => Promise<void>;
-  onCompleted: () => void;
+  onSubmitted: () => void;
   refreshDetail: () => Promise<void>;
   pullLinks: React.ReactNode;
-}> = ({ reference, context, githubDetail, pullStatus, now, onChanged, onCompleted, refreshDetail, pullLinks }) => {
+}> = ({ reference, context, githubDetail, pullStatus, now, onChanged, onSubmitted, refreshDetail, pullLinks }) => {
   const { sourceControl } = useRuntimeAPIs();
   const owner = workspaceViewKey(getRuntimeKey(), context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
   const runtimeGeneration = getRuntimeEndpointGeneration();
@@ -34,8 +34,8 @@ export const PullRequestDetail: React.FC<{
     activeOwner.current = owner;
     return () => { activeOwner.current = null; };
   }, [owner]);
-  const complete = () => {
-    if (owner && activeOwner.current === owner && getRuntimeEndpointGeneration() === runtimeGeneration) onCompleted();
+  const submitted = () => {
+    if (owner && activeOwner.current === owner && getRuntimeEndpointGeneration() === runtimeGeneration) onSubmitted();
   };
   const [checksOpen, setChecksOpen] = useWorkspaceViewState('pullRequest', owner, 'checksOpen');
   const attachments = usePullAttachments(reference);
@@ -63,13 +63,13 @@ export const PullRequestDetail: React.FC<{
         onIncludeDiffChange={() => undefined}
         now={now}
         onRefresh={refreshFromHost}
-        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} onMerged={complete} />}
+        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} onMergeSubmitted={submitted} />}
         onOpenChecks={() => setChecksOpen(true)}
         commentAttachments={{ onAttach: attachments.attachComment, onAttachAll: attachments.attachComments }}
         threadActions={threadActions}
         labelsControl={<SourceBoardLabels reference={reference} context={context} onChanged={refresh} />}
         reviewersControl={<SourceBoardReviewers pull={reference} detail={githubDetail} context={context} onChanged={refresh} />}
-        reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} onApproved={complete} />}
+        reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} onApproveSubmitted={submitted} />}
         pullLinks={pullLinks}
       />
       <SourceBoardChecksDialog pull={reference} context={context} open={checksOpen} onOpenChange={setChecksOpen} onAttachFailed={attachments.attachFailedChecks} />

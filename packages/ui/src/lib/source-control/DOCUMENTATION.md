@@ -90,8 +90,11 @@ open non-draft PR. Confirmation explains the current account's permission limit.
 
 A synchronous lock covers confirmation and dispatch for both merge actions.
 Changing the runtime generation, repository/account context or displayed PR
-target cancels the old confirmation. Late completions cannot publish feedback
-or refresh another target. The server revalidates authority and the confirmed
+target cancels the old confirmation. PR-pane actions return on dispatch and
+retain [background ownership](../../components/sourceBoard/DOCUMENTATION.md).
+Their captured repository feedback and refresh survive detail unmounts within
+the same runtime generation. Board and branch completions remain view-scoped.
+The server revalidates authority and the confirmed
 head before writing. Web, Electron and mobile use the server adapter. GitLab
 and VS Code advertise no force-merge support and reject explicit force calls.
 

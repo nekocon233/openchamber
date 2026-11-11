@@ -30,6 +30,7 @@ import { useEffectiveGitDirectory } from '@/stores/useGitStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSession } from '@/sync/sync-context';
 import { newMutationKey } from './mutationKey';
+import { beginPullRequestAction, usePullRequestActionPending } from './pullRequestActions';
 
 /** A project the board acts in: its id and root folder. */
 export type SourceBoardProject = { id: string; path: string };
@@ -96,7 +97,7 @@ type SourceBoardActionsProps = {
     context: SourceControlReadContext | null;
     onStartWorktree: (project: SourceBoardProject, selection: ReferencePickerSelection) => void;
     onChanged: () => void;
-    onMerged?: () => void;
+    onMergeSubmitted?: () => void;
     /** Left of the actions: where a Linear issue's session starts, with a way to pick another project. */
     startIn?: React.ReactNode;
     /** The phone shell's page closes once a session starts; the desktop page closes on its own. */
@@ -121,7 +122,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
     runtimeKey: string;
     runtimeGeneration: number;
     mergePending: React.RefObject<boolean>;
-}> = ({ item, project, context, onStartWorktree, onChanged, onMerged, startIn, onLeave, runtimeKey, runtimeGeneration, mergePending }) => {
+}> = ({ item, project, context, onStartWorktree, onChanged, onMergeSubmitted, startIn, onLeave, runtimeKey, runtimeGeneration, mergePending }) => {
     const { t } = useI18n();
     const { sourceControl, linear } = useRuntimeAPIs();
     const confirmation = useConfirmDialog();
@@ -137,6 +138,8 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
 
     const pull: GitHubPullReference | null = item.source === 'github' && item.reference.kind === 'pull' ? item.reference : null;
     const openPull = pull && pull.state === 'open' ? pull : null;
+    const pullRef = pull ? { owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo, number: pull.number } : null;
+    const actionPending = usePullRequestActionPending(context, pullRef);
     // Asked only while an open PR is previewed: nothing else merges.
     const capabilities = useCapabilities(openPull ? context : null);
 
@@ -189,12 +192,16 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
     const merge = async (force = false) => {
         if (mergePending.current || !openPull || !context || !mergeMethod || !isCurrent()) return;
         if (force && (context.provider !== 'github' || capabilities?.forceMergeChangeRequests !== true || !openPull.headSha?.trim())) return;
+        const action = beginPullRequestAction(context, pullRef);
+        if (!action) return;
         const mutationContext = { ...context };
         const target = { project: { owner: openPull.sourceRepo.owner, name: openPull.sourceRepo.repo }, number: openPull.number, head: openPull.head, base: openPull.base, headSha: openPull.headSha };
         mergePending.current = true;
         setBusy(force ? 'force-merge' : 'merge');
         let dispatched = false;
-        let merged = false;
+        let toastId: string | number | undefined;
+        const feedbackReference = onMergeSubmitted ? `${openPull.sourceRepo.owner}/${openPull.sourceRepo.repo} ${reference}` : reference;
+        const canReport = () => onMergeSubmitted ? action.isRuntimeCurrent() : isCurrent();
         try {
             const approved = await confirmation.confirm({
                 title: t(force ? 'sourceBoard.merge.forceConfirmTitle' : context.provider === 'gitlab' ? 'sourceBoard.merge.confirmTitle.gitlab' : 'sourceBoard.merge.confirmTitle.github', { reference }),
@@ -213,20 +220,20 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                 method: mergeMethod,
             };
             if (force) input.force = true;
-            const receipt = await sourceControl.changeRequestMerge(input);
-            if (!isCurrent()) return;
-            merged = receipt.result.merged;
-            if (merged) toast.success(t('sourceBoard.toast.merged', { reference }));
-            else toast.message(t('sourceBoard.toast.notMerged', { reference }), { description: receipt.result.message });
+            const request = sourceControl.changeRequestMerge(input);
+            if (onMergeSubmitted) toastId = action.showProgress(t('sourceBoard.toast.merging', { reference: feedbackReference }));
+            onMergeSubmitted?.();
+            const receipt = await request;
+            if (!canReport()) return;
+            if (receipt.result.merged) toast.success(t('sourceBoard.toast.merged', { reference: feedbackReference }), { id: toastId });
+            else toast.message(t('sourceBoard.toast.notMerged', { reference: feedbackReference }), { id: toastId, description: receipt.result.message });
         } catch (error) {
-            if (isCurrent()) toast.error(t('sourceBoard.toast.mergeFailed', { reference }), { description: error instanceof Error ? error.message : String(error) });
+            if (canReport()) toast.error(t('sourceBoard.toast.mergeFailed', { reference: feedbackReference }), { id: toastId, description: error instanceof Error ? error.message : String(error) });
         } finally {
             mergePending.current = false;
             if (mounted.current) setBusy(null);
-            if (dispatched && isCurrent()) {
-                onChanged();
-                if (merged) onMerged?.();
-            }
+            action.finish();
+            if (dispatched && canReport()) onChanged();
         }
     };
 
@@ -259,7 +266,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                         variant="outline"
                         // Two halves of one control: the inner corners stay square.
                         className={cn(mergeMethods.length > 1 && 'rounded-e-none')}
-                        disabled={busy !== null}
+                        disabled={busy !== null || actionPending}
                         onClick={() => void merge()}
                     >
                         <Icon name={busy === 'merge' ? 'loader-4' : 'git-merge'} className={busy === 'merge' ? 'size-3.5 animate-spin' : 'size-3.5'} />
@@ -272,7 +279,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                                     size="sm"
                                     variant="outline"
                                     className="rounded-s-none border-s-0 px-1.5"
-                                    disabled={busy !== null}
+                                    disabled={busy !== null || actionPending}
                                     aria-label={t('sourceBoard.merge.methodAria')}
                                 >
                                     <Icon name="arrow-down-s" className="size-3.5" />
@@ -290,7 +297,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                 </div>
             ) : null}
             {openPull && !openPull.draft && mergeMethod && context?.provider === 'github' && capabilities?.forceMergeChangeRequests === true ? (
-                <Button size="sm" variant="destructive" disabled={busy !== null || !openPull.headSha?.trim()} onClick={() => void merge(true)}>
+                <Button size="sm" variant="destructive" disabled={busy !== null || actionPending || !openPull.headSha?.trim()} onClick={() => void merge(true)}>
                     <Icon name={busy === 'force-merge' ? 'loader-4' : 'git-merge'} className={busy === 'force-merge' ? 'size-3.5 animate-spin' : 'size-3.5'} />
                     {t('sourceBoard.actions.forceMerge')}
                 </Button>
