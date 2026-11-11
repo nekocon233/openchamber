@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './pt-BR.settings';
@@ -56,6 +57,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict: Record<I18nKey, string> = {
   "chat.toolPart.checklist.title": "Atualizar lista de tarefas",
   "chat.toolPart.checklist.empty": "Lista de tarefas limpa.",
+  ...ciRunsI18n['pt-BR'],
   ...diffFileFilterI18n['pt-BR'],
   "agents.combinations.loadFailed": "Não foi possível carregar as combinações. Reabra as configurações e tente novamente.",
   "agents.combinations.saveFailed": "Não foi possível salvar as combinações. Tente novamente.",

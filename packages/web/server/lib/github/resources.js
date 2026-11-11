@@ -39,6 +39,7 @@ import {
 } from './reference-search.js';
 import { fetchReviewState } from './review-draft.js';
 import { readGitHubPendingReview } from './pending-reviews.js';
+import { listGitHubCiRuns, readGitHubCiJobLog, readGitHubCiRunDetail } from './ci-runs.js';
 
 /**
  * GitHub's bound reads behind the shared route shell: change request status,
@@ -987,6 +988,57 @@ export function createGitHubResources({
         endpoint,
         requestedRemoteName,
       });
+    },
+
+    listCiRuns: async ({ session, directory, page = 1, status = 'all', branch = '', query = '', remote }) => {
+      const { octokit } = accountOf(session);
+      const identity = identityOf(session);
+      const { rateLimit } = await load();
+      const { repo } = await resolveRepo(directory, remote);
+      if (!repo) throw new Error(`Unable to resolve GitHub repo from git remote "${remote}"`);
+      const host = repo.host ?? session.instance;
+      if (rateLimit.isGitHubRateLimited(host)) throw rateLimited();
+      try {
+        return await listGitHubCiRuns({ octokit, identity, repo, page, status, branch, query });
+      } catch (error) {
+        throw await statusFailure(error, host);
+      }
+    },
+
+    ciRunDetail: async ({ session, directory, runId, remote }) => {
+      const { octokit } = accountOf(session);
+      const identity = identityOf(session);
+      const { rateLimit } = await load();
+      const { repo } = await resolveRepo(directory, remote);
+      if (!repo) throw new Error(`Unable to resolve GitHub repo from git remote "${remote}"`);
+      const host = repo.host ?? session.instance;
+      if (rateLimit.isGitHubRateLimited(host)) throw rateLimited();
+      try {
+        return await readGitHubCiRunDetail({ octokit, identity, repo, runId });
+      } catch (error) {
+        throw await statusFailure(error, host);
+      }
+    },
+
+    ciJobLog: async ({ session, directory, jobId, remote }) => {
+      const { octokit } = accountOf(session);
+      const identity = identityOf(session);
+      const { rateLimit, octokit: octokitModule } = await load();
+      const { repo } = await resolveRepo(directory, remote);
+      if (!repo) throw new Error(`Unable to resolve GitHub repo from git remote "${remote}"`);
+      const host = repo.host ?? session.instance;
+      if (rateLimit.isGitHubRateLimited(host)) throw rateLimited();
+      try {
+        return await readGitHubCiJobLog({
+          octokit,
+          identity,
+          repo,
+          jobId,
+          downloadJobLog: octokitModule.downloadGitHubJobLog,
+        });
+      } catch (error) {
+        throw await statusFailure(error, host);
+      }
     },
   });
 }

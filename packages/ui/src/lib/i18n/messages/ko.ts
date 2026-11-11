@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './ko.settings';
@@ -56,6 +57,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict: Record<I18nKey, string> = {
   "chat.toolPart.checklist.title": "작업 목록 업데이트",
   "chat.toolPart.checklist.empty": "작업 목록을 비웠습니다.",
+  ...ciRunsI18n['ko'],
   ...diffFileFilterI18n['ko'],
   "agents.combinations.loadFailed": "조합을 불러오지 못했습니다. 설정을 다시 열고 재시도하세요.",
   "agents.combinations.saveFailed": "조합을 저장하지 못했습니다. 다시 시도하세요.",

@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './de.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -55,6 +56,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "Aufgabenliste aktualisieren",
   "chat.toolPart.checklist.empty": "Aufgabenliste geleert.",
+  ...ciRunsI18n['de'],
   ...diffFileFilterI18n['de'],
   "agents.combinations.loadFailed": "Kombinationen konnten nicht geladen werden. Öffne die Einstellungen erneut und versuche es noch einmal.",
   "agents.combinations.saveFailed": "Kombinationen konnten nicht gespeichert werden. Versuche es erneut.",

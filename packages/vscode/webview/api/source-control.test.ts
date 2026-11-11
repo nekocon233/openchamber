@@ -97,6 +97,9 @@ describe('createVSCodeSourceControlAPI', () => {
     assert.equal(status.status, 'unsupported');
     await assert.rejects(api.issuesList(readContext, { page: 1 }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
     await assert.rejects(api.changeRequestsList(readContext, { page: 1 }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
+    await assert.rejects(api.ciRunsList(readContext, { page: 1 }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
+    await assert.rejects(api.ciRunDetail(readContext, '1001'), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
+    await assert.rejects(api.ciJobLog(readContext, '5001'), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
     await assert.rejects(api.changeRequestMerge({ ...readContext, idempotencyKey: 'force-merge',
       target: { project: { owner: 'team', name: 'repo' }, number: 5, head: 'feature', base: 'main', headSha: 'abc123' },
       method: 'squash', force: true,

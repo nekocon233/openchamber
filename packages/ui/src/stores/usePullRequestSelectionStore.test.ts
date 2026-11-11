@@ -54,6 +54,20 @@ describe('pull request pane requests', () => {
     store.resetOpenRequests();
     expect(usePullRequestSelectionStore.getState().openRequests.size).toBe(0);
   });
+
+  test('queues one-shot CI run navigation requests and clears competing link opens', () => {
+    const store = usePullRequestSelectionStore.getState();
+    const key = pullRequestNavigationKey(getRuntimeKey(), '/workspace');
+    store.requestOpen(opening);
+    expect(store.requestCiRun('/workspace/', '/other/repo/', '12345')).toBe(true);
+    expect(usePullRequestSelectionStore.getState().openRequests.has(key)).toBe(false);
+    const ciReq = usePullRequestSelectionStore.getState().ciOpenRequests.get(key);
+    expect(ciReq).toMatchObject({ workspaceDirectory: '/workspace', sourceDirectory: '/other/repo', runId: '12345' });
+    expect(store.requestCiRun('/workspace', '/other/repo', 'abc')).toBe(false);
+    if (!ciReq) throw new Error('Expected CI run request');
+    store.settleCiRunRequest(ciReq);
+    expect(usePullRequestSelectionStore.getState().ciOpenRequests.has(key)).toBe(false);
+  });
 });
 
 describe('pull request diff requests', () => {

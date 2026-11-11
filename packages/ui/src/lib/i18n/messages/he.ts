@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './he.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -54,6 +55,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "עדכון רשימת המשימות",
   "chat.toolPart.checklist.empty": "רשימת המשימות נוקתה.",
+  ...ciRunsI18n['he'],
   ...diffFileFilterI18n['he'],
   "agents.combinations.loadFailed": "לא ניתן לטעון שילובים. יש לפתוח את ההגדרות מחדש ולנסות שוב.",
   "agents.combinations.saveFailed": "לא ניתן לשמור שילובים. יש לנסות שוב.",

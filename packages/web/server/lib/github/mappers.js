@@ -192,6 +192,23 @@ export function requireGitHubWorkflowJobs(value) {
   return jobs;
 }
 
+export function requireGitHubWorkflowRun(value, message = 'GitHub returned an invalid workflow run') {
+  if (!isPlainObject(value)
+    || !Number.isSafeInteger(value.id) || value.id <= 0
+    || !Number.isSafeInteger(value.run_number) || value.run_number <= 0
+    || !isProviderString(value.status) || !value.status.trim()
+    || !isProviderString(value.head_sha) || !value.head_sha.trim()
+    || !isProviderString(value.html_url) || !value.html_url.trim()) {
+    throw invalidProviderPayload(message);
+  }
+  return value;
+}
+
+export function requireGitHubWorkflowRuns(value) {
+  const runs = requireProviderArray(value, 'GitHub returned invalid workflow runs');
+  return runs.map((run) => requireGitHubWorkflowRun(run));
+}
+
 const text = (value) => (isProviderString(value) && value ? value : undefined);
 const httpUrl = (value) => {
   if (!isProviderString(value) || !value) return undefined;
@@ -368,7 +385,7 @@ export function mapWorkflowJob({ runId, jobId, job, detailsUrl }) {
     if (jobId) result.jobId = String(jobId);
     return result;
   }
-  return {
+  const result = {
     runId: String(runId),
     jobId: String(job.id),
     url: httpUrl(job.html_url),
@@ -386,6 +403,86 @@ export function mapWorkflowJob({ runId, jobId, job, detailsUrl }) {
       }))
       : undefined,
   };
+  if (text(job.runner_name)) result.runnerName = job.runner_name;
+  return result;
+}
+
+/** A workflow job mapped directly as a CIRun for the CI run detail view. */
+export function mapWorkflowJobAsCiRun(job, { runId, workflowName, annotations } = {}, identity) {
+  const result = {
+    ...identity,
+    id: String(job.id),
+    name: job.name,
+    status: text(job.status) ?? 'unknown',
+    conclusion: job.conclusion === undefined ? null : (text(job.conclusion) ?? null),
+    job: mapWorkflowJob({
+      runId,
+      jobId: job.id,
+      job: { ...job, workflow_name: text(job.workflow_name) ?? workflowName },
+      detailsUrl: job.html_url,
+    }),
+  };
+  if (text(job.started_at)) result.startedAt = job.started_at;
+  if (text(job.completed_at)) result.completedAt = job.completed_at;
+  const detailsUrl = httpUrl(job.html_url);
+  if (detailsUrl) result.detailsUrl = detailsUrl;
+  if (annotations && annotations.length > 0) result.annotations = annotations;
+  return result;
+}
+
+const sameRepoPullUrl = (rawUrl, project) => {
+  if (!isProviderString(rawUrl) || !rawUrl) return true;
+  const match = rawUrl.match(/\/repos\/([^/]+)\/([^/]+)\/pulls\/\d+$/i);
+  if (!match) return false;
+  return match[1].toLowerCase() === project.owner.toLowerCase()
+    && match[2].toLowerCase() === project.name.toLowerCase();
+};
+
+/** A workflow run from `actions.listWorkflowRunsForRepo` or `actions.getWorkflowRun`. */
+export function mapWorkflowRun(raw, project, identity, { jobSummary, completedAtOverride } = {}) {
+  const validated = requireGitHubWorkflowRun(raw);
+  const url = httpUrl(validated.html_url);
+  if (!url) throw invalidProviderPayload('GitHub returned an invalid workflow run URL');
+  const headline = text(validated.head_commit?.message)?.split('\n')[0]?.trim();
+  const workflowName = text(validated.name) || text(validated.path) || 'Workflow';
+  const title = text(validated.display_title) || headline || workflowName;
+  const result = {
+    ...identity,
+    id: String(validated.id),
+    runNumber: validated.run_number,
+    runAttempt: Number.isSafeInteger(validated.run_attempt) && validated.run_attempt > 0 ? validated.run_attempt : 1,
+    project,
+    workflowName,
+    title,
+    status: validated.status,
+    conclusion: validated.conclusion === undefined ? null : (text(validated.conclusion) ?? null),
+    event: text(validated.event) || 'unknown',
+    headBranch: text(validated.head_branch) ?? null,
+    headSha: validated.head_sha,
+    url,
+    actor: mapOptionalUser(validated.actor ?? validated.triggering_actor, identity),
+    pullRequests: Array.isArray(validated.pull_requests)
+      ? validated.pull_requests.flatMap((pr) => {
+        if (!isPlainObject(pr) || !Number.isSafeInteger(pr.number) || pr.number <= 0) return [];
+        if (!sameRepoPullUrl(pr.url, project)) return [];
+        return [{
+          number: pr.number,
+          url: `https://${identity.instance}/${project.owner}/${project.name}/pull/${pr.number}`,
+        }];
+      })
+      : [],
+  };
+  if (headline) result.commitMessage = headline;
+  if (text(validated.created_at)) result.createdAt = validated.created_at;
+  if (text(validated.updated_at)) result.updatedAt = validated.updated_at;
+  const startedAt = text(validated.run_started_at) || text(validated.created_at);
+  if (startedAt) result.startedAt = startedAt;
+  if (validated.status === 'completed') {
+    const completedAt = text(completedAtOverride) || text(validated.updated_at);
+    if (completedAt) result.completedAt = completedAt;
+  }
+  if (jobSummary) result.jobSummary = mapCI(jobSummary)?.summary;
+  return result;
 }
 
 /** Annotations of a failed check run, from `checks.listAnnotations`; ones without a message are dropped. */

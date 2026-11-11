@@ -4,6 +4,7 @@ import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { useShowOnBoard } from '@/components/sourceBoard/openOnBoard';
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import type { PrVisualSummary } from '@/stores/useGitHubPrStatusStore';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { selectNativeTasksTab, type NativeTasksTab } from '../native-tasks/task-ui-store';
 
@@ -82,12 +83,23 @@ export const useWorkStatusNavigation = (directory: string | null) => {
     openContextSurface(directory, 'tasks');
   }, [directory, mobileActions, openContextSurface]);
 
+  const openCiRun = React.useCallback((runId: string, sourceDirectory?: string) => {
+    if (!directory) return;
+    usePullRequestSelectionStore.getState().requestCiRun(directory, sourceDirectory ?? directory, runId);
+    if (mobileActions) {
+      mobileActions.openWorkspaceTab('pr');
+      return;
+    }
+    openContextPanelTab(directory, { mode: 'pr' });
+  }, [directory, mobileActions, openContextPanelTab]);
+
   return {
     isMobileHost: mobileActions !== null,
     openContext,
     openGit,
     openChanges,
     openChangeRequest,
+    openCiRun,
     openTasks,
   };
 };

@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './en.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -55,6 +56,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "Update checklist",
   "chat.toolPart.checklist.empty": "Checklist cleared.",
+  ...ciRunsI18n['en'],
   ...diffFileFilterI18n['en'],
   "agents.combinations.loadFailed": "Could not load combinations. Reopen settings and retry.",
   "agents.combinations.saveFailed": "Could not save combinations. Retry.",

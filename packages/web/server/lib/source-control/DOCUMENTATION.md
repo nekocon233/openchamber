@@ -84,6 +84,15 @@ executor. A provider without that contract answers
 `change-request-pending-review` kind and digest. Other review routes are
 unchanged.
 
+Under capability `ci`, the shell registers bound read routes `GET /ci/runs`,
+`GET /ci/run`, and `GET /ci/job-log`, dispatched to `resources.listCiRuns`,
+`resources.ciRunDetail`, and `resources.ciJobLog`. Providers whose descriptor
+disables `ci` or whose implementation omits those methods answer `501` with
+`SOURCE_CONTROL_CAPABILITY_UNSUPPORTED`. `provider-read-cache` caches `/ci/runs`
+for 15 seconds and `/ci/run` for 10 seconds, clearing both on `scope=lists`
+refresh, provider mutations, and turn completion; `/ci/job-log` is read directly
+on demand without entering the shared JSON cache.
+
 ## Repository binding routes
 
 - `GET /api/source-control/repository-context?directory=...` returns canonical repository identity, config revision, and redacted remotes.

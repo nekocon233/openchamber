@@ -37,6 +37,12 @@ const timeoutFetch = (url, options = {}, host = '') => {
 // credential digest plus URL so raw tokens do not become cache keys.
 const ETAG_CACHE_MAX_ENTRIES = 300;
 const etagCache = new Map();
+const octokitAuthMeta = new WeakMap();
+const DEFAULT_JOB_LOG_MAX_BYTES = 128 * 1024;
+const MAX_JOB_LOG_STREAM_BYTES = 32 * 1024 * 1024;
+const JOB_LOG_TIMEOUT_MS = 15_000;
+// Strip ANSI CSI/OSC sequences so plain-text viewers and agent attachments read cleanly.
+const ANSI_ESCAPE_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 
 const rememberEtag = (key, etag, body, headers) => {
   etagCache.delete(key);
@@ -114,7 +120,173 @@ export function createOctokit(token, accountId = '', host = '') {
   Object.defineProperty(octokit, 'openChamberHost', {
     value: normalizedHost || 'github.com',
   });
+  octokitAuthMeta.set(octokit, {
+    token,
+    accountId,
+    host: normalizedHost || 'github.com',
+    onUnauthorized: null,
+  });
   return octokit;
+}
+
+const setOctokitUnauthorizedHandler = (octokit, handler) => {
+  const meta = octokitAuthMeta.get(octokit);
+  if (meta) meta.onUnauthorized = handler;
+};
+
+const readBoundedTailBuffer = async (stream, maxBytes) => {
+  if (!stream || !(stream.getReader instanceof Function)) {
+    return { bytes: new Uint8Array(0), truncated: false };
+  }
+  const reader = stream.getReader();
+  const chunks = [];
+  let bufferedBytes = 0;
+  let totalBytes = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      if (chunk.byteLength === 0) continue;
+      totalBytes += chunk.byteLength;
+      if (chunk.byteLength >= maxBytes) {
+        chunks.length = 0;
+        chunks.push(chunk.subarray(chunk.byteLength - maxBytes));
+        bufferedBytes = maxBytes;
+        truncated = true;
+      } else {
+        chunks.push(chunk);
+        bufferedBytes += chunk.byteLength;
+        while (bufferedBytes > maxBytes && chunks.length > 0) {
+          truncated = true;
+          const overflow = bufferedBytes - maxBytes;
+          const first = chunks[0];
+          if (first.byteLength <= overflow) {
+            chunks.shift();
+            bufferedBytes -= first.byteLength;
+          } else {
+            chunks[0] = first.subarray(overflow);
+            bufferedBytes -= overflow;
+          }
+        }
+      }
+      if (totalBytes >= MAX_JOB_LOG_STREAM_BYTES) {
+        truncated = true;
+        await reader.cancel().catch(() => {});
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(bufferedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes: out, truncated };
+};
+
+const sanitizeJobLogText = (rawText, truncated) => {
+  let cleaned = String(rawText ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(ANSI_ESCAPE_RE, '');
+  if (truncated) {
+    const newline = cleaned.indexOf('\n');
+    if (newline >= 0 && newline < 512) {
+      cleaned = cleaned.slice(newline + 1);
+    }
+  }
+  return cleaned;
+};
+
+/**
+ * Download the tail of a GitHub Actions job log without forwarding the GitHub
+ * credential across redirects (preserving enterprise host isolation).
+ */
+export async function downloadGitHubJobLog(octokit, {
+  owner,
+  repo,
+  jobId,
+  maxBytes = DEFAULT_JOB_LOG_MAX_BYTES,
+  fetchImpl = fetch,
+  timeoutMs = JOB_LOG_TIMEOUT_MS,
+}) {
+  if (octokit?.downloadJobLog instanceof Function) {
+    return octokit.downloadJobLog({ owner, repo, jobId, maxBytes });
+  }
+  const meta = octokitAuthMeta.get(octokit);
+  if (!meta?.token) {
+    throw Object.assign(new Error('GitHub account is unavailable'), { status: 401 });
+  }
+  const apiBase = meta.host === 'github.com' ? 'https://api.github.com' : `https://${meta.host}/api/v3`;
+  const apiUrl = `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${encodeURIComponent(String(jobId))}/logs`;
+  const initial = await fetchImpl(apiUrl, {
+    method: 'GET',
+    redirect: 'manual',
+    headers: {
+      Authorization: `token ${meta.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (initial.status === 401) {
+    forgetGhCliToken(meta.host === 'github.com' ? '' : meta.host, meta.token);
+    const error = Object.assign(new Error('GitHub token unauthorized'), { status: 401 });
+    await meta.onUnauthorized?.(error);
+    throw error;
+  }
+  if (initial.status === 404 || initial.status === 410) {
+    await initial.body?.cancel?.().catch(() => {});
+    return { available: false, content: '', truncated: false };
+  }
+
+  let logResponse = initial;
+  if (initial.status >= 300 && initial.status < 400) {
+    await initial.body?.cancel?.().catch(() => {});
+    const location = initial.headers.get('location');
+    if (!location) {
+      throw Object.assign(new Error('GitHub job log redirect was missing Location'), { status: 502 });
+    }
+    let redirectUrl;
+    try {
+      redirectUrl = new URL(location, apiUrl);
+    } catch {
+      throw Object.assign(new Error('GitHub job log redirect URL was invalid'), { status: 502 });
+    }
+    if (redirectUrl.protocol !== 'https:') {
+      throw Object.assign(new Error('GitHub job log redirect must use HTTPS'), { status: 502 });
+    }
+    logResponse = await fetchImpl(redirectUrl.toString(), {
+      method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (logResponse.status === 404 || logResponse.status === 410) {
+      await logResponse.body?.cancel?.().catch(() => {});
+      return { available: false, content: '', truncated: false };
+    }
+  }
+
+  if (!logResponse.ok) {
+    await logResponse.body?.cancel?.().catch(() => {});
+    throw Object.assign(new Error(`Failed to fetch GitHub job log (${logResponse.status})`), {
+      status: logResponse.status,
+    });
+  }
+
+  const { bytes, truncated } = await readBoundedTailBuffer(logResponse.body, maxBytes);
+  const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  return {
+    available: true,
+    content: sanitizeJobLogText(decoded, truncated),
+    truncated,
+  };
 }
 
 export function getOctokitCacheIdentity(octokit) {
@@ -228,7 +400,7 @@ export async function getOctokitForHost(host, options = {}) {
   const { stored, ghCliActive, ghToken } = await resolveHostCredential(normalizedHost);
   if (ghCliActive && ghToken) {
     const octokit = createOctokit(ghToken, '', normalizedHost);
-    octokit.hook.error('request', async (error) => {
+    const handleUnauthorized = async (error) => {
       const identity = { provider: 'github', instance: normalizedHost, accountId: null };
       error.sourceControlIdentity = identity;
       error.sourceControlPersistedAccount = false;
@@ -236,13 +408,17 @@ export async function getOctokitForHost(host, options = {}) {
         await options.onUnauthorized?.(identity, false);
         error.sourceControlInvalidated = true;
       }
+    };
+    setOctokitUnauthorizedHandler(octokit, handleUnauthorized);
+    octokit.hook.error('request', async (error) => {
+      await handleUnauthorized(error);
       throw error;
     });
     return octokit;
   }
   if (!stored) return null;
   const octokit = createOctokit(stored.accessToken, stored.accountId, normalizedHost);
-  octokit.hook.error('request', async (error) => {
+  const handleUnauthorized = async (error) => {
     const identity = { provider: 'github', instance: normalizedHost, accountId: stored.accountId };
     error.sourceControlIdentity = identity;
     error.sourceControlPersistedAccount = true;
@@ -250,6 +426,10 @@ export async function getOctokitForHost(host, options = {}) {
       await options.onUnauthorized?.(identity, true);
       error.sourceControlInvalidated = true;
     }
+  };
+  setOctokitUnauthorizedHandler(octokit, handleUnauthorized);
+  octokit.hook.error('request', async (error) => {
+    await handleUnauthorized(error);
     throw error;
   });
   return octokit;
@@ -260,7 +440,7 @@ export async function getOctokitForAccountId(accountId, options = {}) {
   if (auth) {
     const host = auth.host;
     const octokit = createOctokit(auth.accessToken, accountId, host);
-    octokit.hook.error('request', async (error) => {
+    const handleUnauthorized = async (error) => {
       const identity = { provider: 'github', instance: host, accountId };
       error.sourceControlIdentity = identity;
       error.sourceControlPersistedAccount = true;
@@ -268,6 +448,10 @@ export async function getOctokitForAccountId(accountId, options = {}) {
         await options.onUnauthorized?.(identity, true);
         error.sourceControlInvalidated = true;
       }
+    };
+    setOctokitUnauthorizedHandler(octokit, handleUnauthorized);
+    octokit.hook.error('request', async (error) => {
+      await handleUnauthorized(error);
       throw error;
     });
     return {
@@ -308,7 +492,7 @@ export async function getOctokitForAccountId(accountId, options = {}) {
       await options.onUnauthorized?.({ provider: 'github', instance: host, accountId }, false);
       return null;
     }
-    octokit.hook.error('request', async (error) => {
+    const handleCliUnauthorized = async (error) => {
       const identity = { provider: 'github', instance: host, accountId };
       error.sourceControlIdentity = identity;
       error.sourceControlPersistedAccount = false;
@@ -316,6 +500,10 @@ export async function getOctokitForAccountId(accountId, options = {}) {
         await options.onUnauthorized?.(identity, false);
         error.sourceControlInvalidated = true;
       }
+    };
+    setOctokitUnauthorizedHandler(octokit, handleCliUnauthorized);
+    octokit.hook.error('request', async (error) => {
+      await handleCliUnauthorized(error);
       throw error;
     });
     return {

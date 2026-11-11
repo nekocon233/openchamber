@@ -351,6 +351,12 @@ export interface ProviderImplementation {
     pendingReview?(input: ReadInput & { project: ProjectSelector; number: number }): Promise<Json>;
     /** Statuses of listed change requests (`owner/repo#n[@host]`, comma separated); read with each host's account, so no session. */
     referenceStatuses?(input: Omit<ReadInput, 'session'> & { pulls: string }): Promise<Json>;
+    /** Capability `ci`: workflow runs of the bound primary repository. */
+    listCiRuns?(input: ReadInput & { page: number; status: 'all' | 'active' | 'failure' | 'success'; branch?: string; query?: string }): Promise<Json>;
+    /** Capability `ci`: one workflow run, its jobs, steps and failure annotations. */
+    ciRunDetail?(input: ReadInput & { runId: number }): Promise<Json>;
+    /** Capability `ci`: bounded plain-text tail of one workflow job's log. */
+    ciJobLog?(input: ReadInput & { jobId: number }): Promise<Json>;
   };
   mutations?: {
     /** The shell route suffixes (`/pr/create`, ...) this provider performs. */

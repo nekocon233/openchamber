@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './ja.settings';
@@ -56,6 +57,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict: Record<I18nKey, string> = {
   "chat.toolPart.checklist.title": "タスクリストを更新",
   "chat.toolPart.checklist.empty": "タスクリストをクリアしました。",
+  ...ciRunsI18n['ja'],
   ...diffFileFilterI18n['ja'],
   "agents.combinations.loadFailed": "組み合わせを読み込めませんでした。設定を開き直して再試行してください。",
   "agents.combinations.saveFailed": "組み合わせを保存できませんでした。再試行してください。",

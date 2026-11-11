@@ -99,4 +99,7 @@ export const createVSCodeSourceControlAPI = (): SourceControlAPI => ({
   references: unsupported,
   referenceDetail: unsupported,
   changeRequestListStatuses: unsupported,
+  ciRunsList: unsupported,
+  ciRunDetail: unsupported,
+  ciJobLog: unsupported,
 });

@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import type { I18nKey } from './en';
 import { settingsDict } from './zh-CN.settings';
@@ -56,6 +57,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict: Record<I18nKey, string> = {
   "chat.toolPart.checklist.title": "更新任务清单",
   "chat.toolPart.checklist.empty": "任务清单已清空。",
+  ...ciRunsI18n['zh-CN'],
   ...diffFileFilterI18n['zh-CN'],
   "agents.combinations.loadFailed": "无法加载组合，请重新打开设置后重试。",
   "agents.combinations.saveFailed": "无法保存组合，请重试。",

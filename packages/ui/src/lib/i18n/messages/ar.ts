@@ -1,3 +1,4 @@
+import { ciRunsI18n } from './ci-runs.i18n';
 import { diffFileFilterI18n } from './diff-file-filter.i18n';
 import { settingsDict } from './ar.settings';
 import { unifiedConversationsI18n } from './unified-conversations.i18n';
@@ -54,6 +55,7 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 export const dict = {
   "chat.toolPart.checklist.title": "تحديث قائمة المهام",
   "chat.toolPart.checklist.empty": "تم مسح قائمة المهام.",
+  ...ciRunsI18n['ar'],
   ...diffFileFilterI18n['ar'],
   "agents.combinations.loadFailed": "تعذر تحميل المجموعات. أعد فتح الإعدادات وحاول مجددًا.",
   "agents.combinations.saveFailed": "تعذر حفظ المجموعات. حاول مجددًا.",
