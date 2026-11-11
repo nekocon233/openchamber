@@ -2,6 +2,7 @@ import { encodeAntigravitySessionId, NATIVE_PROVIDER_ANTIGRAVITY } from '../ids.
 import { buildSessionRecord, unknownError } from '../records.js';
 import { agySubagentReferences } from './protocol.js';
 import { createAntigravityLiveProjection } from './projector.js';
+import { agyMissingFileDetails } from './tools.js';
 
 /** Child ownership is established by the parent's live subagent_info, never
  * by an arbitrary conversation id or a persisted running flag. */
@@ -108,12 +109,14 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
         publisher.status(directory, child.session.id, 'busy');
       }
       const tool = await child.projection.applyStep(step, now(), async () => {});
+      const settledTool = tool && ['DONE', 'ERROR', 'INVALID'].includes(step.state);
       if (step.step_type === 'agent_response' && step.state === 'DONE') {
         refreshReasoning(child);
         child.reasoningAfterTool = true;
-      } else if ((child.reasoningAfterTool && ['tool', 'subagent'].includes(step.step_type)
-        && ['DONE', 'ERROR', 'INVALID'].includes(step.state))
-        || (tool?.tool === 'edit' && tool.state.status === 'completed' && !tool.state.metadata?.diff)) {
+      } else if (settledTool && agyMissingFileDetails(tool)) {
+        refreshReasoning(child);
+        child.reasoningAfterTool = agyMissingFileDetails(child.projection.toolPart(tool.id));
+      } else if (settledTool && child.reasoningAfterTool) {
         child.reasoningAfterTool = false;
         refreshReasoning(child);
       }

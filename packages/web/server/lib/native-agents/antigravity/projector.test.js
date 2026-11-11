@@ -488,6 +488,61 @@ describe('Antigravity final response reconciliation', () => {
     expect(part.state.metadata).not.toHaveProperty('diff');
   });
 
+  it('recovers completed write content while preserving truncated markers and encoded preview flags', async () => {
+    const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: 'user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: '' }, 2, async () => {});
+    await projection.applyStep({ step_index: 2, step_type: 'tool', state: 'DONE',
+      tool_info: { name: 'write_file', parameters: { Path: '/repo/created.ts', Content: 'partial', args_truncated: true }, output: '', error: null },
+    }, 3, async () => {});
+    await projection.applyStep({ step_index: 3, step_type: 'tool', state: 'DONE',
+      tool_info: { name: 'write_file', parameters: { Path: '/repo/malformed.ts' }, output: '', error: null },
+    }, 4, async () => {});
+    await projection.applyStep({ step_index: 4, step_type: 'tool', state: 'INVALID',
+      tool_info: { name: 'write_file', parameters: { Path: '/repo/rejected.ts' }, output: 'Rejected', error: null },
+    }, 5, async () => {});
+    expect(projection.records()[1].parts[1].state.metadata.nativeInputTruncated).toBe(true);
+    projection.restoreGenerations([{ step_index: 1, status: 'DONE', truncated_fields: ['tool_calls'], tool_calls: [
+      { name: 'write_file', args: { Path: '/repo/created.ts', Content: 'shortened' }, argumentsEncoded: false },
+      { name: 'write_file', args: { Path: '/repo/malformed.ts' }, argumentsEncoded: false },
+      { name: 'write_file', args: { Path: '/repo/rejected.ts', Content: 'ignored' }, argumentsEncoded: false },
+    ] }]);
+    expect(projection.records()[1].parts[1].state.input.content).toBe('partial');
+    expect(projection.records()[1].parts[1].state.metadata.nativeInputTruncated).toBe(true);
+    projection.restoreGenerations([{ step_index: 1, status: 'DONE', tool_calls: [
+      { name: 'write_file', args: { Path: '/repo/created.ts', Content: 'export const ready = true;\n' }, argumentsEncoded: false },
+      { name: 'write_file', args: { Path: '/repo/malformed.ts' }, argumentsEncoded: false },
+      { name: 'write_file', args: { Path: '/repo/rejected.ts', Content: 'ignored' }, argumentsEncoded: false },
+    ] }]);
+    const tools = projection.records()[1].parts.filter((part) => part.type === 'tool');
+    expect(tools[0].state.input).toEqual({ filePath: '/repo/created.ts', content: 'export const ready = true;\n' });
+    expect(tools[0].state.metadata).not.toHaveProperty('nativeInputTruncated');
+    expect(tools[1].state.input.content).toBeUndefined();
+    expect(tools[2].state).toMatchObject({ status: 'error', error: 'Rejected' });
+    expect(tools[2].state.input.content).toBeUndefined();
+
+    const saved = projectAntigravityHistory({
+      sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo', bindings: new Map(),
+      entries: [
+        { step_index: 0, type: 'USER_INPUT', content: 'Write' },
+        { step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', truncated_fields: [], tool_calls: [
+          { name: 'write_file', args: { Path: '/repo/truncated.ts', Content: 'part', args_truncated: true }, argumentsEncoded: false },
+          { name: 'write_file', args: { Path: '"/repo/preview.ts"', Content: '"whole"', truncated: 'false', truncated_fields: '[]' }, argumentsEncoded: true },
+          { name: 'call_mcp_tool', args: { ServerName: 'demo', ToolName: 'save', Arguments: { content: { nested: 1 } } }, argumentsEncoded: false },
+        ] },
+        { step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Created file.' },
+        { step_index: 3, type: 'GENERIC', status: 'DONE', content: 'Created file.' },
+        { step_index: 4, type: 'GENERIC', status: 'DONE', content: 'Saved.' },
+      ],
+    });
+    expect(saved[1].parts[0].state.metadata.nativeInputTruncated).toBe(true);
+    expect(saved[1].parts[1].state.metadata.nativeInputTruncated).toBeUndefined();
+    expect(saved[1].parts[1].state.input).toMatchObject({ filePath: '/repo/preview.ts', content: 'whole' });
+    expect(saved[1].parts[2].state.metadata.nativeInputTruncated).toBeUndefined();
+  });
+
   it('fills partial streamed arguments from complete history without republishing unchanged records', async () => {
     const events = [];
     const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',

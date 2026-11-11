@@ -82,11 +82,24 @@ export const mapAgyTool = (call) => {
 
 const replacement = z.object({ oldString: z.string(), newString: z.string() });
 const excerptInput = z.object({ filePath: z.string(), edits: z.array(replacement).optional(), oldString: z.string().optional(), newString: z.string().optional() });
+const writeContentInput = z.object({ content: z.string() });
+const rawArgsRecord = z.record(z.string(), z.unknown());
 const linesOf = (text) => text === '' ? [] : text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+const fileArgTools = new Set(['edit_file', 'replace_file_content', 'multi_replace_file_content', 'write_file', 'write_to_file']);
+
+/** True when the step, call, or file-tool arguments carry native truncation markers. */
+export const agyToolInputTruncated = (call, inputTruncated = false) => {
+  if (inputTruncated || agyInteractionTruncated(call)) return true;
+  if (!fileArgTools.has(call?.name)) return false;
+  const parsedArgs = rawArgsRecord.safeParse(call?.args);
+  if (!parsedArgs.success) return true;
+  const { parameters } = decodeAgyToolArguments(parsedArgs.data, call.argumentsEncoded ?? true);
+  return agyInteractionTruncated(parameters);
+};
 
 /** These are replacement excerpts, with no recorded position in the whole file. */
 export const agyEditMetadata = (call, { completed, inputTruncated = false }) => {
-  if (!completed || inputTruncated || agyInteractionTruncated(call) || agyInteractionTruncated(call.args)) return {};
+  if (!completed || agyToolInputTruncated(call, inputTruncated)) return {};
   const mapped = mapAgyTool(call);
   if (mapped.tool !== 'edit') return {};
   const parsed = excerptInput.safeParse(mapped.input);
@@ -109,18 +122,28 @@ export const agyEditMetadata = (call, { completed, inputTruncated = false }) => 
   return files.length ? { ...fileDiffMetadata(files), nativeDiffScope: 'replacement' } : {};
 };
 
-/** Fill a completed stream edit from complete native arguments, preserving its outcome and timing. */
-export const withAgyEditDetails = (live, saved) => {
-  if (live?.type !== 'tool' || saved?.type !== 'tool' || live.tool !== 'edit' || saved.tool !== 'edit'
+/** Completed stream edits and writes carry only a path or truncated text until complete native arguments are read. */
+export const agyMissingFileDetails = (part) => part?.type === 'tool'
+  && part.state.status === 'completed'
+  && part.state.metadata?.nativeBackend === 'antigravity'
+  && ((part.tool === 'edit' && !part.state.metadata?.diff)
+    || (part.tool === 'write' && (!writeContentInput.safeParse(part.state.input).success || Boolean(part.state.metadata?.nativeInputTruncated))));
+
+/** Fill a completed stream edit or write from complete native arguments, preserving its outcome and timing. */
+export const withAgyFileDetails = (live, saved) => {
+  if (!agyMissingFileDetails(live) || saved?.type !== 'tool' || live.tool !== saved.tool
     || live.id !== saved.id || live.messageID !== saved.messageID
-    || live.state.status !== 'completed' || saved.state.status !== 'completed'
-    || live.state.metadata?.nativeBackend !== 'antigravity' || live.state.metadata?.diff
-    || saved.state.metadata?.nativeInputTruncated || !saved.state.metadata?.diff) return live;
-  const { files, diff, nativeDiffScope } = saved.state.metadata;
-  const metadata = { ...live.state.metadata, files, diff, nativeDiffScope };
+    || saved.state.status !== 'completed' || saved.state.metadata?.nativeInputTruncated) return live;
+  const input = saved.state.input?.filePath ? saved.state.input : { ...live.state.input, ...saved.state.input };
+  if (live.tool === 'edit') {
+    if (!saved.state.metadata?.diff) return live;
+    const { files, diff, nativeDiffScope } = saved.state.metadata;
+    const metadata = { ...live.state.metadata, files, diff, nativeDiffScope };
+    delete metadata.nativeInputTruncated;
+    return { ...live, state: { ...live.state, input, metadata } };
+  }
+  if (!writeContentInput.safeParse(saved.state.input).success) return live;
+  const metadata = { ...live.state.metadata };
   delete metadata.nativeInputTruncated;
-  return { ...live, state: { ...live.state,
-    input: { ...live.state.input, ...saved.state.input },
-    metadata,
-  } };
+  return { ...live, state: { ...live.state, input, metadata } };
 };

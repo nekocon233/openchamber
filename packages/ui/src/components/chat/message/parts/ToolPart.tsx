@@ -1479,9 +1479,18 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         [currentDirectory, input, metadata, part.tool],
     );
 
+    const isWriteLikeTool = isWriteTool(part.tool);
+    const writtenInput = React.useMemo(
+        () => (isWriteLikeTool && metadata?.nativeInputTruncated !== true ? writeInputOf(input) : null),
+        [input, isWriteLikeTool, metadata?.nativeInputTruncated],
+    );
     const inputTextContent = React.useMemo(() => {
         if (!input || typeof input !== 'object' || Object.keys(input).length === 0) {
             return '';
+        }
+
+        if (isWriteLikeTool) {
+            return writtenInput?.content ?? '';
         }
 
         if ('command' in input && typeof input.command === 'string' && isShellTool(part.tool)) {
@@ -1493,27 +1502,19 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         }
 
         return formatInputForDisplay(input, part.tool);
-    }, [input, part.tool]);
+    }, [input, isWriteLikeTool, part.tool, writtenInput]);
     const hasInputText = !hideToolInputPreview && inputTextContent.trim().length > 0;
     // `null` keeps the plain text renderer for a result OpenCode formatted differently.
     const webSearchOutput = React.useMemo(
         () => (isWebSearchTool(part.tool) && state.status === 'completed' && hasStringOutput ? parseWebSearchOutput(outputString) : null),
         [hasStringOutput, outputString, part.tool, state.status],
     );
-    const isWriteLikeTool = isWriteTool(part.tool);
     const writeLikeInputPatch = React.useMemo(() => {
-        if (!isWriteLikeTool || !hasInputText) {
+        if (!writtenInput || !hasInputText || state.status === 'error') {
             return undefined;
         }
-        const filePath = typeof input?.filePath === 'string'
-            ? input.filePath
-            : typeof input?.file_path === 'string'
-                ? input.file_path
-                : typeof input?.path === 'string'
-                    ? input.path
-                    : undefined;
-        return buildWritePreviewPatch(filePath, inputTextContent);
-    }, [hasInputText, input?.filePath, input?.file_path, input?.path, inputTextContent, isWriteLikeTool]);
+        return buildWritePreviewPatch(writtenInput.filePath, writtenInput.content);
+    }, [hasInputText, state.status, writtenInput]);
 
     React.useEffect(() => {
         setDiffViewMode(defaultDiffViewMode);
@@ -1788,7 +1789,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
             );
         }
 
-        if (isWriteLikeTool) {
+        if (isWriteLikeTool && hasInputText) {
             return null;
         }
 
@@ -2212,9 +2213,13 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
             ? parseDiffStats(metadata)
             : null;
     }, [metadata, normalizedPartTool, recordedChanges]);
+    const writtenInput = React.useMemo(
+        () => (isWriteTool(normalizedPartTool) && metadata?.nativeInputTruncated !== true ? writeInputOf(input) : null),
+        [input, metadata?.nativeInputTruncated, normalizedPartTool],
+    );
     const writeLineCount = React.useMemo(() => {
-        return isWriteTool(normalizedPartTool) ? parseWriteLineCount(input) : null;
-    }, [input, normalizedPartTool]);
+        return writtenInput && !isError ? parseWriteLineCount(input) : null;
+    }, [input, isError, writtenInput]);
     // The concise transcript shows under a file change what it did. A write
     // whose metadata carries no diff shows its content as added.
     const conciseDiffFiles = React.useMemo((): ConciseDiffFile[] => {
@@ -2223,9 +2228,10 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         const entries = getDiffPatchEntries(metadata, getToolFallbackDiff(metadata), (path) => getRelativePath(path, currentDirectory))
             .filter((entry) => entry.renderMode === 'diff');
         if (entries.length > 0) return entries;
-        const written = normalizedPartTool === 'write' ? writeInputOf(input) : null;
-        return written ? [{ id: 'write', title: written.filePath ?? '', patch: addedFilePatch(written.content) }] : [];
-    }, [conciseTranscript, currentDirectory, input, metadata, normalizedPartTool, recordedChanges, status]);
+        return writtenInput && writtenInput.content.length > 0
+            ? [{ id: 'write', title: writtenInput.filePath ?? '', patch: addedFilePatch(writtenInput.content) }]
+            : [];
+    }, [conciseTranscript, currentDirectory, metadata, normalizedPartTool, recordedChanges, status, writtenInput]);
     const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && Array.isArray(metadata?.files) && metadata.files.length > 1;
     const normalizedPart = normalizedPartTool !== part.tool ? ({ ...part, tool: normalizedPartTool } as ToolPartType) : part;
     const descriptionPath = getToolDescriptionPath(normalizedPart, state, currentDirectory);
