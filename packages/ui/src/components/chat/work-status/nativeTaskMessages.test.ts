@@ -3,6 +3,7 @@ import { dict as en } from '@/lib/i18n/messages/en';
 import { dict as ar } from '@/lib/i18n/messages/ar';
 import { dict as he } from '@/lib/i18n/messages/he';
 import { dict as de } from '@/lib/i18n/messages/de';
+import { dict as nl } from '@/lib/i18n/messages/nl';
 import { dict as es } from '@/lib/i18n/messages/es';
 import { dict as fr } from '@/lib/i18n/messages/fr';
 import { dict as ja } from '@/lib/i18n/messages/ja';
@@ -16,7 +17,7 @@ import { dict as tw } from '@/lib/i18n/messages/zh-TW';
 
 test('every shipped locale translates work-status task feedback and placeholders', () => {
   const keys = Object.keys(en).filter((key) => key.startsWith('chat.nativeTasks.'));
-  for (const dictionary of [ar, he, de, es, fr, ja, ko, pl, pt, tr, uk, cn, tw]) {
+  for (const dictionary of [ar, he, de, nl, es, fr, ja, ko, pl, pt, tr, uk, cn, tw]) {
     const entries = new Map(Object.entries(dictionary));
     for (const [key, value] of Object.entries(en).filter(([key]) => keys.includes(key))) {
       const translated = entries.get(key);
