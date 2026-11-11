@@ -1100,8 +1100,8 @@ transcript fetching or Small Model generation.
 ## Follow-up delivery
 
 Unified native `ncv_` conversations use this same queue and claim lifecycle.
-Fresh server execution metadata routes follow-ups to the current native source
-immediately when the selected backend matches and no handoff is preparing.
+Fresh server execution metadata routes follow-ups immediately to a matching
+Claude, Codex or DeepSeek source when no handoff is preparing.
 Whole-execution readiness is a switching boundary, not a same-backend steering
 boundary. An explicit queue action still queues. They confirm the server's
 whole-execution readiness before draining queued work, including
@@ -1109,8 +1109,8 @@ background tasks and native questions. A cross-backend follow-up always waits;
 its captured model runs after the current source settles. Its prompt carries
 `preserveSelection`, keeping any later composer choice intact. Claude, Codex
 and DeepSeek single-CLI sessions retain their native immediate follow-up path.
-Antigravity accepts one turn at a time, so busy follow-ups use this queue until
-idle; idle prompts send normally. It uses the live session phase when no separate
+Antigravity accepts one turn at a time in both standalone and unified sessions,
+so busy follow-ups use this queue until idle; idle prompts send normally. It uses the live session phase when no separate
 status probe ran, never treating an absent probe as busy. `lib/followUpDrafts.ts`
 owns native delivery decisions. Server behavior is owned by
 `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.

@@ -63,6 +63,20 @@ describe('native follow-up delivery', () => {
         expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined, forceQueue: true })).toBe('queue');
     });
 
+    test('queues running unified Antigravity follow-ups even when the native source matches', () => {
+        const agy = { ...busy, providerID: 'antigravity-native', unifiedState: {
+            ...state, backend: 'antigravity' as const, sourceSessionID: 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e',
+        } };
+        for (const sessionPhase of ['busy', 'retry'] as const) {
+            for (const delivery of [undefined, 'queue', 'steer'] as const) {
+                expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase, delivery })).toBe('queue');
+            }
+        }
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined,
+            unifiedState: { ...agy.unifiedState, switchReady: true } })).toBeUndefined();
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined, forceQueue: true })).toBe('queue');
+    });
+
     test('retains the independent CLI and OpenCode delivery paths', () => {
         for (const id of ['ncx_source', 'ncl_source', 'ndh_source']) {
             expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: id, unifiedState: undefined })).toBe('steer');
