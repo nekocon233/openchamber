@@ -7,7 +7,6 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
-import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { NativeAgentsAPI } from '@/lib/api/types';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
@@ -165,11 +164,6 @@ const load = (entry: Entry, api: NativeAgentsAPI | undefined): Promise<NativeTod
   entry.pending = pending;
   return pending;
 };
-
-/** The panel's refresh button: reads even before the hook has mounted. */
-export const loadSessionNativeTodos = (sessionId: string, directory: string): Promise<NativeTodosState> => (
-  load(entryFor(sessionId, directory), getRegisteredRuntimeAPIs()?.nativeAgents)
-);
 
 /**
  * A turn reported steps. A session nobody has opened allocates nothing: the

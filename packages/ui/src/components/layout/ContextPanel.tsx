@@ -18,7 +18,6 @@ const GitView = lazyWithChunkRecovery(() => import('@/components/views/GitView')
 // users never render this panel; keep it out of the main bundle.
 import { areTitleMapsEqual, buildSessionTitleMap, EMPTY_SESSION_TITLE_MAP, getSessionIDFromDedupeKey } from './contextPanelSessionTitles';
 import { ProjectContextPanel } from './RightSidebarTabs';
-import { NativeTasksPane } from '@/components/chat/native-tasks/NativeTasksPane';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useRepositoryReferenceProvider } from '@/components/references/referenceSources';
 import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
@@ -116,7 +115,6 @@ const getModeLabel = (
   if (mode === 'git') return t('layout.rightSidebar.git');
   if (mode === 'pr') return t('contextPanel.mode.pr');
   if (mode === 'notes') return t('contextRail.surface.notes');
-  if (mode === 'tasks') return t('contextPanel.mode.tasks');
   if (mode === 'terminal') return t('layout.mainTab.terminal');
   if (isPluginContextPanelMode(mode)) {
     const guest = useGuestsStore.getState().guests.find((entry) => entry.id === pluginIdFromMode(mode));
@@ -224,10 +222,6 @@ const getTabIcon = (
     return <Icon name="sticky-note" className="h-3.5 w-3.5" />;
   }
 
-  if (tab.mode === 'tasks') {
-    return <Icon name="list-check-2" className="h-3.5 w-3.5" />;
-  }
-
   if (tab.mode === 'terminal') {
     return <Icon name="terminal-box" className="h-3.5 w-3.5" />;
   }
@@ -309,10 +303,9 @@ const HEADER_DRAG_DISTANCE_PX = 8;
 const HEADER_DRAG_EXCLUDED = 'button, a, input, textarea, select, label, [role="button"], [role="tab"], [role="combobox"], [role="switch"], [role="slider"], [data-sortable-tab-id], [contenteditable="true"]';
 
 // Surfaces rendered by the zone itself and remounted on every switch; the
-// rest stay alive in ContextSurfacePanes. The native tasks pane follows the
-// open session, so it is remounted with it.
+// rest stay alive in ContextSurfacePanes.
 const isRemountedSurface = (mode: ContextPanelMode): boolean => (
-  mode === 'context' || mode === 'git' || mode === 'notes' || mode === 'tasks'
+  mode === 'context' || mode === 'git' || mode === 'notes'
 );
 
 const CONTEXT_PANEL_DEFAULT_HEIGHT = 320;
@@ -768,8 +761,6 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
             ? <React.Suspense fallback={null}><ContextPanelHeaderSlotProvider value={headerSlotEl}><GitView isActive={isOpen} /></ContextPanelHeaderSlotProvider></React.Suspense>
             : activeTab?.mode === 'notes'
                 ? <ContextPanelHeaderSlotProvider value={headerSlotEl}><ProjectContextPanel visible={isOpen} /></ContextPanelHeaderSlotProvider>
-            : activeTab?.mode === 'tasks'
-                ? <NativeTasksPane />
         : null;
 
   const isFileTabActive = activeTab?.mode === 'file';

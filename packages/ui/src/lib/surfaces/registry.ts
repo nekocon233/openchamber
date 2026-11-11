@@ -13,7 +13,6 @@ type BuiltInContextSurfaceId =
   | 'walkthrough'
   | 'terminal'
   | 'notes'
-  | 'tasks'
   | 'context'
   | 'browser'
   | 'workflows'
@@ -125,15 +124,6 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     availability: 'always',
   },
   {
-    id: 'tasks',
-    descriptionKey: 'contextRail.surface.tasks.description',
-    defaultWidth: 540,
-    mode: 'tasks',
-    icon: 'list-check-2',
-    labelKey: 'contextPanel.mode.tasks',
-    availability: 'always',
-  },
-  {
     id: 'browser',
     descriptionKey: 'contextRail.surface.browser.description',
     defaultWidth: 540,
@@ -193,7 +183,6 @@ const BUILT_IN_SURFACE_GROUPS = {
   terminal: 'tools',
   browser: 'tools',
   notes: 'workspace',
-  tasks: 'workspace',
   workflows: 'workspace',
   chat: 'workspace',
 } satisfies Record<BuiltInContextSurfaceId, ContextSurfaceGroup>;

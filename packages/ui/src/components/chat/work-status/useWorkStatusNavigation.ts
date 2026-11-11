@@ -6,7 +6,6 @@ import { parseChangeRequestReference } from '@/lib/source-control/changeRequestR
 import type { PrVisualSummary } from '@/stores/useGitHubPrStatusStore';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useUIStore } from '@/stores/useUIStore';
-import { selectNativeTasksTab, type NativeTasksTab } from '../native-tasks/task-ui-store';
 
 /**
  * The work-status rows navigate to whatever hosts the detail on this surface:
@@ -73,16 +72,6 @@ export const useWorkStatusNavigation = (directory: string | null) => {
     openContextSurface(directory, 'pr');
   }, [directory, mobileActions, openContextPanelTab, openContextSurface, showTrackerLink]);
 
-  const openTasks = React.useCallback((tab: NativeTasksTab) => {
-    selectNativeTasksTab(tab);
-    if (!directory) return;
-    if (mobileActions) {
-      mobileActions.openWorkspaceTab('tasks');
-      return;
-    }
-    openContextSurface(directory, 'tasks');
-  }, [directory, mobileActions, openContextSurface]);
-
   const openCiRun = React.useCallback((runId: string, sourceDirectory?: string) => {
     if (!directory) return;
     usePullRequestSelectionStore.getState().requestCiRun(directory, sourceDirectory ?? directory, runId);
@@ -100,6 +89,5 @@ export const useWorkStatusNavigation = (directory: string | null) => {
     openChanges,
     openChangeRequest,
     openCiRun,
-    openTasks,
   };
 };

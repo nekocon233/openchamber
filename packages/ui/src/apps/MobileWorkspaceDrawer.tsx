@@ -26,7 +26,6 @@ import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
 
 import { MobileChangesSurface } from './MobileChangesSurface';
 import { MobileFilesSurface } from './MobileFilesSurface';
-import { NativeTasksPane } from '@/components/chat/native-tasks/NativeTasksPane';
 import { useEdgeSwipe } from './useEdgeSwipe';
 import { isVimEditorEventTarget } from '@/lib/editorFocus';
 
@@ -37,7 +36,7 @@ const ENTER_DELAY_MS = 16;
 const ENTER_DURATION_MS = 320;
 const DRAWER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'tasks' | 'mcp';
+export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'mcp';
 
 const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
 
@@ -228,7 +227,6 @@ export const MobileWorkspaceDrawer: React.FC<{
     { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
     { id: 'notes', label: t('contextRail.surface.notes'), icon: <Icon name="sticky-note" className="h-3.5 w-3.5" /> },
-    { id: 'tasks', label: t('chat.nativeTasks.title'), icon: <Icon name="list-check-2" className="h-3.5 w-3.5" /> },
     { id: 'mcp', label: t('mobile.menu.mcp'), icon: <McpIcon className="h-3.5 w-3.5" /> },
   ];
 
@@ -309,13 +307,6 @@ export const MobileWorkspaceDrawer: React.FC<{
           <div className={cn('h-full', tab !== 'notes' && 'hidden')}>
             <ErrorBoundary>
               <ProjectContextPanel visible={open && tab === 'notes'} onActionComplete={onClose} onOpenPlan={onOpenPlan} />
-            </ErrorBoundary>
-          </div>
-        ) : null}
-        {visitedTabs.has('tasks') ? (
-          <div className={cn('h-full', tab !== 'tasks' && 'hidden')}>
-            <ErrorBoundary>
-              <NativeTasksPane onClose={onClose} />
             </ErrorBoundary>
           </div>
         ) : null}

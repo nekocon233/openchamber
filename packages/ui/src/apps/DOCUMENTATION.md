@@ -8,7 +8,8 @@
 
 The workspace drawer and tablet panel share a scrollable tab strip. Its PR tab
 loads the shared `PullRequestView` on first use, keyed by runtime and effective
-workspace directory. The same draft-space directory rules as Changes apply.
+workspace directory. The same draft-space directory rules as Changes apply. Native task information
+lives in Work Status; the workspace drawer has no standalone Tasks tab.
 
 `mobileConnections` owns saved mobile instances and their connect, password and reconnect flows. The welcome screen and Instances form share its controller. Runtime HTTP authentication remains in `lib/runtime-auth` and `lib/runtime-fetch`.
 
@@ -38,8 +39,8 @@ workspace directory. The same draft-space directory rules as Changes apply.
 
 The workspace tab uses the desktop list, preview and branch workflow so provider
 authority, actions and reading-state restoration have one owner. The Changes PR
-picker remains a comparison selector. The tab strip scrolls to keep all seven
-workspace entries reachable without compressing their touch targets.
+picker remains a comparison selector. The tab strip scrolls to keep the workspace entries reachable without
+compressing their touch targets.
 
 ### Why mobile loads source-control capabilities in the root
 

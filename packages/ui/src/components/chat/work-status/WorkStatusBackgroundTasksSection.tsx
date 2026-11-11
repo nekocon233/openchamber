@@ -5,7 +5,6 @@ import type { NativeExecutionTask } from '@/lib/native-agents/task-schemas';
 import { useSessionNativeTaskDetails } from '@/sync/session-background-tasks';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
-import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
 const SECTION_ID = 'taskBackground';
 
@@ -32,8 +31,7 @@ export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { ses
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
   const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'antigravity'));
-  const state = useSessionNativeTaskDetails(sessionId, directory, { enabled, visible: false });
-  const { openTasks } = useWorkStatusNavigation(directory);
+  const state = useSessionNativeTaskDetails(sessionId, directory, { enabled });
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   const tasks = snapshot?.tasks ?? [];
   useReportWorkStatusPresence(SECTION_ID, enabled);
@@ -63,8 +61,6 @@ export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { ses
               muted={!task.active}
               label={task.description || task.id}
               value={<WorkStatusValue tone={task.active ? TASK_STATUS_TONES[task.status] : 'muted'}>{t(TASK_STATUS_KEYS[task.status])}</WorkStatusValue>}
-              onClick={() => openTasks('background')}
-              ariaLabel={t('chat.nativeTasks.openBackground')}
             />
           ))
         )}

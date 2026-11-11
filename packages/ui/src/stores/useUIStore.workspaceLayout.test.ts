@@ -156,7 +156,7 @@ test('v24 editor hydration relocates the saved active panel and retains every su
   useUIStore.getState().openContextSurface('/repo', 'diff');
   useUIStore.getState().setContextPanelWidth('/repo', 'plugin:notes-x', 751);
   useUIStore.getState().setContextPanelHeight('/repo', 'plugin:notes-x', 427);
-  useUIStore.getState().setContextPanelWidth('/repo', 'tasks', 580);
+  useUIStore.getState().setContextPanelWidth('/repo', 'notes', 580);
   const panels = useUIStore.getState().contextPanelByDirectory;
   useUIStore.persist.setOptions({ storage: {
     getItem: () => ({ version: 24, state: { workspaceLayout: 'editor', contextSurfaceZones: { file: 'left' }, contextPanelByDirectory: panels } }),
@@ -170,7 +170,40 @@ test('v24 editor hydration relocates the saved active panel and retains every su
   expect(current.zones.left.activeTabId).toBe('diff');
   expect(current.widthByMode['plugin:notes-x']).toBe(751);
   expect(current.heightByMode['plugin:notes-x']).toBe(427);
-  expect(current.widthByMode.tasks).toBe(580);
+  expect(current.widthByMode.notes).toBe(580);
+});
+
+test('retired task windows are dropped on hydration while other windows and sizes survive', async () => {
+  const ui = useUIStore.getState();
+  ui.openContextSurface('/mixed', 'git');
+  ui.setContextPanelWidth('/mixed', 'git', 620);
+  const mixed = useUIStore.getState().contextPanelByDirectory['/mixed'];
+  const retired = { mode: 'tasks', touchedAt: 1 };
+  useUIStore.persist.setOptions({ storage: {
+    getItem: () => ({ version: options.version, state: {
+      contextSurfaceZones: { tasks: 'right' },
+      contextPanelByDirectory: {
+        '/only-tasks': { isOpen: true, expanded: true, tabs: [retired], activeTabId: 'tasks', widthByMode: { tasks: 580 }, heightByMode: { tasks: 300 } },
+        '/mixed': { ...mixed, tabs: [...mixed.tabs, retired], activeTabId: 'tasks', widthByMode: { ...mixed.widthByMode, tasks: 580 } },
+      },
+    } }),
+    setItem: () => undefined,
+    removeItem: () => undefined,
+  } });
+  await useUIStore.persist.rehydrate();
+  const restored = useUIStore.getState();
+  const onlyTasks = restored.contextPanelByDirectory['/only-tasks'];
+  expect(onlyTasks.tabs).toEqual([]);
+  expect(onlyTasks.activeTabId).toBeNull();
+  expect(onlyTasks.isOpen).toBe(false);
+  expect(onlyTasks.expanded).toBe(false);
+  expect(onlyTasks.widthByMode).toEqual({});
+  expect(onlyTasks.heightByMode).toEqual({});
+  expect(Object.hasOwn(restored.contextSurfaceZones, 'tasks')).toBe(false);
+  expect(restored.contextPanelByDirectory['/mixed'].tabs.map(tab => tab.mode)).toEqual(['git']);
+  expect(restored.contextPanelByDirectory['/mixed'].activeTabId).toBe('git');
+  expect(restored.contextPanelByDirectory['/mixed'].isOpen).toBe(true);
+  expect(restored.contextPanelByDirectory['/mixed'].widthByMode).toEqual({ git: 620 });
 });
 
 test('explicit right round-trips and an empty snapshot restores the layout default', async () => {

@@ -12,7 +12,7 @@ export function WorkStatusPlanSection({ sessionId, directory }: { sessionId: str
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
   const enabled = Boolean(sessionId && directory && backend === 'codex');
-  const state = useSessionNativePlan(sessionId, directory, { enabled, visible: false });
+  const state = useSessionNativePlan(sessionId, directory, { enabled });
   const held = 'plan' in state ? state.plan : null;
   const document = held?.state === 'ready' ? held : null;
   useReportWorkStatusPresence(SECTION_ID, enabled);
