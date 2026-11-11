@@ -22,11 +22,13 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
   const calls: z.infer<typeof requestSchema>[] = [];
   const receipts = new Map<string, string>();
   let failRead = false;
+  let pauseRead: Promise<void> | null = null;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
     if (!url.pathname.endsWith('/pr/review/pending')) return new Promise<Response>(() => {});
     if (init?.method !== 'POST') {
+      if (pauseRead) await pauseRead;
       if (failRead) return Response.json({ error: 'Offline' }, { status: 503 });
       const owner = url.searchParams.get('owner') ?? '';
       return Response.json(states.get(owner) ?? { headSha, open: true, ownPull: false, review: null });
@@ -96,6 +98,20 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
     await act(async () => { await current().refresh(); });
     expect(current().readError).toContain('Offline');
     expect(current().data?.review?.comments).toHaveLength(2);
+
+    failRead = false;
+    let releaseRead = () => {};
+    pauseRead = new Promise<void>(resolve => { releaseRead = resolve; });
+    let acknowledge = () => {};
+    const acknowledged = new Promise<void>(resolve => { acknowledge = resolve; });
+    let submission: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      submission = current().mutate({ kind: 'submit', reviewId: 'R-A', version: '2', verdict: 'approve' }, headSha, acknowledge);
+      await acknowledged;
+    });
+    expect(current().busy).toBe(true);
+    await act(async () => { releaseRead(); expect(await submission).toBe(true); });
+    expect(current().busy).toBe(false);
   } finally {
     await act(async () => root.unmount());
     globalThis.fetch = originalFetch;

@@ -34,8 +34,9 @@ export const SourceBoardReply: React.FC<{
      * was read.
      */
     onRefresh: () => void;
+    onApproved?: () => void;
     active?: boolean;
-}> = ({ reference, context, onRefresh, active = true }) => {
+}> = ({ reference, context, onRefresh, onApproved, active = true }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const replyInput = useWorkspaceDraft(workspaceReplyDraftKey(getRuntimeKey(), context, reference));
@@ -107,6 +108,7 @@ export const SourceBoardReply: React.FC<{
                 toast.success(t(doneKey, { reference: label }));
             }
             onRefresh();
+            if (verdict === 'approve' && (!body || receipt.result.commented)) onApproved?.();
         } catch (error) {
             toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference: label }), { description: error instanceof Error ? error.message : String(error) });
             onRefresh();
@@ -127,7 +129,7 @@ export const SourceBoardReply: React.FC<{
 
     return (
       <>
-        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} />
+        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onApproved={onApproved} />
         <section className="flex flex-col gap-2 border-t border-border/60 pt-4" aria-label={t('sourceBoard.reply.label')}>
             <Textarea
                 value={text}

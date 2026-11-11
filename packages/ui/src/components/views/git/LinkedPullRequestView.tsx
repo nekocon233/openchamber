@@ -108,6 +108,7 @@ const LinkedPullRequestBody: React.FC<{
           pullStatus={IDLE_PULL_STATUS}
           now={now}
           onChanged={lookup.retry}
+          onCompleted={onBack}
           refreshDetail={refresh}
           pullLinks={<SourceBoardPullLinks
             pull={reference}

@@ -64,6 +64,15 @@ ordinary merge control, with the same selected method and a destructive
 confirmation. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
 owns capability gating, target changes and pending-operation behavior.
 
+Confirmed merges and approvals in project details and linked previews invoke
+their existing Back action. This includes administrator merges and approvals
+that submit a pending review. The navigation clears only the completed detail's
+selection and preserves the destination's retained state. Cancelled, failed or
+queued merges, partial reviews with unposted text, comments and change requests
+stay in the detail. Board and current-branch navigation keep their existing
+behavior. Completion is scoped to the active detail's repository/account, PR and
+runtime generation; hidden or replaced details cannot navigate another view.
+
 Selecting a PR replaces the list with its preview in the same panel. Back
 restores the query, filters and scroll position; the two tabs retain the list
 state too. Every detail and action names the selected item's repository and
@@ -122,6 +131,14 @@ When a linked PR comes from another Git directory, Changes uses that exact
 source binding. Its return action restores the original conversation or draft
 and opens the original workspace's pane. Draft identity, prepared chat directory,
 attached context and directory-scoped model choices survive the round trip.
+
+### Why completion uses the existing Back action
+
+A successful mutation receipt supplies completion; list refresh or a PR leaving
+a category does not. Reusing Back preserves each entry point's destination and
+clears its saved selection even when refreshing provider data fails. Pending
+review submission notifies the view before re-reading review state, while its
+mutation lock stays held through that read.
 
 ## Usage statistics
 

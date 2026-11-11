@@ -48,7 +48,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
     return () => window.removeEventListener('focus', revalidate);
   }, [enabled, key, read]);
 
-  const mutate = React.useCallback(async (action: GitHubPendingReviewAction, headSha: string): Promise<boolean> => {
+  const mutate = React.useCallback(async (action: GitHubPendingReviewAction, headSha: string, onSucceeded?: () => void): Promise<boolean> => {
     if (!scope || !key || getRuntimeKey() !== runtimeKey) return false;
     const drafts = usePendingReviewDraftStore.getState();
     if (!drafts.begin(key)) return false;
@@ -72,6 +72,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
       await sourceControl.githubPendingReviewAction({ ...scope.context, idempotencyKey,
         target: { project: { owner: scope.pull.owner, name: scope.pull.repo }, number: scope.pull.number, headSha }, action: requestAction });
       usePendingReviewDraftStore.getState().clearAttempt(key, signature);
+      onSucceeded?.();
       if (getRuntimeKey() === runtimeKey) await cache.ensure(key, read, { force: true }).catch(() => {});
       return true;
     } catch (error) {

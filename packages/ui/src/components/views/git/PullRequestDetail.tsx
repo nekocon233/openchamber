@@ -12,7 +12,7 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { GitHubPullReference, GitHubPullStatus, GitHubReferenceDetail, SourceControlReadContext } from '@/lib/api/types';
 import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
 
 /** PR actions always use the context that supplied the displayed reference. */
 export const PullRequestDetail: React.FC<{
@@ -22,11 +22,21 @@ export const PullRequestDetail: React.FC<{
   pullStatus: CachedValue<GitHubPullStatus | null>;
   now: number;
   onChanged: () => Promise<void>;
+  onCompleted: () => void;
   refreshDetail: () => Promise<void>;
   pullLinks: React.ReactNode;
-}> = ({ reference, context, githubDetail, pullStatus, now, onChanged, refreshDetail, pullLinks }) => {
+}> = ({ reference, context, githubDetail, pullStatus, now, onChanged, onCompleted, refreshDetail, pullLinks }) => {
   const { sourceControl } = useRuntimeAPIs();
   const owner = workspaceViewKey(getRuntimeKey(), context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
+  const runtimeGeneration = getRuntimeEndpointGeneration();
+  const activeOwner = React.useRef<string | null>(null);
+  React.useLayoutEffect(() => {
+    activeOwner.current = owner;
+    return () => { activeOwner.current = null; };
+  }, [owner]);
+  const complete = () => {
+    if (owner && activeOwner.current === owner && getRuntimeEndpointGeneration() === runtimeGeneration) onCompleted();
+  };
   const [checksOpen, setChecksOpen] = useWorkspaceViewState('pullRequest', owner, 'checksOpen');
   const attachments = usePullAttachments(reference);
   const refresh = React.useCallback(async () => {
@@ -53,13 +63,13 @@ export const PullRequestDetail: React.FC<{
         onIncludeDiffChange={() => undefined}
         now={now}
         onRefresh={refreshFromHost}
-        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} />}
+        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} onMerged={complete} />}
         onOpenChecks={() => setChecksOpen(true)}
         commentAttachments={{ onAttach: attachments.attachComment, onAttachAll: attachments.attachComments }}
         threadActions={threadActions}
         labelsControl={<SourceBoardLabels reference={reference} context={context} onChanged={refresh} />}
         reviewersControl={<SourceBoardReviewers pull={reference} detail={githubDetail} context={context} onChanged={refresh} />}
-        reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} />}
+        reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} onApproved={complete} />}
         pullLinks={pullLinks}
       />
       <SourceBoardChecksDialog pull={reference} context={context} open={checksOpen} onOpenChange={setChecksOpen} onAttachFailed={attachments.attachFailedChecks} />
