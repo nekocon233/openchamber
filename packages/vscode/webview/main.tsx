@@ -506,6 +506,10 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     return unsupportedWebRouteResponse('Nested git repository discovery');
   }
 
+  if (normalizedPathname === '/api/lsp/status' || normalizedPathname === '/api/lsp/request') {
+    return jsonResponse({ available: false, response: null }, 200);
+  }
+
   if (normalizedPathname === '/api/sessions/snapshot' && method === 'GET') {
     const activity = await sendBridgeMessage<Record<string, { type: 'idle' | 'busy' | 'cooldown' }>>('api:session-activity:get')
       .catch(() => ({}));

@@ -1,5 +1,6 @@
 import { registerFsRoutes } from '../fs/routes.js';
 import { createRipgrepResolver } from '../fs/ripgrep.js';
+import { registerLspRoutes } from '../lsp/routes.js';
 import { registerEnvironmentRoutes } from '../environment/routes.js';
 import { registerQuotaRoutes } from '../quota/routes.js';
 import { registerSmallModelRoutes } from '../small-model/routes.js';
@@ -954,6 +955,13 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       cloneRepository: networkOperations.cloneRepository,
       managedChatsRoot,
       environmentRuntime,
+    });
+    registerLspRoutes(app, {
+      fs,
+      path,
+      spawn,
+      resolveProjectDirectory,
+      buildAugmentedPath,
     });
     registerEnvironmentRoutes(app, { store: environmentStore, runtime: environmentRuntime, listProjects: listConfiguredProjects });
   };

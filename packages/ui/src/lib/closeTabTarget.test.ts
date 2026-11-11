@@ -60,25 +60,35 @@ describe('close tab target', () => {
     releaseEditor();
   });
 
-  test('a target on the whole page takes the clicks outside the zones and leaves the zones theirs', () => {
+  test('a target on the whole page takes the clicks outside the zones and leaves the zones and data-file-editor theirs', () => {
     const rightZone = element(document.body, 'right');
     const terminal = element(rightZone);
+    const editorHost = document.createElement('section');
+    editorHost.dataset.fileEditor = 'true';
+    document.body.append(editorHost);
+    const editorTabStrip = element(editorHost);
+    const editorBody = element(editorHost);
     const notes = element(element(document.body, 'left'));
     const chat = element();
     const closed: string[] = [];
     const releaseSessions = registerCloseTabTarget(() => closed.push('session'), { current: document.body });
     const releaseTerminal = registerCloseTabTarget(() => closed.push('terminal'), { current: terminal });
+    const releaseFileEditor = registerCloseTabTarget(() => closed.push('file'), { current: editorBody });
 
     chat.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     closeTab();
     terminal.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     closeTab();
+    // Clicking the resident file editor's tab strip counts for the file editor, not document.body.
+    editorTabStrip.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    closeTab();
     // A zone with no tabs of its own counts for the sessions.
     notes.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     closeTab();
 
-    expect(closed).toEqual(['session', 'terminal', 'session']);
-    releaseSessions();
+    expect(closed).toEqual(['session', 'terminal', 'file', 'session']);
+    releaseFileEditor();
     releaseTerminal();
+    releaseSessions();
   });
 });

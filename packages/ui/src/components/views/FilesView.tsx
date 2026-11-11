@@ -30,6 +30,9 @@ import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { GoToLineDialog } from './GoToLineDialog';
 import { FilePathLabel } from './files/FilePathLabel';
 import { DocumentSymbolsPanel } from './DocumentSymbolsPanel';
+import { EditorBreadcrumbs } from './EditorBreadcrumbs';
+import { EditorPeekWidget } from './EditorPeekWidget';
+import { WorkspaceSymbolsDialog } from './WorkspaceSymbolsDialog';
 import { GitignoredToggleButton } from '@/components/layout/GitignoredToggleButton';
 import { useZoneInteractive } from '@/components/layout/zoneInteractiveContext';
 import { MarkdownPreviewSearch } from './MarkdownPreviewSearch';
@@ -78,14 +81,18 @@ import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { codeFolding } from '@/lib/codemirror/codeFolding';
-import { bracketAids, multipleCursors } from '@/lib/codemirror/editingAids';
+import { acquireEditorKeyboardLock, classifyEditorBrowserShortcut } from '@/lib/codemirror/browserShortcutShield';
+import { bracketAids, multipleCursors, runToggleEditorComment } from '@/lib/codemirror/editingAids';
 import { gitChangeGutter, setGitChangeBaseline } from '@/lib/codemirror/gitChangeGutter';
-import { importLinks, resolveRelativeImport } from '@/lib/codemirror/importLinks';
+import { importLinks, parseTsconfigPaths, resolveRelativeImport, type TsconfigPathMapping } from '@/lib/codemirror/importLinks';
 import { indentGuides } from '@/lib/codemirror/indentGuides';
 import { isLintedJsonPath, jsonSyntaxLint } from '@/lib/codemirror/jsonSyntaxLint';
+import { createEditorCodeNavigationController, type PeekWidgetState } from '@/lib/codemirror/lspWorkspaceBridge';
 import { stickyScope } from '@/lib/codemirror/stickyScope';
+import type { SymbolLocation, SymbolNavigationContext } from '@/lib/codemirror/symbolNavigation';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
+import { useEditorNavigationStore } from '@/stores/useEditorNavigationStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useGitStatus, useGitStore } from '@/stores/useGitStore';
 import { DirectoryRequests } from './files/directoryRequests';
@@ -1093,6 +1100,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const [copiedPath, setCopiedPath] = React.useState(false);
   const [isGoToLineOpen, setIsGoToLineOpen] = React.useState(false);
   const [isSymbolsOpen, setIsSymbolsOpen] = React.useState(false);
+  const [isWorkspaceSymbolsOpen, setIsWorkspaceSymbolsOpen] = React.useState(false);
+  const [peekWidget, setPeekWidget] = React.useState<PeekWidgetState | null>(null);
+  const [tsconfigMappings, setTsconfigMappings] = React.useState<TsconfigPathMapping[]>([]);
   // In-preview find for the rendered Markdown preview (Ctrl/Cmd+F).
   const [mdPreviewFindOpen, setMdPreviewFindOpen] = React.useState(false);
   const [mdPreviewFindFocusNonce, setMdPreviewFindFocusNonce] = React.useState(0);
@@ -3577,6 +3587,243 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     setIsSymbolsOpen(true);
   });
 
+  useKeybind('open_workspace_symbols', (event) => {
+    if (isMobile || !files.searchContents || !root) {
+      return false;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[role="dialog"]')) return false;
+    if (!target || !editorWrapperRef.current?.contains(target)) return false;
+    setIsWorkspaceSymbolsOpen(true);
+  });
+
+  const navHistoryRoot = panelRoot || root || '';
+  const canNavigateBack = useEditorNavigationStore((state) => (
+    Boolean(navHistoryRoot && (state.byDirectory[navHistoryRoot]?.backStack.length ?? 0) > 0)
+  ));
+  const canNavigateForward = useEditorNavigationStore((state) => (
+    Boolean(navHistoryRoot && (state.byDirectory[navHistoryRoot]?.forwardStack.length ?? 0) > 0)
+  ));
+
+  const readCurrentEditorStop = React.useCallback(() => {
+    const path = selectedFile?.path;
+    const view = editorViewRef.current;
+    if (!path) return null;
+    if (!view) return { path, line: 1, column: 1 };
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    return {
+      path,
+      line: line.number,
+      column: head - line.from + 1,
+    };
+  }, [selectedFile?.path]);
+
+  const navigateToStop = React.useCallback((stop: { path: string; line: number; column?: number }) => {
+    const targetRoot = panelRoot || root;
+    if (!targetRoot) return;
+    setPeekWidget(null);
+    const view = editorViewRef.current;
+    if (selectedFile?.path === stop.path && view) {
+      const lineNo = Math.max(1, Math.min(stop.line, view.state.doc.lines));
+      const line = view.state.doc.line(lineNo);
+      const colOffset = Math.max(0, Math.min(line.length, (stop.column ?? 1) - 1));
+      const pos = line.from + colOffset;
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+      });
+      view.focus();
+      return;
+    }
+    useUIStore.getState().openContextFileAtLine(targetRoot, stop.path, stop.line, stop.column ?? 1);
+  }, [panelRoot, root, selectedFile?.path]);
+
+  const jumpToEditorLocation = React.useCallback((
+    target: { path: string; line: number; column?: number },
+    origin?: { path: string; line: number; column: number },
+  ) => {
+    const fromStop = origin ?? readCurrentEditorStop();
+    if (fromStop && navHistoryRoot) {
+      useEditorNavigationStore.getState().recordJump(navHistoryRoot, fromStop, {
+        path: target.path,
+        line: target.line,
+        column: target.column ?? 1,
+      });
+    }
+    navigateToStop(target);
+  }, [navHistoryRoot, navigateToStop, readCurrentEditorStop]);
+
+  const handleEditorGoBack = React.useCallback(() => {
+    if (!navHistoryRoot) return false;
+    const target = useEditorNavigationStore.getState().stepBack(navHistoryRoot, readCurrentEditorStop());
+    if (!target) return false;
+    navigateToStop(target);
+    return true;
+  }, [navHistoryRoot, navigateToStop, readCurrentEditorStop]);
+
+  const handleEditorGoForward = React.useCallback(() => {
+    if (!navHistoryRoot) return false;
+    const target = useEditorNavigationStore.getState().stepForward(navHistoryRoot, readCurrentEditorStop());
+    if (!target) return false;
+    navigateToStop(target);
+    return true;
+  }, [navHistoryRoot, navigateToStop, readCurrentEditorStop]);
+
+  useKeybind('editor_go_back', (event) => {
+    if (isMobile) return false;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[role="dialog"]')) return false;
+    if (!target || !editorWrapperRef.current?.contains(target)) return false;
+    handleEditorGoBack();
+    return true;
+  });
+
+  useKeybind('editor_go_forward', (event) => {
+    if (isMobile) return false;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[role="dialog"]')) return false;
+    if (!target || !editorWrapperRef.current?.contains(target)) return false;
+    handleEditorGoForward();
+    return true;
+  });
+
+  React.useEffect(() => {
+    setPeekWidget(null);
+  }, [selectedFile?.path]);
+
+  React.useEffect(() => {
+    const readFile = files.readFile;
+    if (!root || !readFile) {
+      setTsconfigMappings([]);
+      return;
+    }
+    let cancelled = false;
+    const loadConfig = async () => {
+      for (const configName of ['tsconfig.json', 'jsconfig.json']) {
+        try {
+          const configPath = `${root}/${configName}`;
+          const res = await readFile(configPath);
+          if (cancelled) return;
+          if (res?.content) {
+            const parsed = parseTsconfigPaths(res.content, root);
+            if (parsed.length > 0) {
+              setTsconfigMappings(parsed);
+              return;
+            }
+          }
+        } catch {
+          // Try next candidate config file.
+        }
+      }
+      if (!cancelled) setTsconfigMappings([]);
+    };
+    void loadConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [files.readFile, root]);
+
+  const readWorkspaceFileText = React.useCallback(async (targetPath: string): Promise<string | null> => {
+    if (targetPath === selectedFile?.path) return draftContent;
+    if (!files.readFile) return null;
+    try {
+      const result = await files.readFile(targetPath, resolveFileReadOptions(targetPath));
+      return result?.content ?? null;
+    } catch {
+      return null;
+    }
+  }, [draftContent, files, resolveFileReadOptions, selectedFile?.path]);
+
+  const navigationContextRef = React.useRef<SymbolNavigationContext | null>(null);
+  navigationContextRef.current = selectedFile?.path
+    ? {
+      filePath: selectedFile.path,
+      workspaceRoot: root || panelRoot || '',
+      tsconfigMappings,
+      includeHidden: showHidden,
+      respectGitignore: !showGitignored,
+      listDirectoryNames: async (directory) => {
+        try {
+          const listing = await files.listDirectory(directory);
+          return new Map(listing.entries.map((entry) => [entry.name, entry.isDirectory]));
+        } catch {
+          return null;
+        }
+      },
+      readFileText: readWorkspaceFileText,
+      searchContents: files.searchContents,
+    }
+    : null;
+
+  const jumpToEditorLocationRef = React.useRef(jumpToEditorLocation);
+  jumpToEditorLocationRef.current = jumpToEditorLocation;
+  const importErrorToastRef = React.useRef<(specifier: string, reason: 'missing' | 'failed') => void>(() => {});
+  importErrorToastRef.current = (specifier, reason) => {
+    toast.error(reason === 'missing'
+      ? t('filesView.editor.importNotFound', { path: specifier })
+      : t('filesView.editor.importLookupFailed', { path: specifier }));
+  };
+
+  const codeNavigationController = React.useMemo(() => createEditorCodeNavigationController({
+    getNavigationContext: () => navigationContextRef.current,
+    onJumpToLocation: (target, origin) => jumpToEditorLocationRef.current(target, origin),
+    onOpenPeek: (peek) => setPeekWidget(peek),
+    onImportNotFound: (specifier, reason) => importErrorToastRef.current(specifier, reason),
+  }), []);
+
+  React.useEffect(() => {
+    if (!visible || isMobile) {
+      return;
+    }
+    const releaseKeyboardLock = acquireEditorKeyboardLock();
+    const handleEditorBrowserShortcut = (event: KeyboardEvent) => {
+      const wrapper = editorWrapperRef.current;
+      if (!wrapper) return;
+      const target = event.target instanceof Node ? event.target : null;
+      const active = document.activeElement;
+      if (!wrapper.contains(target) && !wrapper.contains(active)) return;
+
+      const action = classifyEditorBrowserShortcut(event);
+      if (!action) return;
+
+      const alreadyHandled = event.defaultPrevented;
+      event.preventDefault();
+      if (alreadyHandled || action === 'prevent-browser-default') return;
+
+      const view = editorViewRef.current;
+      switch (action) {
+        case 'go-to-definition':
+          if (view) void codeNavigationController.goToDefinitionAtCursor(view);
+          break;
+        case 'peek-definition':
+          if (view) void codeNavigationController.goToDefinitionAtCursor(view, { forcePeek: true });
+          break;
+        case 'find-references':
+          if (view) void codeNavigationController.findReferencesAtCursor(view);
+          break;
+        case 'rename-symbol':
+          if (view && canEdit) codeNavigationController.renameSymbolAtCursor(view);
+          break;
+        case 'change-all-occurrences':
+          if (view && canEdit) codeNavigationController.selectAllOccurrencesAtCursor(view);
+          break;
+        case 'go-back':
+          handleEditorGoBack();
+          break;
+        case 'go-forward':
+          handleEditorGoForward();
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleEditorBrowserShortcut);
+    return () => {
+      releaseKeyboardLock();
+      window.removeEventListener('keydown', handleEditorBrowserShortcut);
+    };
+  }, [canEdit, codeNavigationController, handleEditorGoBack, handleEditorGoForward, isMobile, visible]);
+
   const editorFontSize = useUIStore((state) => state.editorFontSize);
   // The rendered preview follows the editor's font size, so zoom and the
   // Editor Font Size setting resize both modes. At the default 13 px it
@@ -3729,7 +3976,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       pinPreviewOnEditExtension,
       bracketAids(),
       indentGuides(),
-      importLinksExtension,
     );
     if (isLintedJsonPath(selectedFile.path)) {
       extensions.push(jsonSyntaxLint(t('filesView.editor.jsonSyntaxError'), {
@@ -3740,9 +3986,15 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       }));
     }
     if (!isMobile) {
-      extensions.push(codeFolding(), multipleCursors({ vimMode: fileEditorKeymap === 'vim' }), stickyScope());
+      extensions.push(
+        codeFolding(),
+        multipleCursors({ vimMode: fileEditorKeymap === 'vim' }),
+        stickyScope(),
+        codeNavigationController.extension(selectedFile.path, shikiLanguage ?? undefined),
+      );
     }
     if (isMobile) {
+      extensions.push(importLinksExtension);
       extensions.push(EditorView.updateListener.of((update) => {
         if (!update.view.hasFocus) {
           return;
@@ -3757,7 +4009,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       }));
     }
     return extensions;
-  }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard, editorFontSize, pinPreviewOnEditExtension, fileEditorKeymap, t, importLinksExtension]);
+  }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard, editorFontSize, pinPreviewOnEditExtension, fileEditorKeymap, t, importLinksExtension, codeNavigationController]);
 
   const pierreTheme = React.useMemo(
     () => ({ light: ensurePierreThemeRegistered(lightTheme), dark: ensurePierreThemeRegistered(darkTheme) }),
@@ -4010,7 +4262,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const handleCloseDialog = React.useCallback(() => setActiveDialog(null), []);
 
   const blockWidgets = React.useMemo(() => {
-    return buildCodeMirrorCommentWidgets({
+    const commentWidgets = buildCodeMirrorCommentWidgets({
       drafts: filesLineDrafts,
       editingDraftId,
       commentText,
@@ -4031,7 +4283,46 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       },
       onDelete: deleteDraft,
     });
-  }, [cancel, commentText, deleteDraft, editingDraftId, filesLineDrafts, handleSaveComment, isDragging, lineSelection, selectedFile?.path, setCommentText, startEdit]);
+    if (!peekWidget || !selectedFile?.path) {
+      return commentWidgets;
+    }
+    return [
+      ...commentWidgets,
+      {
+        id: 'files-editor-peek-widget',
+        afterLine: peekWidget.afterLine,
+        content: (
+          <EditorPeekWidget
+            peek={peekWidget}
+            currentFilePath={selectedFile.path}
+            currentFileContent={draftContent}
+            readFileText={readWorkspaceFileText}
+            onSelectLocation={(loc: SymbolLocation) => jumpToEditorLocation(loc)}
+            onClose={() => {
+              setPeekWidget(null);
+              editorViewRef.current?.focus();
+            }}
+          />
+        ),
+      },
+    ];
+  }, [
+    cancel,
+    commentText,
+    deleteDraft,
+    draftContent,
+    editingDraftId,
+    filesLineDrafts,
+    handleSaveComment,
+    isDragging,
+    jumpToEditorLocation,
+    lineSelection,
+    peekWidget,
+    readWorkspaceFileText,
+    selectedFile?.path,
+    setCommentText,
+    startEdit,
+  ]);
 
   const mainViewVirtualizer = useFileViewVirtualizer();
   const fullscreenViewVirtualizer = useFileViewVirtualizer();
@@ -4385,6 +4676,63 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       buttonAttributes: { 'data-document-symbols-toggle': '' },
     } : null;
 
+    const workspaceSymbolsAction: ToolbarAction | null = hasSourceEditor && !isMobile && Boolean(files.searchContents) ? {
+      id: 'workspace-symbols',
+      label: t('filesView.editor.workspaceSymbols'),
+      icon: 'code-box',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('open_workspace_symbols', shortcutOverrides), ''),
+      pressed: isWorkspaceSymbolsOpen,
+      onSelect: () => {
+        openSourceEditor();
+        setIsWorkspaceSymbolsOpen((open) => !sourceEditorShown || !open);
+      },
+      buttonAttributes: { 'data-workspace-symbols-toggle': '' },
+    } : null;
+
+    const goToDefinitionAction: ToolbarAction | null = hasSourceEditor && !isMobile ? {
+      id: 'go-to-definition',
+      label: t('filesView.editor.goToDefinition'),
+      icon: 'code-sslash',
+      shortcut: 'F12',
+      onSelect: () => {
+        openSourceEditor();
+        const view = editorViewRef.current;
+        if (view) void codeNavigationController.goToDefinitionAtCursor(view);
+      },
+    } : null;
+
+    const findReferencesAction: ToolbarAction | null = hasSourceEditor && !isMobile ? {
+      id: 'find-references',
+      label: t('filesView.editor.findReferences'),
+      icon: 'link',
+      shortcut: 'Shift+F12',
+      onSelect: () => {
+        openSourceEditor();
+        const view = editorViewRef.current;
+        if (view) void codeNavigationController.findReferencesAtCursor(view);
+      },
+    } : null;
+
+    const navigateBackAction: ToolbarAction | null = hasSourceEditor && !isMobile && canNavigateBack ? {
+      id: 'editor-navigate-back',
+      label: t('filesView.editor.navigateBack'),
+      icon: 'arrow-left-s',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('editor_go_back', shortcutOverrides), ''),
+      onSelect: () => {
+        handleEditorGoBack();
+      },
+    } : null;
+
+    const navigateForwardAction: ToolbarAction | null = hasSourceEditor && !isMobile && canNavigateForward ? {
+      id: 'editor-navigate-forward',
+      label: t('filesView.editor.navigateForward'),
+      icon: 'arrow-right-s',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('editor_go_forward', shortcutOverrides), ''),
+      onSelect: () => {
+        handleEditorGoForward();
+      },
+    } : null;
+
     const wrapAction: ToolbarAction | null = isTextFile ? {
       id: 'wrap',
       label: t('documentToolbar.wrapLines'),
@@ -4547,10 +4895,21 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         // document settings wait in "More actions", so the row stays a few
         // buttons whatever the file is.
         groups={[
+          [navigateBackAction, navigateForwardAction],
           [modeAction, annotateAction],
           [searchAction, commentAction],
         ]}
-        menuOnly={[goToLineAction, symbolsAction, wrapAction, readAloudAction, ...fileActions, autoSaveAction]}
+        menuOnly={[
+          goToLineAction,
+          symbolsAction,
+          workspaceSymbolsAction,
+          goToDefinitionAction,
+          findReferencesAction,
+          wrapAction,
+          readAloudAction,
+          ...fileActions,
+          autoSaveAction,
+        ]}
         trailing={[fullscreenAction]}
         fold={docked}
         onMenuOpenChange={handleToolbarDropdownOpenChange}
@@ -4988,50 +5347,142 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             renderShikiFileView(selectedFile, draftContent, mainViewVirtualizer, restoreMainCodeScroll)
           ) : (
             <div
-              className={cn('relative h-full', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}
+              className={cn('relative flex h-full flex-col', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}
               ref={editorWrapperRef}
             >
-              {!isFullscreen && (
-                <DocumentSymbolsPanel open={isSymbolsOpen} onOpenChange={setIsSymbolsOpen} viewRef={editorViewRef} />
-              )}
-              <div className={cn('h-full', shouldMaskEditorForPendingNavigation && 'invisible')}>
-                <FilePositionEditor
-                  key={filePositionKey}
-                  positionKey={filePositionKey}
-                  detached={!visible}
-                  value={draftContent}
-                  onChange={setDraftContent}
-                  readOnly={!canEdit}
-                  vimMode={fileEditorKeymap === 'vim'}
-                  extensions={editorExtensions}
-                  className="h-full"
-                  blockWidgets={blockWidgets}
-                  onViewReady={(view) => {
-                    editorViewRef.current = view;
-                    applyGitBaseline(view);
-                    setEditorViewReadyNonce((value) => value + 1);
-                    window.requestAnimationFrame(() => {
-                      nudgeEditorSelectionAboveKeyboard(view);
-                    });
-                  }}
-                  onViewDestroy={() => {
-                    if (editorViewRef.current) {
-                      editorViewRef.current = null;
+              {!isMobile && selectedFile ? (
+                <EditorBreadcrumbs
+                  filePath={selectedFile.path}
+                  relativePath={displaySelectedPath}
+                  viewRef={editorViewRef}
+                  viewReadyNonce={editorViewReadyNonce}
+                  onSelectSymbol={(sym) => {
+                    const fromStop = readCurrentEditorStop();
+                    if (fromStop && navHistoryRoot) {
+                      useEditorNavigationStore.getState().recordJump(navHistoryRoot, fromStop, {
+                        path: selectedFile.path,
+                        line: sym.line,
+                        column: 1,
+                      });
                     }
-                    setEditorViewReadyNonce((value) => value + 1);
                   }}
-                  enableSearch
-                  searchOpen={isSearchOpen}
-                  onSearchOpenChange={setIsSearchOpen}
-                  highlightLines={lineSelection
-                    ? {
-                      start: Math.min(lineSelection.start, lineSelection.end),
-                      end: Math.max(lineSelection.start, lineSelection.end),
-                    }
-                    : undefined}
-                  lineNumbersConfig={lineNumbersConfig}
                 />
-              </div>
+              ) : null}
+              {!isFullscreen && (
+                <>
+                  <DocumentSymbolsPanel open={isSymbolsOpen} onOpenChange={setIsSymbolsOpen} viewRef={editorViewRef} />
+                  <WorkspaceSymbolsDialog
+                    open={isWorkspaceSymbolsOpen}
+                    onOpenChange={setIsWorkspaceSymbolsOpen}
+                    workspaceRoot={root || panelRoot || ''}
+                    searchContents={files.searchContents}
+                    includeHidden={showHidden}
+                    respectGitignore={!showGitignored}
+                    onSelectSymbol={(sym) => jumpToEditorLocation({ path: sym.path, line: sym.line, column: sym.column })}
+                  />
+                </>
+              )}
+              <ContextMenu>
+                <ContextMenuTrigger className={cn('min-h-0 flex-1', shouldMaskEditorForPendingNavigation && 'invisible')}>
+                  <FilePositionEditor
+                    key={filePositionKey}
+                    positionKey={filePositionKey}
+                    detached={!visible}
+                    value={draftContent}
+                    onChange={setDraftContent}
+                    readOnly={!canEdit}
+                    vimMode={fileEditorKeymap === 'vim'}
+                    extensions={editorExtensions}
+                    className="h-full"
+                    blockWidgets={blockWidgets}
+                    onViewReady={(view) => {
+                      editorViewRef.current = view;
+                      applyGitBaseline(view);
+                      setEditorViewReadyNonce((value) => value + 1);
+                      window.requestAnimationFrame(() => {
+                        nudgeEditorSelectionAboveKeyboard(view);
+                      });
+                    }}
+                    onViewDestroy={() => {
+                      if (editorViewRef.current) {
+                        editorViewRef.current = null;
+                      }
+                      setEditorViewReadyNonce((value) => value + 1);
+                    }}
+                    enableSearch
+                    searchOpen={isSearchOpen}
+                    onSearchOpenChange={setIsSearchOpen}
+                    highlightLines={lineSelection
+                      ? {
+                        start: Math.min(lineSelection.start, lineSelection.end),
+                        end: Math.max(lineSelection.start, lineSelection.end),
+                      }
+                      : undefined}
+                    lineNumbersConfig={lineNumbersConfig}
+                  />
+                </ContextMenuTrigger>
+                {!isMobile ? (
+                  <ContextMenuContent className="min-w-52">
+                    <ContextMenuItem onClick={() => {
+                      const view = editorViewRef.current;
+                      if (view) void codeNavigationController.goToDefinitionAtCursor(view);
+                    }}>
+                      <span>{t('filesView.editor.goToDefinition')}</span>
+                      <span className="ms-auto ps-4 typography-micro text-muted-foreground">F12</span>
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => {
+                      const view = editorViewRef.current;
+                      if (view) void codeNavigationController.goToDefinitionAtCursor(view, { forcePeek: true });
+                    }}>
+                      <span>{t('filesView.editor.peekDefinition')}</span>
+                      <span className="ms-auto ps-4 typography-micro text-muted-foreground">Alt+F12</span>
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => {
+                      const view = editorViewRef.current;
+                      if (view) void codeNavigationController.findReferencesAtCursor(view);
+                    }}>
+                      <span>{t('filesView.editor.findReferences')}</span>
+                      <span className="ms-auto ps-4 typography-micro text-muted-foreground">Shift+F12</span>
+                    </ContextMenuItem>
+                    {canEdit ? (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => {
+                          const view = editorViewRef.current;
+                          if (view) codeNavigationController.renameSymbolAtCursor(view);
+                        }}>
+                          <span>{t('filesView.editor.renameSymbol')}</span>
+                          <span className="ms-auto ps-4 typography-micro text-muted-foreground">F2</span>
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => {
+                          const view = editorViewRef.current;
+                          if (view) codeNavigationController.selectAllOccurrencesAtCursor(view);
+                        }}>
+                          <span>{t('filesView.editor.changeAllOccurrences')}</span>
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => {
+                          const view = editorViewRef.current;
+                          if (view) runToggleEditorComment(view);
+                        }}>
+                          <span>{t('filesView.editor.toggleComment')}</span>
+                        </ContextMenuItem>
+                      </>
+                    ) : null}
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => setIsSymbolsOpen(true)}>
+                      <span>{t('filesView.editor.symbols')}</span>
+                    </ContextMenuItem>
+                    {files.searchContents ? (
+                      <ContextMenuItem onClick={() => setIsWorkspaceSymbolsOpen(true)}>
+                        <span>{t('filesView.editor.workspaceSymbols')}</span>
+                      </ContextMenuItem>
+                    ) : null}
+                    <ContextMenuItem onClick={() => setIsGoToLineOpen(true)}>
+                      <span>{t('filesView.editor.goToLine')}</span>
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                ) : null}
+              </ContextMenu>
               {shouldMaskEditorForPendingNavigation && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background">
                   <div className="flex items-center gap-2 typography-ui text-muted-foreground">
@@ -5261,9 +5712,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           ) : canUseShikiFileView && textViewMode === 'view' ? (
             renderShikiFileView(selectedFile, draftContent, fullscreenViewVirtualizer, restoreFullscreenCodeScroll)
           ) : (
-            <div className={cn('relative h-full', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}>
+            <div className={cn('relative flex h-full flex-col', shouldMaskEditorForPendingNavigation && 'overflow-hidden')}>
+              {!isMobile && selectedFile ? (
+                <EditorBreadcrumbs
+                  filePath={selectedFile.path}
+                  relativePath={displaySelectedPath}
+                  viewRef={editorViewRef}
+                  viewReadyNonce={editorViewReadyNonce}
+                />
+              ) : null}
               <DocumentSymbolsPanel open={isSymbolsOpen} onOpenChange={setIsSymbolsOpen} viewRef={editorViewRef} />
-              <div className={cn('h-full', shouldMaskEditorForPendingNavigation && 'invisible')}>
+              <WorkspaceSymbolsDialog
+                open={isWorkspaceSymbolsOpen}
+                onOpenChange={setIsWorkspaceSymbolsOpen}
+                workspaceRoot={root || panelRoot || ''}
+                searchContents={files.searchContents}
+                includeHidden={showHidden}
+                respectGitignore={!showGitignored}
+                onSelectSymbol={(sym) => jumpToEditorLocation({ path: sym.path, line: sym.line, column: sym.column })}
+              />
+              <div className={cn('min-h-0 flex-1', shouldMaskEditorForPendingNavigation && 'invisible')}>
               <FilePositionEditor
                 key={`${filePositionKey}:fullscreen`}
                 positionKey={`${filePositionKey}:fullscreen`}
@@ -5272,10 +5740,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 readOnly={!canEdit}
                 vimMode={fileEditorKeymap === 'vim'}
                 extensions={editorExtensions}
+                blockWidgets={blockWidgets}
                 className="h-full"
                 onViewReady={(view) => {
                   editorViewRef.current = view;
                   applyGitBaseline(view);
+                  setEditorViewReadyNonce((value) => value + 1);
                   window.requestAnimationFrame(() => {
                     nudgeEditorSelectionAboveKeyboard(view);
                   });
@@ -5284,6 +5754,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                   if (editorViewRef.current) {
                     editorViewRef.current = null;
                   }
+                  setEditorViewReadyNonce((value) => value + 1);
                 }}
               />
               </div>

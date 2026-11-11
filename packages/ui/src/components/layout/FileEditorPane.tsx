@@ -34,6 +34,7 @@ export const FileEditorPane: React.FC<{
   const defaultZone = useDefaultContextZone();
   const selectedPath = useFilesViewTabsStore((state) => state.byRoot[directoryKey]?.selectedPath ?? null);
   const editorRef = React.useRef<FileEditorHandle | null>(null);
+  const sectionRef = React.useRef<HTMLElement | null>(null);
   const files = React.useMemo(() => panel?.tabs.filter((tab) => tab.mode === 'file' && tab.targetPath) ?? [], [panel?.tabs]);
   const diffState = getEditorDiffTabState(panel, placement, defaultZone);
   const showsDiff = editorLayout && diffState === 'active';
@@ -65,12 +66,12 @@ export const FileEditorPane: React.FC<{
   }, [directoryKey]);
   React.useEffect(() => {
     if (!showsDiff) return;
-    return registerCloseTabTarget(() => useUIStore.getState().setEditorDiffTabState(directoryKey, 'closed'));
+    return registerCloseTabTarget(() => useUIStore.getState().setEditorDiffTabState(directoryKey, 'closed'), sectionRef);
   }, [directoryKey, showsDiff]);
 
   return (
     <MovablePane host={editorLayout ? residentHost : classicHost}>
-      <section data-file-editor="true" className={cn('relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background', editorLayout && 'oc-panel-edge rounded-[10px]')}>
+      <section ref={sectionRef} data-file-editor="true" className={cn('relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background', editorLayout && 'oc-panel-edge rounded-[10px]')}>
         {editorLayout && <header className="flex min-h-10 shrink-0 items-stretch border-b border-border">
           {tabs.length > 0 ? <SortableTabsStrip
             items={tabs.map((tab) => {

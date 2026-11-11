@@ -2435,13 +2435,13 @@ const dispatchDomEventToWindow = (browserWindow, event, detail) => {
 const closeTabTargets = new WeakSet();
 const closeTabWatched = new WeakSet();
 
-/** Cmd/Ctrl+W: the page's own tab when it has one open, else the window. */
+/** Cmd/Ctrl+W: closes the active tab in the focused window; never closes the main workspace window. */
 const closeTabOrWindow = () => {
   // Only the focused window: with an About panel or nothing of ours in front,
   // falling back to the main window would close the wrong thing.
   const target = BrowserWindow.getFocusedWindow();
   if (!target || target.isDestroyed()) return;
-  if (closeTabTargets.has(target.webContents)) {
+  if (closeTabTargets.has(target.webContents) || target === state.mainWindow) {
     dispatchDomEventToWindow(target, 'openchamber:close-tab');
     return;
   }

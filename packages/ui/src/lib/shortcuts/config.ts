@@ -276,6 +276,24 @@ const SHORTCUT_GROUPS = {
       customizable: true,
       settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.open_document_symbols.label',
     },
+    {
+      id: 'open_workspace_symbols',
+      defaultBinding: 'mod+alt+o',
+      customizable: true,
+      settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.open_workspace_symbols.label',
+    },
+    {
+      id: 'editor_go_back',
+      defaultBinding: 'ctrl+-',
+      customizable: true,
+      settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.editor_go_back.label',
+    },
+    {
+      id: 'editor_go_forward',
+      defaultBinding: 'ctrl+shift+-',
+      customizable: true,
+      settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.editor_go_forward.label',
+    },
   ],
   application: [
     {

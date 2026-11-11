@@ -1,7 +1,7 @@
 import type { EditorState, Extension, Line } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import { symbolKindOf } from './documentSymbols';
+import { enclosingSymbolsAtPosition, symbolKindOf } from './documentSymbols';
 
 // While the body of a function or class fills the screen, its first line
 // stays pinned at the top of the editor, nested scopes under it, like VS
@@ -17,8 +17,19 @@ type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
  * `coveredFrom`, outermost first, at most `MAX_STICKY_LINES` of the innermost.
  */
 export const enclosingScopeLines = (state: EditorState, pos: number, coveredFrom: number): Line[] => {
+  const tree = syntaxTree(state);
+  if (tree.topNode.name === 'Program') {
+    const lines: Line[] = [];
+    for (const symbol of enclosingSymbolsAtPosition(state, pos)) {
+      if ((symbol.scopeTo ?? symbol.from) <= pos) continue;
+      const line = state.doc.line(symbol.line);
+      if (line.from >= coveredFrom || lines.some((known) => known.number === line.number)) continue;
+      lines.push(line);
+    }
+    return lines.slice(-MAX_STICKY_LINES);
+  }
   const lines: Line[] = [];
-  for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
+  for (let node: SyntaxNode | null = tree.resolveInner(pos, 1); node; node = node.parent) {
     const kind = symbolKindOf(node);
     if (!kind || kind === 'heading' || node.to <= pos) continue;
     const line = state.doc.lineAt(node.from);

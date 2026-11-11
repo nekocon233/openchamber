@@ -10,6 +10,7 @@ import { html } from '@codemirror/lang-html';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { python } from '@codemirror/lang-python';
+import { csharp } from '@replit/codemirror-lang-csharp';
 
 import { Language, LanguageDescription, StreamLanguage, HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
@@ -50,6 +51,10 @@ export function codeBlockLanguageResolver(info: string): Language | LanguageDesc
     case 'py':
     case 'python':
       return python().language;
+    case 'cs':
+    case 'csharp':
+    case 'c#':
+      return csharp().language;
     case 'md':
     case 'markdown':
     case 'mdown':
@@ -171,6 +176,11 @@ export function languageByExtension(filePath: string): Extension | null {
     case 'pyw':
     case 'pyi':
       return python();
+
+    // C# (Lezer grammar with declaration & block structure)
+    case 'cs':
+    case 'csx':
+      return csharp();
 
     // Less common languages: return null so callers fall back to
     // loadLanguageByExtension which dynamically imports from @codemirror/language-data.

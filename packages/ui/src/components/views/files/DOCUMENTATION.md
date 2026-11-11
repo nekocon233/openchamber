@@ -487,9 +487,8 @@ tool, so the event never reaches it.
 
 ## Editor aids
 
-The text editor's helpers live in `lib/codemirror/` and need no language
-server; `FilesView` assembles them. What the syntax tree or git can answer
-is shown, nothing that needs type information.
+The text editor's helpers live in `lib/codemirror/` and are assembled by
+`FilesView`.
 
 - **Git changes.** `gitChangeGutter` diffs the document against the file's git
   baseline after typing pauses. A click on a bar opens that change in place:
@@ -501,21 +500,44 @@ is shown, nothing that needs type information.
 - **Indent guides** draw one faint line per indent step on the lines in view,
   at multiples of the width the file itself uses (the most common step
   between lines), so a 4-space file does not get guides every 2 columns.
-- **Sticky scope** (desktop) pins the first line of each function or class
-  whose body fills the top of the editor, up to three, innermost kept.
-- **Import links.** Cmd+click (Ctrl+click elsewhere) on a relative import path
-  in JS/TS opens the file it names, trying the extensions a bundler tries;
-  holding the key underlines the path. Elsewhere that click still adds a
-  cursor.
+- **Sticky scope and breadcrumbs** (desktop) pin the first line of each
+  function, class or C# namespace/type whose body fills the top of the editor,
+  up to three, innermost kept, and show the active `path > namespace > class >
+  method` chain in `EditorBreadcrumbs` above the editor.
+- **Code navigation and LSP bridge** (`lspWorkspaceBridge.ts`,
+  `symbolNavigation.ts`, `renameSymbol.ts`). `@codemirror/lsp-client` connects
+  to a hybrid `Transport`: when a host language server (`csharp-ls` /
+  `OmniSharp`, `typescript-language-server`, `pyright-langserver`, `gopls`,
+  `rust-analyzer`) is available through `/api/lsp/request`, requests use it;
+  otherwise an in-process provider answers from the Lezer syntax tree
+  (`@replit/codemirror-lang-csharp` for `.cs`/`.csx`), `tsconfig.json` /
+  `jsconfig.json` path aliases (`importLinks.ts`), and `files.searchContents`
+  (ripgrep). Single-target definitions jump directly and record the origin in
+  `useEditorNavigationStore` (Back/Forward in the toolbar and `Ctrl+-` /
+  `Ctrl+Shift+-`); multi-target definitions (`F12`, `Alt+F12`) and references
+  (`Shift+F12`, or `Cmd/Ctrl+Click` on a declaration) open `EditorPeekWidget`
+  inline below the line through `CodeMirrorEditor`'s `blockWidgets`. Hovering a
+  symbol shows its signature and JSDoc or C# `///` XML documentation, `F2`
+  renames the symbol in its lexical scope, `Mod+F2` selects all occurrences as
+  multiple cursors, and `Mod+Alt+O` (`WorkspaceSymbolsDialog`) searches
+  workspace declarations across files. `browserShortcutShield.ts` intercepts
+  browser-reserved editor chords (`F12` DevTools, `Ctrl+-` / `Ctrl+Shift+-`
+  page zoom, non-macOS `Alt+Left/Right` browser history, `Mod+D` bookmark,
+  `Mod+S` save page) while focus is inside the editor wrapper and acquires Web
+  Keyboard Lock (`navigator.keyboard.lock`) when running in fullscreen or
+  standalone PWA mode.
 - **JSON errors** (`.json`, `.jsonc`, `.geojson`) underline the first place the
   file stops parsing.
 
-### Why import links stop at relative paths
+### Why `@codemirror/lsp-client` uses a hybrid transport instead of requiring a host language server
 
-`./` and `../` paths name a file; aliases (`@/lib/x`) and packages need the
-project's resolver settings, and a jump that guesses was ruled out. Go to
-definition for symbols needs a language server, which was ruled out as too
-heavy; OpenCode's own LSP served the agent only and is not a source for it.
+Most workspaces open without a language server installed for every language in
+the tree. Answering `initialize`, `textDocument/hover`, `textDocument/definition`,
+`textDocument/references`, `textDocument/rename`, and `textDocument/signatureHelp`
+in-process from the Lezer syntax tree, `tsconfig` path mappings, and ripgrep
+gives immediate zero-setup navigation across C#, TypeScript/JavaScript, Python,
+Go, and Rust, while forwarding to `/api/lsp/request` upgrades to compiler
+semantics whenever a host language server is present.
 
 ### Why JSON errors accept comments and trailing commas
 
