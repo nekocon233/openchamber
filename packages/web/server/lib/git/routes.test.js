@@ -787,6 +787,23 @@ describe('git worktree topology routes', () => {
 describe('git worktree archive routes', () => {
   const worktreeBootstrapStore = { remove: vi.fn() };
 
+  it.each([undefined, false, true, 'true'])('only overrides a worktree lock for literal true, forceLocked=%s', async (forceLocked) => {
+    gitLibraries.archiveWorktree.mockResolvedValue({ id: 'locked' });
+    const { app, getRoute } = createRouteRegistry();
+    registerGitRoutes(app, { worktreeBootstrapStore });
+    const response = createMockResponse();
+
+    await getRoute('POST', '/api/git/worktrees/archives')(
+      { query: { directory: '/repo' }, body: { directory: '/repo/wt', id: 'locked', sessionIds: [], forceLocked } },
+      response,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(gitLibraries.archiveWorktree).toHaveBeenCalledWith('/repo', expect.objectContaining({
+      forceLocked: forceLocked === true,
+    }), { bootstrapStore: worktreeBootstrapStore });
+  });
+
   it('archives with the sessions, the bootstrap store and a disposal hook, like a removal', async () => {
     gitLibraries.archiveWorktree.mockResolvedValue({ id: 'a1' });
     const { app, getRoute } = createRouteRegistry();

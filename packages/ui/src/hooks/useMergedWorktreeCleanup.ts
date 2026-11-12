@@ -163,7 +163,7 @@ const createDeps = (): MergedWorktreeCleanupDeps => {
     isWorktreeRemoving,
     takeRestored: takeRestoredWorktree,
     archiveWorktree: async (candidate, sessions) => {
-      await archiveWorktreeWork({ project: candidate.project, worktree: candidate.worktree, sessions });
+      await archiveWorktreeWork({ project: candidate.project, worktree: candidate.worktree, sessions, forceLocked: true });
     },
     report,
   };

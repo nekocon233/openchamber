@@ -14,6 +14,14 @@ This module resolves project roots and lists worktree topology through the runti
 
 ## Decisions
 
+### Why merged-PR cleanup overrides Git worktree locks
+
+After a change request merges, automatic cleanup archives the worktree's changes
+and sessions before removing its folder. That path explicitly passes
+`forceLocked: true` so a retained Git lock does not prevent completion. Manual
+archive and ordinary deletion keep the lock protection. Existing use checks
+still leave busy, visible, or unknown worktrees alone.
+
 ### Why topology revisions and instance ownership are separate
 
 A topology change requires another read of the same project. An instance change makes that project's path obsolete. Retrying both through one generation check sent the old path to the new instance, so reads now retain an instance predicate separately from the topology revision.

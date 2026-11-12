@@ -1154,6 +1154,8 @@ export interface ArchiveGitWorktreePayload {
   sessionIds: string[];
   /** The name the sidebar showed for the work, kept when the worktree has no task title. */
   title?: string;
+  /** Allow snapshot-backed removal of a locked worktree; only merged-PR cleanup opts in. */
+  forceLocked?: boolean;
 }
 
 export interface GitWorktreeArchiveRestoreResult {

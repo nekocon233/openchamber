@@ -212,6 +212,11 @@ busy one, so otherwise the archive is kept and the call fails with
 Its message says to restore once nothing holds the folder only when the
 folder is busy; any other leftover is named by its path with the error that
 stopped its deletion.
+Only literal `forceLocked: true` on an archive request permits removal of a
+locked worktree, by passing `--force` twice to Git after the snapshot succeeds.
+The option defaults to false. The merged-PR cleanup opts in; manual archives and
+ordinary deletion retain lock protection. Removal does not unlock first, so an
+early refusal cannot leave the worktree unlocked.
 Only a linked worktree git registers for this repository is archived, never
 the primary checkout or a stray folder, and one worktree is archived once at a
 time (`WORKTREE_ARCHIVE_IN_PROGRESS` for a second call).
