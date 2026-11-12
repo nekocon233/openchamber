@@ -1110,3 +1110,44 @@ describe('GitLab live summaries', () => {
     await expect(service.liveSummaries({ refs: [{ owner: 'team', repo: 'app', number: 1 }] })).rejects.toBe(refused);
   });
 });
+
+describe('lightweight GitLab file statistics', () => {
+  const headSha = 'a'.repeat(40), baseSha = 'b'.repeat(40);
+  const raw = { ...openMR, diff_refs: { head_sha: headSha, base_sha: baseSha }, sha: headSha, changes_count: '2' };
+  function statsService(stats, errors) {
+    const show = vi.fn(async () => raw);
+    const post = vi.fn(async () => ({ body: { data: { project: { mergeRequest: { diffStats: stats } } }, errors } }));
+    const base = setup();
+    return { ...setup({ MergeRequests: { ...base.client.MergeRequests, show, requester: { post } } }), show, post };
+  }
+  it('uses authoritative per-file metadata without loading diffs, notes or CI', async () => {
+    const { service, client, show } = statsService([{ path: 'a.ts', additions: 1000, deletions: 7 }, { path: 'image.png', additions: 0, deletions: 0 }]);
+    expect(await service.changeRequestFileStats('/repo', 5, { project: { owner: 'team', name: 'repo' }, expectedHeadSha: headSha, constrainToPrimary: true })).toEqual({
+      headSha, baseSha, files: [{ path: 'a.ts', additions: 1000, deletions: 7 }, { path: 'image.png', additions: 0, deletions: 0 }],
+    });
+    expect(show).toHaveBeenCalledTimes(2);
+    expect(client.MergeRequests.allDiffs).not.toHaveBeenCalled();
+    expect(client.MergeRequestNotes.all).not.toHaveBeenCalled();expect(client.Jobs.all).not.toHaveBeenCalled();
+  });
+  it.each([
+    [null, undefined], [[{ path: 'a', additions: -1, deletions: 0 }], undefined],
+    [[{ path: 'a', additions: 1, deletions: 0 }, { path: 'a', additions: 2, deletions: 0 }], undefined],
+    [[{ path: 'a', additions: 1, deletions: 0 }], [{ message: 'partial response' }]],
+  ])('refuses unavailable, invalid or partial statistics', async (stats, errors) => {
+    const { service } = statsService(stats, errors);
+    await expect(service.changeRequestFileStats('/repo', 5)).rejects.toThrow('complete file statistics');
+  });
+  it('rejects stale heads before statistics and a changed base after reading', async () => {
+    const stale = statsService([]);
+    await expect(stale.service.changeRequestFileStats('/repo', 5, { expectedHeadSha: 'c'.repeat(40) })).rejects.toMatchObject({ status: 409 });
+    expect(stale.post).not.toHaveBeenCalled();
+    const moving = statsService([]);
+    moving.show.mockResolvedValueOnce({ ...raw, changes_count: '0' }).mockResolvedValueOnce({ ...raw, diff_refs: { ...raw.diff_refs, base_sha: 'd'.repeat(40) } });
+    await expect(moving.service.changeRequestFileStats('/repo', 5)).rejects.toMatchObject({ status: 409 });
+  });
+  it('does not publish a capped file list when the host reports only an approximate count', async () => {
+    const { service, show } = statsService([{ path: 'a.ts', additions: 1, deletions: 0 }]);
+    show.mockResolvedValue({ ...raw, changes_count: '1000+' });
+    await expect(service.changeRequestFileStats('/repo', 5)).rejects.toThrow('complete file statistics');
+  });
+});

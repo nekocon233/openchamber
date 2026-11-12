@@ -177,6 +177,12 @@ GitHub keeps a chain of PRs, each targeting the branch of the one below, as a st
 
 ## Consumers of PR data
 
+The project PR list reads `/pulls/file-stats` through `resources.js` and
+`pull-file-stats.js`. It paginates `readGitHubPullFiles`, reuses the authorized
+snapshot fallback beyond the API ceiling, verifies the complete file count and
+checks head/base again before returning path/addition/deletion metadata. It
+loads no comments or checks and sends no patch content to the UI.
+
 PR comparison, walkthrough and context attachments share `readGitHubPullPatch`.
 The ordinary path reads GitHub's diff media type. Only a `406` or `422` with
 `PullRequest / diff / too_large` starts the internal `pr-snapshot` Git operation.

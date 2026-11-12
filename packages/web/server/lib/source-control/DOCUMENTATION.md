@@ -73,6 +73,22 @@ Snapshot writes use unique same-directory temporary files, mode `0600` before re
 
 ## Reference picker reads
 
+`GET /pulls/file-stats` is a bound `changeRequests` read. It validates the target
+and expected head before binding/account work and dispatches only to a provider's
+optional `changeRequestFileStats`. GitHub and GitLab return complete paths and
+counts without discussions or CI. Missing implementations answer the standard
+501 unsupported response. An incomplete list or changed revision fails the read;
+no partial aggregate is published. Reads have a 25-second deadline and GitHub
+requests follow client cancellation.
+
+### Why snapshot sources have their own resolver
+
+The internal snapshot uses the target repository and immutable head/base/merge
+base coordinates, including a PR whose source fork was deleted. Checkout
+sources instead name the contributor's branch and remote. The registry's
+`resolveGitHubPullRequestSnapshot` therefore dispatches to
+`resolveChangeRequestSnapshotSource`, never the checkout source resolver.
+
 Reference-picker reads validate `scope=repository|network` before resolving the read context, then pass it to the provider. Omission keeps `network`. The web adapter retains the provider's scope echo so a project-only list can reject an unscoped response. Disabled reference-picker capabilities still answer the existing unsupported response.
 
 The shell also registers the versioned review draft at `GET /pr/review/pending`

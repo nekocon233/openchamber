@@ -27,6 +27,19 @@ or discarded.
 
 ## Project pull requests and CI runs
 
+Each project PR row shows its visible file count and additions/deletions, using
+the same device-local project file-type exclusions as Changes. Worktrees share
+their owning project's exclusions. These counts describe presentation only;
+provider actions and attachments retain the complete changeset.
+
+`ProjectPullFileStats` reads complete per-file metadata independently of checks
+and selection. It uses the reference value cache's 60-second freshness and
+40-entry soft bound, with active rows pinned. Runtime, exact binding/account,
+PR head/base name and list update time scope each answer. Explicit list refresh
+starts a new reading generation. The shared background gate admits at most two
+statistics reads; a row removed before admission asks nothing. Runtime changes
+retire the cache. Loading, failed and unknown counts stay distinct from zero.
+
 On GitHub projects, `PullRequestView` remembers Project PRs or CI runs
 per project, defaulting to Project PRs. Saved Current branch selections restore
 Project PRs. Project PRs

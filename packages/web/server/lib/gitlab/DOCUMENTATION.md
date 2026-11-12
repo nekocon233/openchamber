@@ -53,6 +53,12 @@ GitLab has no stack object. A merge request's chain is read with its context (`c
 
 ## Structure
 
+`changeRequestFileStats` reads GraphQL `diffStats` without diff hunks, notes,
+pipelines or stack reads. It rejects GraphQL errors, duplicate paths and invalid
+counts, requires a matching exact `changes_count` and verifies the head/base
+again before publishing the complete metadata list. Older hosts without these
+statistics fail explicitly rather than reporting an empty changeset.
+
 - `instance.js`: instance origin normalization and transport policy.
 - `device-flow.js`: host probe, device authorization, and token exchange.
 - `verify.js` and `user.js`: token verification and payload parsing.

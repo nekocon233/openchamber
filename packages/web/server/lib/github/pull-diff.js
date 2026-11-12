@@ -95,6 +95,6 @@ export async function resolveGitHubPullSnapshot({ octokit, repo, number, context
   return {
     context, repo: { owner: repo.owner, repo: repo.repo }, number,
     headSha: pull.head.sha, baseSha: pull.base.sha, mergeBaseSha: comparison.merge_base_commit.sha,
-    endpoint: `https://github.com/${repo.owner}/${repo.repo}.git`,
+    endpoint: `https://${context?.instance ?? 'github.com'}/${repo.owner}/${repo.repo}.git`,
   };
 }

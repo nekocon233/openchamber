@@ -705,6 +705,8 @@ export function createProvider({
         .changeRequestStatus(directory, branch, remote),
       listChangeRequests: ({ session, directory, page, query, state, people, remote }) => serviceFor(session)
         .listChangeRequests(directory, { page, query, state, people, remote }),
+      changeRequestFileStats: ({ session, context, directory, number, project, remote, expectedHeadSha }) => serviceFor(session)
+        .changeRequestFileStats(directory, number, { project, remote, expectedHeadSha, constrainToPrimary: true, requireNetwork: true, linked: context?.linked }),
       reviewState: ({ session, directory, project, number, remote }) => serviceFor(session).reviewState(directory, number, project, remote),
       changeRequestContext: ({ session, context, directory, number, project, remote, includeDiff, includeCIDetails, includeTimeline }) => serviceFor(session)
         .changeRequestContext(directory, number, {

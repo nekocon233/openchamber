@@ -40,6 +40,8 @@ import {
 import { fetchReviewState } from './review-draft.js';
 import { readGitHubPendingReview } from './pending-reviews.js';
 import { listGitHubCiRuns, readGitHubCiJobLog, readGitHubCiRunDetail } from './ci-runs.js';
+import { readGitHubPullFileStats } from './pull-file-stats.js';
+import { resolveGitHubPullSnapshot } from './pull-diff.js';
 
 /**
  * GitHub's bound reads behind the shared route shell: change request status,
@@ -123,6 +125,7 @@ export function createGitHubResources({
   resolvePrStatus,
   readContributorProvenance,
   invalidateAccount,
+  readPullRequestSnapshot,
 }) {
   const contextCache = createContextCache();
   // The login a merge-permission check resolves is memoized per host and
@@ -454,6 +457,14 @@ export function createGitHubResources({
       const result = { items: succeeded.flatMap((entry) => entry.items), page, hasMore: succeeded.some((entry) => entry.hasMore) };
       if (failed.length > 0) result.incompleteProjectIds = failed.map(({ repoRef }) => `${repoRef.owner}/${repoRef.repo}`);
       return result;
+    },
+
+    changeRequestFileStats: async ({ session, context, directory, number, project, remote, expectedHeadSha, signal }) => {
+      const { octokit } = accountOf(session);
+      const repo = await resolveRepoForRequest(octokit, directory,
+        project ? { owner: project.owner, repo: project.name } : null, remote, { linked: context?.linked });
+      if (!repo) throw notInProject();
+      return readGitHubPullFileStats({ octokit, repo, number, context, expectedHeadSha, signal, readSnapshot: readPullRequestSnapshot });
     },
 
     changeRequestContext: async ({ session, context, directory, number, project, remote, includeDiff, includeCIDetails }) => {
@@ -955,6 +966,13 @@ export function createGitHubResources({
         headBranch: payload.head.ref,
         headOwner: payload.head.repo.owner.login,
       };
+    },
+
+    resolveChangeRequestSnapshotSource: async ({ session, context, repo, number, expectedHeadSha, expectedBaseSha, linked }) => {
+      const { octokit } = accountOf(session);
+      const target = await resolveRepoForRequest(octokit, context.directory, repo, context.primaryRemote, { linked });
+      if (!target) throw notInProject();
+      return resolveGitHubPullSnapshot({ octokit, repo: target, number, context, expectedHeadSha, expectedBaseSha });
     },
 
     resolveChangeRequestSource: async ({ session, context, project, number, expectedHeadSha, requestedRemoteName }) => {

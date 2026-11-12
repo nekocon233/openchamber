@@ -506,6 +506,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       configRoot: openchamberDataDir,
       hostServices: {
         github: {
+          readPullRequestSnapshot: (input) => networkOperations.readPullRequestSnapshot(input),
           // A worktree made from a fork PR has no upstream; its provenance says
           // which remote the branch came from, so PR status can find the PR.
           readContributorProvenance: (directory) => contributorProvenance.read(directory),

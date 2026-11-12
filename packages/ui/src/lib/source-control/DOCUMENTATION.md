@@ -1,5 +1,15 @@
 # UI source control
 
+## Per-file PR statistics
+
+`SourceControlAPI.changeRequestFileStats` returns a complete metadata list for
+one head/base revision. Its web adapter parses revisions, paths and nonnegative
+nullable counts through `fileStats.ts`, rejects duplicate paths and rejects an
+answer for a different requested head. `summarizeFileStats` applies Changes'
+extension rules; an unknown included count keeps that total unknown, while an
+empty filtered list is a measured zero. Web, Electron, hosted mobile and
+Capacitor use the server read. VS Code explicitly rejects this capability.
+
 ## Repository binding authority
 
 `repository-binding.ts` owns binding reads and their lifecycle for the shared UI.

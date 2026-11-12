@@ -35,6 +35,18 @@ const localeDictionaries = {
 } as const;
 
 describe('i18n dictionaries', () => {
+  test('project PR file statistics are translated with count placeholders', () => {
+    const keys = ['references.projectPulls.files.single', 'references.projectPulls.files.plural',
+      'references.projectPulls.files.loading', 'references.projectPulls.files.failed'] as const;
+    for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
+      for (const key of keys) {
+        expect(dictionary[key]).toBeTruthy();
+        if (locale !== 'en') expect(dictionary[key]).not.toBe(enDict[key]);
+      }
+      expect(dictionary[keys[0]]).toContain('{count}');
+      expect(dictionary[keys[1]]).toContain('{count}');
+    }
+  });
   test('CLI command discovery failures are translated in every locale', () => {
     for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
       expect(dictionary['chat.commandAutocomplete.loadFailed']).toBeTruthy();

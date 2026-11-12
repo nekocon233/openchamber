@@ -55,6 +55,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "references.projectPulls.files.single": "{count} 個檔案",
+  "references.projectPulls.files.plural": "{count} 個檔案",
+  "references.projectPulls.files.loading": "正在讀取檔案統計",
+  "references.projectPulls.files.failed": "檔案統計無法使用",
   "chat.toolPart.checklist.title": "更新任務清單",
   "chat.toolPart.checklist.empty": "任務清單已清空。",
   ...ciRunsI18n['zh-TW'],

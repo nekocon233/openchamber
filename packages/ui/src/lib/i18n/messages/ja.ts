@@ -55,6 +55,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "references.projectPulls.files.single": "{count} 個のファイル",
+  "references.projectPulls.files.plural": "{count} 個のファイル",
+  "references.projectPulls.files.loading": "ファイル統計を読み込み中",
+  "references.projectPulls.files.failed": "ファイル統計を取得できません",
   "chat.toolPart.checklist.title": "タスクリストを更新",
   "chat.toolPart.checklist.empty": "タスクリストをクリアしました。",
   ...ciRunsI18n['ja'],

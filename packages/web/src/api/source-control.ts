@@ -86,6 +86,7 @@ import type { SourceControlProviderDescriptor } from '@openchamber/ui/lib/source
 import { fetchChangeRequestListStatuses, fetchChangeRequestReviewState, fetchRepositoryReferenceDetail, fetchRepositoryReferences, fetchRepositoryReferencesAcross } from './repository-references';
 import { BUILT_IN_SOURCE_CONTROL_PROVIDERS, fetchSourceControlProviders, providerPath } from './source-control-providers';
 import { githubPendingReviewStateSchema, type GitHubPendingReviewAction } from '@openchamber/ui/lib/source-control/pendingReview';
+import { changeRequestFileStatsSchema } from '@openchamber/ui/lib/source-control/fileStats';
 
 interface ErrorResponse {
   error?: string;
@@ -1687,6 +1688,19 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
       const payload = await request<PageResult<ChangeRequest> & ErrorResponse>(fetch, normalized, '/pulls/list', {}, query);
       if (!payload || !Array.isArray(payload.items)) throw new Error('Source control response contained invalid change requests');
       return parsePage(payload, payload.items.map((item) => parseSourceChangeRequest(item, normalized)));
+    },
+    changeRequestFileStats: async (context, number, options) => {
+      const query = boundReadQuery(context);
+      query.set('number', String(number));
+      if (options?.project) {
+        query.set('owner', options.project.owner);
+        query.set('repo', options.project.name);
+      }
+      if (options?.expectedHeadSha) query.set('expectedHeadSha', options.expectedHeadSha);
+      const payload = await request<ErrorResponse>(fetch, context, '/pulls/file-stats', { signal: options?.signal }, query);
+      const result = changeRequestFileStatsSchema.parse(payload);
+      if (options?.expectedHeadSha && result.headSha !== options.expectedHeadSha) throw new Error('Pull request changed; refresh and try again');
+      return result;
     },
     changeRequestContext: async (context, number, contextOptions): Promise<ChangeRequestContext> => {
       const normalized = normalizeIdentity(context);

@@ -29,6 +29,10 @@ import { isSameRepositoryItemLink } from '@/components/sourceBoard/boardLinkTarg
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import { useWorkspaceDraftStore, workspaceReplyDraftKey } from '@/stores/useWorkspaceDraftStore';
 import { Textarea } from '@/components/ui/textarea';
+import { useDiffFileFilter } from '../useDiffFileFilter';
+import { ProjectPullFileStats } from './ProjectPullFileStats';
+
+const NO_FILES: Array<{ path: string }> = [];
 
 /** Single-repository PR list, retained across the panel's branch and detail views. */
 export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDirectory: string; active: boolean }> = ({ directory, workspaceDirectory, active }) => {
@@ -57,6 +61,8 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     if (reference) browser.openItem({ source: 'github', reference });
   }, [active, browser, restoreUrl, restored.error, restored.items, restored.refreshing, restored.status, restoring, stateOwner]);
   const [refreshingFromHost, setRefreshingFromHost] = React.useState(false);
+  const [statsRefreshVersion, setStatsRefreshVersion] = React.useState(0);
+  const fileFilter = useDiffFileFilter(getRuntimeKey(), directory, NO_FILES);
   const refreshPending = React.useRef(false);
   const refreshFromHost = async () => {
     if (!context || context === 'missing' || refreshPending.current) return;
@@ -65,7 +71,10 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     setRefreshingFromHost(true);
     try {
       await sourceControl.refreshProviderReads(context);
-      if (getRuntimeKey() === runtime) await browser.list.retry();
+      if (getRuntimeKey() === runtime) {
+        setStatsRefreshVersion(version => version + 1);
+        await browser.list.retry();
+      }
     } catch (error) {
       if (getRuntimeKey() === runtime) toast.error(t('references.projectPulls.refreshFailed'), error instanceof Error ? { description: error.message } : undefined);
     } finally {
@@ -194,7 +203,10 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             if (listVisibleRef.current) scrollTop.current = event.currentTarget.scrollTop;
           }}
         >
-          {showingList ? <ReferenceBrowserList browser={browser} label={t('gitView.pullRequest.tab.project')} multiselectable={false} onOpenSettings={openSettings} onShow={rememberScroll} /> : null}
+          {showingList ? <ReferenceBrowserList browser={browser} label={t('gitView.pullRequest.tab.project')} multiselectable={false} onOpenSettings={openSettings} onShow={rememberScroll}
+            renderPullFileStats={context && context !== 'missing' ? pull => (
+              <ProjectPullFileStats context={context} pull={pull} excludedTypes={fileFilter.excludedTypes} refreshVersion={statsRefreshVersion} />
+            ) : undefined} /> : null}
         </ScrollableOverlay>
       </div>
     </div>

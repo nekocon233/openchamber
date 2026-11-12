@@ -1032,6 +1032,29 @@ export function registerProviderRoutes(app, {
       }));
     });
 
+    boundRead('changeRequests', '/pulls/file-stats', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const read = requireResource(impl, 'changeRequestFileStats');
+      const session = await sessionFor(impl, instance, trustedContext.accountId);
+      const abort = new AbortController();
+      const onClose = () => { if (!res.writableEnded) abort.abort(); };
+      res.on('close', onClose);
+      try {
+        return res.json(await read({
+          session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
+          number: requestIssueNumber(req.query?.number), project: optionalProject(req),
+          expectedHeadSha: requestText(req.query?.expectedHeadSha) || undefined,
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(25_000)]),
+        }));
+      } finally { res.off('close', onClose); }
+    }, {
+      validate: (req) => {
+        if (!requestIssueNumber(req.query?.number)) return 'number is required';
+        if (projectSelectorProblem(req)) return 'complete project selector is required';
+        if (req.query?.expectedHeadSha !== undefined && !/^[a-f0-9]{40}$/i.test(requestText(req.query.expectedHeadSha))) return 'expectedHeadSha must be a commit SHA';
+        return null;
+      },
+    });
+
     boundRead('changeRequests', '/pulls/context', async ({ req, res, impl, instance, directory, trustedContext }) => {
       const number = requestNumber(req.query?.number);
       if (!number) return res.status(400).json({ error: 'number is required' });
@@ -1246,6 +1269,11 @@ export function registerProviderRoutes(app, {
       number: input.number,
       expectedHeadSha: input.expectedHeadSha,
       requestedRemoteName: input.requestedRemoteName,
+    })),
+    resolveChangeRequestSnapshotSource: (input) => trustedRead(input, 'resolveChangeRequestSnapshotSource', () => ({
+      repo: input.repo, number: input.number,
+      expectedHeadSha: input.expectedHeadSha, expectedBaseSha: input.expectedBaseSha,
+      linked: input.context?.linked === true,
     })),
   });
 }

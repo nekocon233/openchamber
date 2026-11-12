@@ -673,10 +673,11 @@ export function createGitLabResourceService({ origin, client, download, resolveP
         body: { query: DIFF_STATS_QUERY, variables: { path: `${project.owner}/${project.name}`, iid: String(number) } },
       });
       const stats = response?.body?.data?.project?.mergeRequest?.diffStats;
-      if (!Array.isArray(stats)) return null;
+      if (!Array.isArray(stats) || response?.body?.errors?.length) return null;
       const byPath = new Map();
       for (const entry of stats) {
-        if (!isPlainObject(entry) || !isString(entry.path) || !Number.isInteger(entry.additions) || !Number.isInteger(entry.deletions)) return null;
+        if (!isPlainObject(entry) || !isString(entry.path) || !entry.path || byPath.has(entry.path)
+          || !Number.isInteger(entry.additions) || entry.additions < 0 || !Number.isInteger(entry.deletions) || entry.deletions < 0) return null;
         byPath.set(entry.path, { additions: entry.additions, deletions: entry.deletions });
       }
       return byPath;
@@ -1179,6 +1180,24 @@ export function createGitLabResourceService({ origin, client, download, resolveP
         ? requireMergeRequest(raw, target.project)
         : requireMapped(mapGitLabMergeRequest(raw, identity, target.project), 'GitLab returned an invalid merge request'));
       return { items, page: options.page ?? 1, hasMore: page.hasMore };
+    },
+
+    async changeRequestFileStats(directory, number, options = {}) {
+      const { target, raw } = await findByNumber(directory, number, options.project, options);
+      const sha = /^[a-f0-9]{40}$/i;
+      const headSha = text(raw.diff_refs?.head_sha || raw.sha);
+      const baseSha = text(raw.diff_refs?.base_sha);
+      if (!sha.test(headSha) || !sha.test(baseSha)) throw new Error('GitLab has not reported the merge request revision');
+      const changed = () => Object.assign(new Error('Merge request changed; refresh and try again'), { status: 409, code: 'STALE_CONFIG' });
+      if (options.expectedHeadSha && options.expectedHeadSha !== headSha) throw changed();
+      const stats = await readDiffStats(target.project, number);
+      if (!stats) throw new Error('GitLab could not provide complete file statistics');
+      if (!/^\d+$/.test(String(raw.changes_count)) || stats.size !== Number(raw.changes_count)) {
+        throw new Error('GitLab could not provide complete file statistics');
+      }
+      const after = await client.MergeRequests.show(target.project.id, number);
+      if (text(after.diff_refs?.head_sha || after.sha) !== headSha || text(after.diff_refs?.base_sha) !== baseSha) throw changed();
+      return { headSha, baseSha, files: Array.from(stats, ([path, counts]) => ({ path, ...counts })) };
     },
 
     async changeRequestContext(directory, number, options = {}) {
