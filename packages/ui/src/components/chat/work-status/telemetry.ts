@@ -443,106 +443,8 @@ function calculateTurnStats(
   };
 }
 
-/**
- * Weighted averages over every completed turn in the loaded records. The
- * window grows when older history is paged in, so the result describes what
- * is loaded rather than assuming it covers the whole session.
- */
-export type CompletedTurnAverages = {
-  turnsCount: number;
-  cacheHitPercent: number | null;
-  tokensPerSecond: number | null;
-};
-
-export function getCompletedTurnAverages(
-  records: readonly SessionMessageRecord[] | null | undefined,
-): CompletedTurnAverages | null {
-  if (!records || records.length === 0) return null;
-
-  // A turn needs a user message and assistant steps that have all finished.
-  // A truncated leading segment and the running turn are skipped, not treated
-  // as zero, so the average describes only complete turns that are loaded.
-  // Each turn is measured from its prompt to its last completed step, minus
-  // tool time and long pauses, matching the latest-turn rate above.
-  const turns: Array<{ steps: CompletedStepStats[]; llmDurationMs: number | null }> = [];
-  let current: CompletedStepStats[] | null = null;
-  let currentActivity: Array<[number, number]> = [];
-  let currentStart: number | null = null;
-  let currentEnd: number | null = null;
-  let currentComplete = true;
-  const flush = () => {
-    if (!current || !currentComplete || current.length === 0) return;
-    const toolWaitDurationMs = current.reduce<number | null>((total, step) => add(total, step.toolWaitDurationMs), 0);
-    const elapsedDurationMs = currentStart !== null && currentEnd !== null
-      ? nonnegative(currentEnd - currentStart)
-      : null;
-    const idleDurationMs = currentStart !== null && currentEnd !== null
-      ? calculateIdleDurationMs(currentActivity, currentStart, currentEnd)
-      : 0;
-    const llmDurationMs = elapsedDurationMs !== null && toolWaitDurationMs !== null
-      ? nonnegative(elapsedDurationMs - toolWaitDurationMs - idleDurationMs)
-      : null;
-    turns.push({ steps: current, llmDurationMs });
-  };
-  for (const record of records) {
-    if (record.info.role === 'user') {
-      flush();
-      current = [];
-      currentActivity = [];
-      currentStart = nonnegative(record.info.time.created);
-      currentEnd = null;
-      currentComplete = true;
-      continue;
-    }
-    if (record.info.role !== 'assistant' || current === null) continue;
-    const step = calculateCompletedStepStats(record);
-    if (step) {
-      current.push(step);
-      const created = nonnegative(record.info.time.created);
-      const completed = nonnegative(record.info.time.completed);
-      if (created !== null && completed !== null && completed >= created) currentActivity.push([created, completed]);
-      if (completed !== null) currentEnd = completed;
-    } else {
-      currentComplete = false;
-    }
-  }
-  flush();
-  if (turns.length === 0) return null;
-
-  let totalInputTokens: number | null = 0;
-  let totalCacheReadTokens: number | null = 0;
-  let totalCacheWriteTokens: number | null = 0;
-  let totalGeneratedTokens: number | null = 0;
-  let totalLlmDurationMs: number | null = 0;
-  for (const turn of turns) {
-    for (const step of turn.steps) {
-      totalInputTokens = add(totalInputTokens, step.inputTokens);
-      totalCacheReadTokens = add(totalCacheReadTokens, step.cacheReadTokens);
-      totalCacheWriteTokens = add(totalCacheWriteTokens, step.cacheWriteTokens);
-      totalGeneratedTokens = add(totalGeneratedTokens, add(step.outputTokens, step.reasoningTokens));
-    }
-    totalLlmDurationMs = add(totalLlmDurationMs, turn.llmDurationMs);
-  }
-
-  const cacheHit = totalInputTokens !== null && totalCacheReadTokens !== null && totalCacheWriteTokens !== null
-    ? computeCacheHitRate({
-      input: totalInputTokens,
-      cache: { read: totalCacheReadTokens, write: totalCacheWriteTokens },
-    })
-    : null;
-
-  return {
-    turnsCount: turns.length,
-    cacheHitPercent: cacheHit?.hasInput ? Math.round(cacheHit.percent) : null,
-    tokensPerSecond: totalGeneratedTokens !== null && totalLlmDurationMs !== null
-      ? tokenRate(totalGeneratedTokens, totalLlmDurationMs)
-      : null,
-  };
-}
-
 export type CompletedTurnTelemetry = {
   stats: CompletedTurnStats;
-  averages: CompletedTurnAverages | null;
 };
 
 /** Keep every metric on completed history until the current turn is ready. */
@@ -552,15 +454,15 @@ export function getCompletedTurnTelemetry(
 ): CompletedTurnTelemetry | null {
   if (!turnInProgress) {
     const stats = getLatestCompletedTurnStats(records);
-    if (stats) return { stats, averages: getCompletedTurnAverages(records) };
+    if (stats) return { stats };
   }
 
   // A completed tool step is still part of the running turn. Exclude that
-  // entire user-bounded turn before calculating either the rows or averages.
+  // entire user-bounded turn before calculating the rows.
   let currentTurnStart = records.length - 1;
   while (currentTurnStart >= 0 && records[currentTurnStart].info.role !== 'user') currentTurnStart -= 1;
   if (currentTurnStart <= 0) return null;
   const completedRecords = records.slice(0, currentTurnStart);
   const stats = getLatestCompletedTurnStats(completedRecords);
-  return stats ? { stats, averages: getCompletedTurnAverages(completedRecords) } : null;
+  return stats ? { stats } : null;
 }

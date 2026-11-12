@@ -117,8 +117,7 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     }
   }, [scope, revertMessageID, expanded, current]);
   const stats = current?.stats ?? null;
-  const averages = current?.averages ?? null;
-  const summaryRate = averages?.tokensPerSecond ?? null;
+  const summaryRate = stats?.tokensPerSecond ?? null;
   const summary = summaryRate !== null ? formatThroughputRate(summaryRate) : undefined;
 
   useReportWorkStatusPresence('telemetry', Boolean(sessionId));
@@ -135,11 +134,11 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     >
       {stats ? (
         <>
-          {averages && averages.tokensPerSecond !== null ? (
+          {stats.tokensPerSecond !== null ? (
             <TelemetryRow
               label={t('chat.workStatus.telemetry.speed')}
               description={t('chat.workStatus.telemetry.speedDescription')}
-              value={<WorkStatusValue>{formatThroughputRate(averages.tokensPerSecond)}</WorkStatusValue>}
+              value={<WorkStatusValue>{formatThroughputRate(stats.tokensPerSecond)}</WorkStatusValue>}
             />
           ) : null}
           {stats.elapsedDurationMs !== null ? (
@@ -201,13 +200,13 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
             />
           ) : null}
 
-          {averages && averages.cacheHitPercent !== null ? (
+          {stats.cacheHitPercent !== null ? (
             <TelemetryRow
               label={t('chat.workStatus.telemetry.cacheHit')}
               description={t('chat.workStatus.telemetry.cacheHitDescription')}
               value={(
-                <WorkStatusValue tone={averages.cacheHitPercent >= 50 ? 'success' : 'default'}>
-                  {`${averages.cacheHitPercent}%`}
+                <WorkStatusValue tone={stats.cacheHitPercent >= 50 ? 'success' : 'default'}>
+                  {`${stats.cacheHitPercent}%`}
                 </WorkStatusValue>
               )}
             />
