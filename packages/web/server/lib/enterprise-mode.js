@@ -88,6 +88,8 @@ import { z } from 'zod';
  *   listed (`allowedExtensions` / `OPENCHAMBER_ALLOWED_EXTENSIONS`), or from a
  *   local folder where `allowLocalExtensions` /
  *   `OPENCHAMBER_ALLOW_LOCAL_EXTENSIONS` allows it; see `guests/enterprise.js`.
+ *   The built-in remote desktop uses the same service gate for HTTP and
+ *   WebSocket upgrades; it opens no additional network listener.
  *   An allowed extension serving as a notification channel gets the kind's
  *   generic title with no body, session name or directory, as the phone does
  *   (`notifications/runtime.js` `sendToChannels`). An allowed extension

@@ -1,0 +1,19 @@
+{
+  "name": "@openchamber/builtin-remote-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": { "openchamber": ">=2.6.1" },
+    "contributes": {
+      "panel": { "id": "openchamber-builtin-desktop", "name": "Remote Desktop", "icon": "computer", "entry": "panel/index.html" },
+      "page": true,
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "permissions": { "exec": ["X0tigervnc", "x0vncserver", "x0tigervncserver", "x11vnc", "Xtigervnc", "Xvnc", "tigervncpasswd", "vncpasswd", "xfce4-session", "startlxqt", "openbox-session", "openbox", "fluxbox", "icewm-session", "dbus-run-session"] }
+      }
+    }
+  }
+}

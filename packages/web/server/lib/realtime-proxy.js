@@ -1,3 +1,4 @@
+import { GUEST_SERVICE_SOCKET_FRAME_MAX, GUEST_SERVICE_SOCKET_BUFFER_MAX } from '@openchamber/sdk';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const PROXY_SSE_PATH = '/api/openchamber/realtime-proxy/sse';
@@ -17,6 +18,7 @@ const isAllowedWebSocketPath = (pathname) => {
   return pathname === '/api/event/ws'
     || pathname === '/api/global/event/ws'
     || pathname === '/api/terminal/ws'
+    || /^\/api\/guests\/[a-z][a-z0-9-]*\/service\/ws$/.test(pathname)
     || SPACE_WS_PATH.test(pathname);
 };
 
@@ -193,7 +195,13 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
     }
   });
 
-  const wsServer = new WebSocketServer({ noServer: true });
+  const serviceUpstreams = new WeakMap();
+  const pendingServiceUpstreams = new Map();
+  const pendingProxyUpgrades = new Set();
+  let stopped = false;
+  const serviceClients = new Set();
+  const wsServer = new WebSocketServer({ noServer: true, handleProtocols: (offered, request) => serviceUpstreams.has(request)
+    ? serviceUpstreams.get(request).protocol || false : offered.values().next().value || false });
 
   wsServer.on('connection', (client, request) => {
     const resolved = resolveProxyTarget(request, getDesktopRuntimeConfig, 'ws');
@@ -202,23 +210,37 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
       return;
     }
 
-    const upstream = new WebSocket(resolved.target.toString(), {
+    const upstream = serviceUpstreams.get(request) ?? new WebSocket(resolved.target.toString(), {
       headers: resolved.requestHeaders,
       // ws does not send Origin by default; protected upstreams require it.
       origin: `${resolved.target.protocol === 'wss:' ? 'https:' : 'http:'}//${resolved.target.host}`,
     });
+    const controlled = serviceUpstreams.has(request);
+    if (controlled) { serviceClients.add(client); client.once('close', () => serviceClients.delete(client)); }
+    const forward = (source, target, data, binary) => {
+      const size = data.byteLength ?? data.length;
+      if (controlled && (size > GUEST_SERVICE_SOCKET_FRAME_MAX || target.bufferedAmount + size > GUEST_SERVICE_SOCKET_BUFFER_MAX)) {
+        if (client.readyState === WebSocket.OPEN) client.close(1009, 'Service socket buffer exceeded');
+        upstream.close(1009, 'Service socket buffer exceeded'); return;
+      }
+      if (controlled && !process.versions.bun) source.pause();
+      target.send(data, { binary }, (error) => {
+        if (error) { client.terminate(); upstream.terminate(); }
+        else if (controlled && !process.versions.bun && source.readyState === WebSocket.OPEN) source.resume();
+      });
+    };
     const pending = [];
 
     const flush = () => {
       while (pending.length > 0 && upstream.readyState === WebSocket.OPEN) {
         const [data, isBinary] = pending.shift();
-        upstream.send(data, { binary: isBinary });
+        forward(client, upstream, data, isBinary);
       }
     };
 
     client.on('message', (data, isBinary) => {
       if (upstream.readyState === WebSocket.OPEN) {
-        upstream.send(data, { binary: isBinary });
+        forward(client, upstream, data, isBinary);
         return;
       }
       if (upstream.readyState === WebSocket.CONNECTING) {
@@ -228,12 +250,12 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
     upstream.on('open', flush);
     upstream.on('message', (data, isBinary) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(data, { binary: isBinary });
+        forward(upstream, client, data, isBinary);
       }
     });
     upstream.on('close', (code, reason) => {
       if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
-        client.close(code || 1000, reason);
+        client.close(code === 1005 ? 1000 : code === 1006 ? 1011 : code || 1000, reason);
       }
     });
     upstream.on('error', () => {
@@ -241,9 +263,9 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
         client.close(1011, 'Realtime proxy upstream error');
       }
     });
-    client.on('close', () => {
+    client.on('close', (code, reason) => {
       if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
-        upstream.close();
+        upstream.close(code === 1005 ? 1000 : code === 1006 ? 1011 : code || 1000, reason);
       }
     });
   });
@@ -253,17 +275,43 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
       try { return new URL(req.url || '/', 'http://127.0.0.1').pathname; } catch { return ''; }
     })();
     if (pathname !== PROXY_WS_PATH) return;
+    if (stopped) { socket.destroy(); return; }
+    pendingProxyUpgrades.add(socket);
+    socket.once('close', () => pendingProxyUpgrades.delete(socket));
     void ensureAuthenticated(req, null).then((authenticated) => {
+      if (stopped || socket.destroyed) { socket.destroy(); return; }
       if (!authenticated) {
         rejectWebSocketUpgrade(socket, 401, 'Unauthorized');
         return;
       }
       void originAllowed(req).then((allowed) => {
+        if (stopped || socket.destroyed) { socket.destroy(); return; }
         if (!allowed) {
           rejectWebSocketUpgrade(socket, 403, 'Forbidden');
           return;
         }
+        const resolved = resolveProxyTarget(req, getDesktopRuntimeConfig, 'ws');
+        if (resolved && /^\/api\/guests\/[a-z][a-z0-9-]*\/service\/ws$/.test(resolved.target.pathname)) {
+          const offered = req.headers['sec-websocket-protocol'];
+          const protocols = typeof offered === 'string' ? offered.split(',').map((value) => value.trim()) : undefined;
+          const upstream = new WebSocket(resolved.target.toString(), protocols, { headers: resolved.requestHeaders,
+            origin: `${resolved.target.protocol === 'wss:' ? 'https:' : 'http:'}//${resolved.target.host}`,
+            perMessageDeflate: false, maxPayload: GUEST_SERVICE_SOCKET_FRAME_MAX, handshakeTimeout: 15_000 });
+          pendingServiceUpstreams.set(upstream, socket);
+          socket.once('close', () => { if (pendingServiceUpstreams.delete(upstream)) upstream.terminate(); });
+          upstream.on('error', () => {
+            if (pendingServiceUpstreams.delete(upstream) && !socket.destroyed) rejectWebSocketUpgrade(socket, 502, 'Service upgrade failed');
+          });
+          upstream.once('open', () => {
+            pendingServiceUpstreams.delete(upstream);
+            if (stopped || socket.destroyed) { upstream.terminate(); return; }
+            serviceUpstreams.set(req, upstream);
+            wsServer.handleUpgrade(req, socket, head, (ws) => { pendingProxyUpgrades.delete(socket); wsServer.emit('connection', ws, req); });
+          });
+          return;
+        }
         wsServer.handleUpgrade(req, socket, head, (ws) => {
+          pendingProxyUpgrades.delete(socket);
           wsServer.emit('connection', ws, req);
         });
       }).catch(() => {
@@ -277,6 +325,14 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
   server.on('upgrade', upgradeHandler);
   return {
     stop: () => {
+      if (stopped) return;
+      stopped = true;
+      for (const socket of pendingProxyUpgrades) socket.destroy();
+      pendingProxyUpgrades.clear();
+      for (const [upstream, socket] of pendingServiceUpstreams) { socket.destroy(); upstream.terminate(); }
+      pendingServiceUpstreams.clear();
+      for (const client of serviceClients) client.terminate();
+      serviceClients.clear();
       server.off('upgrade', upgradeHandler);
       wsServer.close();
     },

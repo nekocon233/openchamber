@@ -1,3 +1,4 @@
+import { createGuestServiceSockets } from '@/lib/guests/service-socket';
 import React from 'react';
 import {
   HostRequestError,
@@ -79,7 +80,8 @@ import { openExternalUrl } from '@/lib/url';
 import { cn } from '@/lib/utils';
 import { closeGuestTabsEverywhere } from '@/lib/guests/tabs';
 import { pluginIdFromMode, type PluginContextPanelMode } from '@/lib/surfaces/modes';
-import { useUIStore } from '@/stores/useUIStore';
+import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
+import { getDefaultContextZone, getZoneView, zoneOfMode } from '@/lib/workspace/zones';
 import { useInputStore } from '@/sync/input-store';
 import { useBackgroundShellsStore } from '@/sync/background-shells';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -235,6 +237,8 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   const ready = React.useMemo<HostReadyContext>(() => {
     const features: NonNullable<HostReadyContext['features']> = {};
     if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.browserTabs = true;
+    if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.serviceSockets = true;
+    if (guest?.pageEntry && !isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.pages = true;
     if (guest?.storageId && globalThis.indexedDB) features.deviceStorage = true;
     if (surface === 'status' && onStatusControls) features.statusControls = true;
     if (!popoverHost && !popover && !headless && !isVSCodeRuntime() && !isMobileSurfaceRuntime()
@@ -291,7 +295,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     popover: popoverHost?.context ?? popover,
     features,
     };
-  }, [currentTheme, readableColors, directory, guest?.backgroundEntry, guest?.storageId, headless, item, locale, oauthStatus, onStatusControls, popover, popoverHost, sessionSnapshot, surface]);
+  }, [currentTheme, readableColors, directory, guest?.backgroundEntry, guest?.pageEntry, guest?.storageId, headless, item, locale, oauthStatus, onStatusControls, popover, popoverHost, sessionSnapshot, surface]);
 
   const fileEditorEntry = surface === 'file' && fileEditor
     ? guest?.fileEditors?.find((editor) => editor.id === fileEditor.editorId)?.entry ?? null
@@ -367,8 +371,8 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     }
   }, []);
 
-  const postToGuest = React.useCallback((message: HostMessage) => {
-    iframeRef.current?.contentWindow?.postMessage(message, OPAQUE_FRAME_TARGET_ORIGIN);
+  const postToGuest = React.useCallback((message: HostMessage, transfer?: Transferable[]) => {
+    iframeRef.current?.contentWindow?.postMessage(message, OPAQUE_FRAME_TARGET_ORIGIN, transfer);
   }, []);
 
   const sendBackgroundAction = React.useCallback(() => {
@@ -511,11 +515,11 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     const installationAuthorization = authorizationSignature(installation);
     const ownerFrame = iframeRef.current;
     const currentGuest = () => useGuestsStore.getState().guests.find((entry) => entry.id === requestingGuestId) ?? null;
-    const ownsFrame = () => {
+    const ownsFrame = (requireReadyCatalog = true) => {
       const catalog = useGuestsStore.getState();
       const current = currentGuest();
       return !disposed && getRuntimeKey() === runtimeKey && catalog.runtimeKey === runtimeKey
-        && catalog.status === 'ready' && Boolean(current && installation && isGuestActive(current)
+        && (!requireReadyCatalog || catalog.status === 'ready') && Boolean(current && installation && isGuestActive(current)
           && authorizationSignature(current) === installationAuthorization)
         && iframeRef.current === ownerFrame
         && (!isActiveRef.current || isActiveRef.current())
@@ -527,9 +531,16 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       onChange: (binding) => onStatusControlsRef.current?.(binding),
       post: (payload) => postToGuest({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: 'status-control-event', payload }),
     });
+    const serviceSockets = createGuestServiceSockets(guestIdRef.current, {
+      authorized: () => ownsFrame(false) && guestMay(currentGuest(), 'service'),
+      post: postToGuest,
+    });
+    const unsubscribeSockets = useGuestsStore.subscribe(() => {
+      if (!ownsFrame(false) || !guestMay(currentGuest(), 'service')) serviceSockets.dispose();
+    });
     statusControlsRef.current = statusControls;
     const clearSubscriptions = () => { for (const unsubscribe of subscriptions.values()) unsubscribe(); subscriptions.clear(); };
-    const runtimeUnsubscribe = subscribeRuntimeEndpointChanged(() => { disposed = true; closeActivePopover('owner'); statusControls.dispose(); clearSubscriptions(); stopOauthPoll(); });
+    const runtimeUnsubscribe = subscribeRuntimeEndpointChanged(() => { disposed = true; serviceSockets.dispose(); closeActivePopover('owner'); statusControls.dispose(); clearSubscriptions(); stopOauthPoll(); });
     const requireSessions = () => {
       if (!guestMay(currentGuest(), 'sessions')) throw new HostRequestError('NOT_GRANTED', NOT_GRANTED_MESSAGE);
     };
@@ -562,6 +573,11 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
         connectFileChannel();
         registerResolver();
         sendBackgroundAction();
+        return;
+      }
+
+      if (message.type === 'service-ws-open' || message.type === 'service-ws-send' || message.type === 'service-ws-close') {
+        serviceSockets.receive(message);
         return;
       }
 
@@ -694,6 +710,19 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
           directory: directoryRef.current || null,
           t: translateRef.current,
         }),
+        openPage: () => {
+          const owner = currentGuest();
+          if (!owner?.pageEntry || isVSCodeRuntime() || isMobileSurfaceRuntime()) throw new HostRequestError('UNSUPPORTED', 'Extension page is unavailable.');
+          const ui = useUIStore.getState();
+          if (surface === 'panel' && directoryRef.current) {
+            const key = normalizeContextPanelDirectoryKey(directoryRef.current);
+            const panel = ui.contextPanelByDirectory[key];
+            const zone = zoneOfMode(ui.contextSurfaceZones, mode, getDefaultContextZone(ui.workspaceLayout));
+            const active = panel?.tabs.find((tab) => tab.id === getZoneView(panel, zone).activeTabId);
+            if (active?.mode === mode) ui.closeContextZone(key, zone);
+          }
+          ui.setOpenGuestPage(owner.id);
+        },
         close: () => {
           if (childPopover || popover) {
             const context = childPopover?.context ?? popover;
@@ -908,10 +937,12 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       statusControls.dispose();
       if (statusControlsRef.current === statusControls) statusControlsRef.current = null;
       clearSubscriptions();
+      serviceSockets.dispose();
+      unsubscribeSockets();
       runtimeUnsubscribe();
       window.removeEventListener('message', onMessage);
     };
-  }, [acknowledgeHandshake, backgroundAction, clearPopoverCloseTimer, closeActivePopover, connectFileChannel, frameKey, guestEnabled, guestEntry, headless, popover, postToGuest, pushHostState, refreshOauth, registerResolver, schedulePopoverClose, sendBackgroundAction, setOauthStatus, src, srcDoc, stopOauthPoll, surface]);
+  }, [acknowledgeHandshake, backgroundAction, clearPopoverCloseTimer, closeActivePopover, connectFileChannel, frameKey, guestEnabled, guestEntry, headless, mode, popover, postToGuest, pushHostState, refreshOauth, registerResolver, schedulePopoverClose, sendBackgroundAction, setOauthStatus, src, srcDoc, stopOauthPoll, surface]);
 
   // A project switch retires header callbacks, not the still-mounted frame's
   // workspace observers or unrelated in-flight requests.

@@ -366,6 +366,7 @@ export type {
   GuestOpenSurfaceMessage,
   GuestOpenUrlMessage,
   GuestOpenBrowserMessage,
+  GuestOpenPageMessage,
   GuestRequest,
   GuestRequestMessage,
   GuestRequestMethod,
@@ -659,3 +660,6 @@ export type {
   SurfaceTextEvent,
   SurfaceWheelEvent,
 } from './service-surface.ts';
+
+export { GuestServiceSocket, GUEST_SERVICE_SOCKET_MAX, GUEST_SERVICE_SOCKET_FRAME_MAX, GUEST_SERVICE_SOCKET_BUFFER_MAX, serviceSocketDataSize, isServiceSocketRequest, isServiceSocketPath, isServiceSocketCloseCode } from './service-socket.ts';
+export type { GuestServiceSocketRequest, GuestServiceSocketMessage, HostServiceSocketMessage, ServiceSocketData } from './service-socket.ts';

@@ -705,3 +705,19 @@ host.onReady((ctx) => {
 | [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)                                                                                                                                                                                                                       | Local service contract              |
 | [src/ui/DOCUMENTATION.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/src/ui/DOCUMENTATION.md)                                                                                                                                                                                                       | UI kit invariants                 |
 | [sdk.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk.mdx) / [sdk/host.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk/host.mdx) / [sdk/ui.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk/ui.mdx) | Author-facing website pages       |
+
+## Service socket streaming
+
+Check `ready.features.serviceSockets` before `host.openServiceSocket({ path,
+query?, protocols? })`. The returned object follows WebSocket ready states and
+events. Send strings, ArrayBuffers or typed arrays; receive ArrayBuffers or
+Blobs according to `binaryType`. It supports 8 simultaneous channels per frame,
+8,000,000 bytes per message and bounded buffering. `errorCode` describes a host
+refusal. `host.dispose()` closes every channel. See
+[GUEST_SERVICES.md](./GUEST_SERVICES.md#service-websockets) for lifecycle, path
+validation, backpressure and supported runtimes.
+
+`host.openPage()` opens only the calling extension's declared page, when
+`ready.features.pages` is true. It requires no capability grant and rejects
+with `UNSUPPORTED` on hosts without page navigation. From a visible panel it
+hides the calling panel's zone and retains its tabs.

@@ -283,6 +283,7 @@ interface OutboundFrameBatcherOptions {
 }
 
 export interface OutboundFrameBatcher {
+  readonly bufferedAmount: number;
   /** Buffer or immediately flush a tunnel frame per the batching policy. */
   enqueue(frame: Uint8Array): void;
   /** Force-flush any buffered frames now. */
@@ -365,6 +366,7 @@ export const createOutboundFrameBatcher = (
   };
 
   return {
+    get bufferedAmount() { return buffer.length > 0 ? 1 + bufferedBytes : 0; },
     enqueue,
     flush,
     dispose(): void {

@@ -179,7 +179,7 @@ Ship `service/main.js` already built. Same packaging rule as `panel/main.js`.
 
 ## Example
 
-`examples/service-echo` is a checked-in service extension: a Node HTTP server on loopback that the panel calls through `serviceRequest` and whose status it shows. Bundle the service with `--node`, install the folder from Settings → Extensions, allow the local service in the approval dialog, then open the rail panel. Streaming from a service to the panel (shell into a container, log tails) is deferred; it needs a streaming call on the SDK first.
+`examples/service-echo` is a checked-in service extension: a Node HTTP server on loopback that the panel calls through `serviceRequest` and whose status it shows. Bundle the service with `--node`, install the folder from Settings → Extensions, allow the local service in the approval dialog, then open the rail panel. Use `openServiceSocket` for binary or text streams from a service.
 
 ## Browser provider (`provides: ["browser"]`)
 
@@ -563,3 +563,33 @@ Declare `panel.entry` as well and the host docks that page to one edge of the su
 While a viewer is open in the same window, every `serviceRequest` from your pages (the docked one included) reaches the service with three headers the host sets itself: `x-surface-viewer`, `x-surface-viewer-controls` (`1` while that viewer holds control, else `0`), and `x-surface-frame-seq` (the frame it last drew). Compare the viewer with the one from `/surface/control` to let the person in control use the dock while others only watch, and compare the frame with the view it belongs to so a toolbar command made on an old picture cannot change a view selected since. Without a viewer in that window the headers are absent.
 
 The types and paths are exported from `@openchamber/sdk` (`SURFACE_*`, `SurfaceInputEvent`, …). `examples/browser-provider-stub` also declares `surface: true` and paints its fake page with rectangles, so the viewer, the hand-off, and the input path can be seen working without a browser; its `panel/` is a one-line address bar docked above the picture.
+
+## Service WebSockets
+
+`ready.features.serviceSockets` advertises `host.openServiceSocket({ path,
+query?, protocols? })`. It returns a WebSocket-shaped object synchronously,
+initially CONNECTING. Set `onopen`, `onmessage`, `onerror`, `onclose`, or use
+EventTarget listeners. `send` accepts strings, ArrayBuffers and typed views;
+Blob sends are refused. `binaryType` defaults to `arraybuffer` and also accepts
+`blob` for received frames. `errorCode` carries a host refusal. Dispose closes
+all channels. A silent open times out after the usual request deadline.
+
+Each mounted document holds at most 8 channels. Each frame and each direction's
+outstanding buffer is at most 8,000,000 bytes. Binary postMessages transfer a
+fresh Uint8Array buffer, preserving the caller's view. Byte acknowledgements
+bound iframe delivery and update `bufferedAmount`; a slow consumer or transport
+that exceeds a bound closes the channel instead of dropping RFB bytes.
+
+The UI owns `/api/guests/:id/service/ws?path=...&query=...` and opens it through
+the runtime URL resolver after refreshing URL auth. The iframe never opens a
+network connection. The server validates the session, Origin, effective service
+grant, enabled state, enterprise policy and package-relative request path,
+starts and holds the service, and adds its bearer to the loopback upgrade.
+The service listener must authenticate WebSocket upgrades like HTTP requests.
+Service ports, bearer tokens and arbitrary target URLs are never guest input.
+
+Pause, grant withdrawal, package replacement, socket override and host shutdown
+close pending and established channels before service teardown waits on a
+process. Authentication revocation and expiry close authenticated channels.
+The runtime matrix above applies unchanged, including Private Relay support
+on web and Electron and the unsupported VS Code/mobile catalogs.

@@ -982,3 +982,15 @@ describe('actions, commands, and badge wire shapes', () => {
       .toMatchObject({ type: 'result', ok: true, payload: { stopped: true } });
   });
 });
+
+describe('service socket wire limits', () => {
+  const envelope = { channel: 'openchamber.sdk' as const, v: 1 as const };
+  test('accepts typed binary frames and bounded acknowledgements while rejecting unsafe paths', () => {
+    const frame = { ...envelope, type: 'service-ws-send' as const, payload: { socketId: 'one', data: new Uint8Array([1, 2, 3]) } };
+    expect(parseGuestMessage(frame)).toEqual(frame);
+    expect(parseGuestMessage({ ...frame, payload: { socketId: 'one', data: new Uint8Array(8_000_001) } })).toBeNull();
+    expect(parseGuestMessage({ ...envelope, type: 'service-ws-send', payload: { socketId: 'one', received: -1 } })).toBeNull();
+    for (const path of ['//other.test', '/rfb?port=10', '/a/../b']) expect(parseGuestMessage({ ...envelope, type: 'service-ws-open', payload: { socketId: 'one', path } })).toBeNull();
+    expect(parseHostMessage({ ...envelope, type: 'service-ws-message', payload: { socketId: 'one', data: new Uint8Array([0]) } })?.type).toBe('service-ws-message');
+  });
+});

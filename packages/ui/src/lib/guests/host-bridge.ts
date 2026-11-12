@@ -59,6 +59,7 @@ type HostBridgeEffects = {
   openSession: (sessionId: string) => void;
   toast: (request: ToastRequest) => void;
   openUrl: (url: string) => Promise<boolean>;
+  openPage?: () => void;
   openBrowser: (url: string) => void;
   openSurface: (mode: ContextPanelMode) => GuestOpenSurfaceResult | void;
   writeClipboard: (text: string) => Promise<boolean>;
@@ -265,6 +266,12 @@ export const answerGuestMessage = async (
 ): Promise<HostMessage | null> => {
   try {
   switch (message.type) {
+    case 'open-page':
+      if (!effects.openPage) return errorResult(message.id, 'Extension pages are unavailable.', 'UNSUPPORTED');
+      effects.openPage(); return okResult(message.id);
+    case 'service-ws-open':
+    case 'service-ws-send':
+    case 'service-ws-close': return null; // Owned by the mounted frame's socket registry.
     case 'workspace-read': return okResult(message.id, effects.workspaceRead(message.payload));
     case 'workspace-subscribe': effects.workspaceSubscribe(message.payload); return okResult(message.id);
     case 'workspace-unsubscribe': effects.workspaceUnsubscribe(message.payload.subscriptionId); return okResult(message.id);
