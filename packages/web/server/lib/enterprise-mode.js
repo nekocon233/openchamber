@@ -32,7 +32,8 @@ import { z } from 'zod';
  *   provider is configured outside OpenCode (`native-agents/runtime.js`).
  * - Unified native conversations refuse creation, prompts, compaction and
  *   continuing question replies. Their context can cross between independently
- *   configured CLI providers (`native-agents/conversations/runtime.js`).
+ *   configured CLI providers, including an explicitly configured Small Model
+ *   used for a handoff summary (`native-agents/conversations/runtime.js`).
  * - Native agent combination writes and cross-CLI subagent dispatch are refused,
  *   including callbacks from already running CLIs. Role choices can reach
  *   providers configured outside OpenCode (`native-agents/delegation.js`).

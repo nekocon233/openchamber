@@ -432,6 +432,10 @@ The registry also owns archive and title overrides. Deletion is not simulated:
 hiding a native conversation in OpenChamber while leaving it in agy would make
 `deleted: true` false, so deletion remains unsupported.
 
+Completed checkpoint summaries may replace their covered prefix during unified
+context handoff. A native `truncated_fields: ['content']` marker survives as
+`info.metadata.nativeOutputTruncated`, keeping a shortened summary ineligible.
+
 ## Skill commands
 
 The command menu lists skills from the direct executable's local `--print /skills`

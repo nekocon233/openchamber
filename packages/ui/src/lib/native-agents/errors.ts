@@ -29,7 +29,9 @@ export const nativeSessionActionErrorKey = (error: NativeAgentsRequestError, ses
   if (sessionId && isUnifiedNativeSessionId(sessionId) && error.code === 'NATIVE_PROMPT_OUTCOME_UNKNOWN') return 'chat.unified.unconfirmed';
   if (error.code === 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE') return 'chat.unified.modelUnavailable';
   if (error.code === 'NATIVE_CONVERSATION_SELECTION_CONFLICT') return 'chat.unified.selectionFailed';
-  if (error.code === 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' || error.code === 'NATIVE_CONVERSATION_SUMMARY_INCOMPLETE' || error.code === 'NATIVE_CONVERSATION_CONTEXT_TOO_LARGE') return 'chat.unified.handoffFailed';
+  if (error.code === 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE') return 'chat.unified.summaryUnavailable';
+  if (error.code === 'NATIVE_CONVERSATION_SUMMARY_INCOMPLETE') return 'chat.unified.summaryIncomplete';
+  if (error.code === 'NATIVE_CONVERSATION_CONTEXT_TOO_LARGE') return 'chat.unified.contextTooLarge';
   if (error.code === 'NATIVE_CONVERSATION_STORAGE_UNAVAILABLE' || error.code === 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE') return 'chat.unified.historyUnavailable';
   if (error.code === 'NATIVE_CONVERSATION_DELETE_INCOMPLETE') return 'chat.unified.cleanupFailed';
   if (error.code === 'NATIVE_CONVERSATION_DELETE_UNSUPPORTED') return 'chat.unified.deleteUnavailable';

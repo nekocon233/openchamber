@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { prepareConversationContext } from './context.js';
 import { projectConversationRecord } from './history.js';
 import { projectAntigravityHistory } from '../antigravity/projector.js';
@@ -59,7 +59,7 @@ describe('conversation context model aliases', () => {
       smallModels: async () => ({ describeSmallModel: async ({ overrideModel }) => { descriptions.push(overrideModel); return null; } }),
       saveCheckpoint: async () => { saved = true; },
     })).rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' });
-    expect(descriptions).toEqual(['antigravity-native/gemini-test']);
+    expect(descriptions).toEqual(['antigravity-native/gemini-test', undefined]);
     expect(saved).toBe(false);
   });
 
@@ -105,5 +105,123 @@ describe('conversation context model aliases', () => {
     });
     expect(context).toContain('Continue the work');
     expect(context).toContain('not a request to replay tools');
+  });
+});
+
+
+describe('native compaction handoff boundaries', () => {
+  const entry = (id, text, segmentId = 'agy') => ({ segmentId, record: { info: { id, role: 'user' }, parts: [{ type: 'text', text }] } });
+  const checkpoint = (status = 'completed', summary = 'Native summary', metadata) => ({ segmentId: 'agy', record: {
+    info: { id: 'checkpoint', role: 'compaction', status, summary, metadata }, parts: [],
+  } });
+  const request = (entries, overrides = {}) => ({
+    manifest: { directory: '/fixture', historyRevision: 0, segments: [{ id: 'agy', sends: [{ selection: { model: { providerID: 'antigravity-native', modelID: 'gemini' } } }] }], active: 'agy' },
+    entries,
+    target: { model: { providerID: 'deepseek-native', modelID: 'deepseek' } },
+    catalog: { models: [{ id: 'deepseek', contextWindow: 64000 }] },
+    signal: new AbortController().signal,
+    smallModels: async () => ({ describeSmallModel: async () => null }),
+    saveCheckpoint: async () => {},
+    ...overrides,
+  });
+
+  it('reuses a completed native summary only inside its own execution segment', async () => {
+    const context = await prepareConversationContext(request([
+      entry('other', 'Keep the Claude segment', 'claude'),
+      entry('old', 'Covered tool output '.repeat(12000)),
+      checkpoint(),
+      entry('recent', 'Continue after native compaction'),
+    ], { smallModels: async () => { throw new Error('A retained native summary fits without another model call'); } }));
+    expect(context).toContain('Keep the Claude segment');
+    expect(context).toContain('Native summary');
+    expect(context).toContain('Continue after native compaction');
+    expect(context).not.toContain('Covered tool output');
+  });
+
+  it.each([
+    ['running', 'Native summary', undefined], ['failed', 'Native summary', undefined],
+    ['completed', '', undefined], ['completed', 'Native summary', { nativeOutputTruncated: true }],
+  ])('preserves the source prefix when its checkpoint is %s or incomplete', async (status, summary, metadata) => {
+    await expect(prepareConversationContext(request([
+      entry('old', 'Preserve uncovered history '.repeat(10000)), checkpoint(status, summary, metadata),
+    ]))).rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' });
+  });
+
+  it('uses only an explicitly configured Small Model when neither CLI offers a summary', async () => {
+    const calls = [];
+    const context = await prepareConversationContext(request([entry('old', 'Historical work '.repeat(10000))], {
+      smallModels: async () => ({
+        describeSmallModel: async (options) => options.overrideModel ? null
+          : { source: 'settings', providerID: 'codex-native', modelID: 'configured', hasLogin: true, inputCharBudget: 32000 },
+        generateSmallModelText: async (options) => { calls.push(options.model); return { text: 'Explicitly selected summary' }; },
+      }),
+    }));
+    expect(context).toContain('Explicitly selected summary');
+    expect(calls.length).toBeGreaterThan(0);
+    expect(new Set(calls)).toEqual(new Set(['codex-native/configured']));
+  });
+});
+
+
+describe('handoff summary failure boundaries', () => {
+  const request = (service, overrides = {}) => ({
+    manifest: { directory: '/fixture', historyRevision: 0, segments: [{ id: 'source', sends: [{ selection: { model: { providerID: 'antigravity-native', modelID: 'gemini' } } }] }], active: 'source' },
+    entries: [{ segmentId: 'source', record: { info: { id: 'history', role: 'user' }, parts: [{ type: 'text', text: 'History '.repeat(30000) }] } }],
+    target: { model: { providerID: 'codex-native', modelID: 'selected' } },
+    catalog: { models: [{ id: 'selected', contextWindow: 64000 }] },
+    signal: new AbortController().signal,
+    smallModels: async () => service,
+    saveCheckpoint: async () => {}, ...overrides,
+  });
+
+  it('restarts a failed summary on the explicitly configured model and saves only its complete result', async () => {
+    const models = [], checkpoints = [];
+    const context = await prepareConversationContext(request({
+      describeSmallModel: async ({ overrideModel }) => {
+        if (overrideModel?.startsWith('antigravity-native/')) return null;
+        return overrideModel ? { hasLogin: true, inputCharBudget: 32000 }
+          : { hasLogin: true, inputCharBudget: 32000, source: 'settings', providerID: 'codex-native', modelID: 'configured' };
+      },
+      generateSmallModelText: async ({ model }) => {
+        models.push(model);
+        if (model.endsWith('/selected')) throw new Error('Selected CLI refused the summary');
+        return { text: 'Complete configured summary' };
+      },
+    }, { saveCheckpoint: async (checkpoint) => { checkpoints.push(checkpoint); } }));
+    expect(models[0]).toBe('codex-native/selected');
+    expect(models.slice(1).every((model) => model === 'codex-native/configured')).toBe(true);
+    expect(context).toContain('Complete configured summary');
+    expect(checkpoints).toEqual([{ text: 'Complete configured summary', through: 'history', revision: 0 }]);
+  });
+
+  it('refuses an implicit model instead of sending history to it', async () => {
+    let generated = false;
+    await expect(prepareConversationContext(request({
+      describeSmallModel: async ({ overrideModel }) => overrideModel ? null
+        : { source: 'default', providerID: 'other', modelID: 'automatic', hasLogin: true, inputCharBudget: 32000 },
+      generateSmallModelText: async () => { generated = true; return { text: 'Unexpected' }; },
+    }))).rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' });
+    expect(generated).toBe(false);
+  });
+
+  it('stops after cancellation without trying the configured fallback', async () => {
+    const controller = new AbortController(), descriptions = [];
+    await expect(prepareConversationContext(request({
+      describeSmallModel: async ({ overrideModel }) => { descriptions.push(overrideModel); return overrideModel?.startsWith('codex-native/') ? { hasLogin: true, inputCharBudget: 32000 } : null; },
+      generateSmallModelText: async () => { controller.abort(new Error('Cancelled')); throw new Error('Stopped'); },
+    }, { signal: controller.signal }))).rejects.toThrow('Cancelled');
+    expect(descriptions).toEqual(['antigravity-native/gemini', 'codex-native/selected']);
+  });
+
+  it('enforces enterprise mode before a handoff summary generation', async () => {
+    vi.stubEnv('OPENCHAMBER_ENTERPRISE_MODE', '1');
+    let generated = false;
+    try {
+      await expect(prepareConversationContext(request({
+        describeSmallModel: async () => ({ hasLogin: true, inputCharBudget: 32000 }),
+        generateSmallModelText: async () => { generated = true; return { text: 'Unexpected' }; },
+      }))).rejects.toMatchObject({ code: 'enterprise_mode' });
+      expect(generated).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
   });
 });

@@ -144,6 +144,33 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
 };
 
 describe('unified native backend contract', () => {
+  it.each(['codex', 'claude', 'deepseek'])('hands compacted AGY history to %s without another summary request', async (backend) => {
+    const h = await setup();
+    const session = await h.conversation('antigravity');
+    await h.send(session.id, 'antigravity', 'Old work '.repeat(20000));
+    const source = h.requests[0].id;
+    h.sources.get(source).records.push({ info: { id: 'native-checkpoint', sessionID: source,
+      role: 'compaction', time: { created: 1010 }, status: 'completed', summary: 'Verified native summary' }, parts: [] });
+    await h.send(session.id, backend, 'Continue the task');
+    expect(h.requests.at(-1).request.instructions).toContain('Verified native summary');
+    expect(h.requests.at(-1).request.instructions).not.toContain('Old work');
+    expect((await h.api.getSession(session.id, h.directory)).metadata.openchamber.native.backend).toBe(backend);
+  });
+
+  it('ignores an AGY checkpoint after the rewind boundary and preserves the cut on failed handoff', async () => {
+    const h = await setup({ smallModels: async () => ({ describeSmallModel: async () => null }) });
+    const session = await h.conversation('antigravity');
+    await h.send(session.id, 'antigravity', 'Uncovered history '.repeat(20000));
+    const cut = await h.send(session.id, 'antigravity', 'Rewind here');
+    const source = h.requests[0].id;
+    h.sources.get(source).records.push({ info: { id: 'later-checkpoint', sessionID: source,
+      role: 'compaction', time: { created: 1020 }, status: 'completed', summary: 'Summary from the discarded tail' }, parts: [] });
+    await h.api.revert(session.id, cut, h.directory);
+    await expect(h.send(session.id, 'deepseek')).rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' });
+    expect((await h.api.getSession(session.id, h.directory)).revert.messageID).toBe(cut);
+    expect(h.requests).toHaveLength(2);
+  });
+
   it('restores AGY checklists only inside a logical conversation retained prefix', async () => {
     const h = await setup();
     const session = await h.conversation('antigravity');
