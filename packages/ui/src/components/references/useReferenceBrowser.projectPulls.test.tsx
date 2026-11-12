@@ -70,6 +70,8 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const { createWebAPIs } = await import('../../../../web/src/api/index');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { useReferenceBrowser } = await import('./useReferenceBrowser');
+  const { invalidateProjectPullLists } = await import('./referenceSources');
+  const { getRuntimeKey } = await import('@/lib/runtime-switch');
   const { revalidateReferences } = await import('./referenceCache');
   const { referencePickerItemKey } = await import('./referencePickerItems');
   useSourceControlAuthStore.setState({ entries: {
@@ -116,6 +118,12 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(current().pullStatusOf(pull(1))).toMatchObject({ status: 'ready', value: { checks: { state: 'success', total: 2 } } });
     expect(requests.filter((url) => url.pathname.endsWith('/references/status')).map((url) => url.searchParams.get('pulls'))).toEqual(['acme/app#1,acme/app#2']);
     expect(boardBrowser().pullStatusOf(pull(2, 'upstream')).status).toBe('idle');
+
+    const beforeReview = listRequests().length;
+    await act(async () => invalidateProjectPullLists({ provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
+      repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' }, getRuntimeKey()));
+    await until(() => listRequests().length === beforeReview + 1);
+    expect(current().items).toHaveLength(2);
 
     await act(async () => boardBrowser().selectGitHubFilter({ state: 'open', people: 'created' }));
     expect(current().githubFilter).toEqual({ state: 'open', people: 'reviewRequested' });

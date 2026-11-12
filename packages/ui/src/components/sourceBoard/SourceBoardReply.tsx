@@ -35,9 +35,10 @@ export const SourceBoardReply: React.FC<{
      * was read.
      */
     onRefresh: () => void;
-    onApproveSubmitted?: () => void;
+    onReviewDispatched?: () => void;
+    onReviewCompleted?: () => void;
     active?: boolean;
-}> = ({ reference, context, onRefresh, onApproveSubmitted, active = true }) => {
+}> = ({ reference, context, onRefresh, onReviewDispatched, onReviewCompleted, active = true }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const replyInput = useWorkspaceDraft(workspaceReplyDraftKey(getRuntimeKey(), context, reference));
@@ -88,13 +89,13 @@ export const SourceBoardReply: React.FC<{
         }
     };
 
-    const review = async (verdict: ReviewVerdict) => {
+    const review = async (verdict: Exclude<ReviewVerdict, 'comment'>) => {
         if (!openPull || busy) return;
         const action = beginPullRequestAction(context, pullRef);
         if (!action) return;
         setBusy(verdict);
         let toastId: string | number | undefined;
-        const background = verdict === 'approve' && Boolean(onApproveSubmitted);
+        const background = Boolean(onReviewDispatched);
         const feedbackReference = background ? `${project.owner}/${project.name} ${label}` : label;
         try {
             const input: ReviewChangeRequestInput = {
@@ -107,8 +108,8 @@ export const SourceBoardReply: React.FC<{
             if (body) input.body = body;
             const request = sourceControl.changeRequestReview(input);
             if (background) {
-                toastId = action.showProgress(t('sourceBoard.reply.toast.approving', { reference: feedbackReference }));
-                onApproveSubmitted?.();
+                toastId = action.showProgress(t(verdict === 'approve' ? 'sourceBoard.reply.toast.approving' : 'sourceBoard.reply.toast.requestingChanges', { reference: feedbackReference }));
+                onReviewDispatched?.();
             }
             const receipt = await request;
             const doneKey = verdict === 'approve' ? 'sourceBoard.reply.toast.approved' : 'sourceBoard.reply.toast.changesRequested';
@@ -120,7 +121,7 @@ export const SourceBoardReply: React.FC<{
                 replyInput.acknowledge(text);
                 if (action.isRuntimeCurrent()) toast.success(t(doneKey, { reference: feedbackReference }), { id: toastId });
             }
-            if (action.isRuntimeCurrent()) onRefresh();
+            if (action.isRuntimeCurrent()) (onReviewCompleted ?? onRefresh)();
         } catch (error) {
             if (action.isRuntimeCurrent()) {
                 toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference: feedbackReference }), { id: toastId, description: error instanceof Error ? error.message : String(error) });
@@ -144,7 +145,7 @@ export const SourceBoardReply: React.FC<{
 
     return (
       <>
-        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onApproveSubmitted={onApproveSubmitted} />
+        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onReviewDispatched={onReviewDispatched} onReviewCompleted={onReviewCompleted} />
         <section className="flex flex-col gap-2 border-t border-border/60 pt-4" aria-label={t('sourceBoard.reply.label')}>
             <Textarea
                 value={text}

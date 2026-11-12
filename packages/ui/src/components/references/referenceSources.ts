@@ -44,7 +44,7 @@ import {
 
 
 import { fetchGitLabReferenceDetail, fetchGitLabReferencePage } from './gitlabReferences';
-import { createListCache, createValueCache, useCachedList, useCachedValue, useReferenceRevalidation, type CachedValue, type ListPage } from './referenceCache';
+import { createListCache, createValueCache, revalidateReferences, useCachedList, useCachedValue, useReferenceRevalidation, type CachedValue, type ListPage } from './referenceCache';
 import type { LinearReferenceFilter } from './referencePickerItems';
 
 const githubLists = createListCache<GitHubReference>();
@@ -216,6 +216,19 @@ const readContextCacheKey = (context: SourceControlReadContext): unknown[] => [
     context.primaryRemote,
     context.bindingRevision,
 ];
+
+/** A completed review changes every project-list filter for this binding. */
+export function invalidateProjectPullLists(context: SourceControlReadContext, runtime: string): void {
+    githubLists.invalidate((key) => {
+        const value: unknown = JSON.parse(key);
+        if (!Array.isArray(value) || value[0] !== runtime || value[3] !== 'repository' || value[4] !== 'pull') return false;
+        const scope: unknown = value[1];
+        return Array.isArray(scope) && scope[0] === context.provider && scope[1] === context.instance
+            && scope[2] === context.accountId && scope[4] === context.repositoryId
+            && scope[5] === context.primaryRemote && scope[6] === context.bindingRevision;
+    });
+    revalidateReferences();
+}
 
 export function useGitHubReferenceList(options: {
     enabled: boolean;

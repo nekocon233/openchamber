@@ -91,6 +91,10 @@ and file-type exclusions. Picker and board rows do not mount this reader.
 - A forced refresh that arrives during a first-page read waits for that read,
   then performs a fresh one. Clearing the cache retires queued refreshes and
   old responses. Deferred page readers check their runtime before dispatch.
+- A successful review invalidates the matching runtime and repository binding's
+  project PR lists, preserving their visible contents until a fresh answer lands.
+  An in-flight read is retired and the next active read waits for it before
+  fetching again. Other accounts, repositories and filters retain their data.
 - Keys someone is subscribed to are never evicted; the 40-entry bound is a soft target.
 - GitHub pages come from `GET /api/source-control/github/references` (server: `packages/web/server/lib/github/DOCUMENTATION.md`), read with the project's GitHub read context (`useGitHubReadContext`): the account its binding names, or the current github.com account for a repository nobody bound. List and preview cache keys carry that account. Linear lists use `linear.issuesList` with the filter's status, whose issues (`assignee=me` or `created`) and priority, combined; picking in the filter menu keeps it open.
 

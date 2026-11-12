@@ -115,21 +115,23 @@ test('pending reviews keep ownership, unsent text and retry identity across refr
     await act(async () => { releaseRead(); expect(await submission).toBe(true); });
     expect(current().busy).toBe(false);
 
-    let releaseWrite = () => {};
-    pauseWrite = new Promise<void>(resolve => { releaseWrite = resolve; });
-    let notifyDispatch = () => {};
-    const dispatched = new Promise<void>(resolve => { notifyDispatch = resolve; });
-    let succeeded = false;
-    await act(async () => {
-      submission = current().mutate({ kind: 'submit', reviewId: 'R-A', version: '2', verdict: 'approve' }, headSha,
-        () => { succeeded = true; }, notifyDispatch);
-      await dispatched;
-    });
-    expect(succeeded).toBe(false);
-    expect(current().busy).toBe(true);
-    await act(async () => { releaseWrite(); expect(await submission).toBe(true); });
-    expect(succeeded).toBe(true);
-    expect(current().busy).toBe(false);
+    for (const verdict of ['approve', 'request-changes'] as const) {
+      let releaseWrite = () => {};
+      pauseWrite = new Promise<void>(resolve => { releaseWrite = resolve; });
+      let notifyDispatch = () => {};
+      const dispatched = new Promise<void>(resolve => { notifyDispatch = resolve; });
+      let succeeded = false;
+      await act(async () => {
+        submission = current().mutate({ kind: 'submit', reviewId: 'R-A', version: '2', verdict }, headSha,
+          () => { succeeded = true; }, notifyDispatch);
+        await dispatched;
+      });
+      expect(succeeded).toBe(false);
+      expect(current().busy).toBe(true);
+      await act(async () => { releaseWrite(); expect(await submission).toBe(true); });
+      expect(succeeded).toBe(true);
+      expect(current().busy).toBe(false);
+    }
   } finally {
     await act(async () => root.unmount());
     globalThis.fetch = originalFetch;

@@ -3,6 +3,7 @@ export const sourceBoardI18n = {
   en: {
     'sourceBoard.toast.merging': "Merging {reference}",
     'sourceBoard.reply.toast.approving': "Approving {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "Requesting changes on {reference}",
     'sourceBoard.reply.startThread': 'Start thread',
     'sourceBoard.reply.startThreadHint': 'Post as a thread that someone has to resolve',
     'sourceBoard.reply.toast.threadStarted': 'Started a thread on {reference}',
@@ -156,6 +157,7 @@ export const sourceBoardI18n = {
   de: {
     'sourceBoard.toast.merging': "{reference} wird zusammengeführt",
     'sourceBoard.reply.toast.approving': "{reference} wird genehmigt",
+    'sourceBoard.reply.toast.requestingChanges': "Änderungen an {reference} werden angefordert",
     'sourceBoard.reply.startThread': 'Thread starten',
     'sourceBoard.reply.startThreadHint': 'Als Thread posten, den jemand als erledigt markieren muss',
     'sourceBoard.reply.toast.threadStarted': 'Thread zu {reference} gestartet',
@@ -309,6 +311,7 @@ export const sourceBoardI18n = {
   fr: {
     'sourceBoard.toast.merging': "Fusion de {reference} en cours",
     'sourceBoard.reply.toast.approving': "Approbation de {reference} en cours",
+    'sourceBoard.reply.toast.requestingChanges': "Demande de modifications sur {reference} en cours",
     'sourceBoard.reply.startThread': 'Démarrer un fil',
     'sourceBoard.reply.startThreadHint': 'Publier comme un fil que quelqu’un devra résoudre',
     'sourceBoard.reply.toast.threadStarted': 'Fil démarré sur {reference}',
@@ -462,6 +465,7 @@ export const sourceBoardI18n = {
   nl: {
     'sourceBoard.toast.merging': "{reference} wordt samengevoegd",
     'sourceBoard.reply.toast.approving': "{reference} wordt goedgekeurd",
+    'sourceBoard.reply.toast.requestingChanges': "Wijzigingen aanvragen voor {reference}",
     'sourceBoard.reply.startThread': 'Thread starten',
     'sourceBoard.reply.startThreadHint': 'Plaatsen als thread die iemand moet oplossen',
     'sourceBoard.reply.toast.threadStarted': 'Thread gestart op {reference}',
@@ -615,6 +619,7 @@ export const sourceBoardI18n = {
   es: {
     'sourceBoard.toast.merging': "Fusionando {reference}",
     'sourceBoard.reply.toast.approving': "Aprobando {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "Solicitando cambios en {reference}",
     'sourceBoard.reply.startThread': 'Iniciar hilo',
     'sourceBoard.reply.startThreadHint': 'Publicar como un hilo que alguien debe resolver',
     'sourceBoard.reply.toast.threadStarted': 'Hilo iniciado en {reference}',
@@ -768,6 +773,7 @@ export const sourceBoardI18n = {
   ja: {
     'sourceBoard.toast.merging': "{reference} をマージ中",
     'sourceBoard.reply.toast.approving': "{reference} を承認中",
+    'sourceBoard.reply.toast.requestingChanges': "{reference} に変更をリクエスト中",
     'sourceBoard.reply.startThread': 'スレッドを開始',
     'sourceBoard.reply.startThreadHint': '誰かが解決する必要があるスレッドとして投稿します',
     'sourceBoard.reply.toast.threadStarted': '{reference} でスレッドを開始しました',
@@ -921,6 +927,7 @@ export const sourceBoardI18n = {
   'pt-BR': {
     'sourceBoard.toast.merging': "Mesclando {reference}",
     'sourceBoard.reply.toast.approving': "Aprovando {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "Solicitando alterações em {reference}",
     'sourceBoard.reply.startThread': 'Iniciar thread',
     'sourceBoard.reply.startThreadHint': 'Publicar como uma thread que alguém precisa resolver',
     'sourceBoard.reply.toast.threadStarted': 'Thread iniciada em {reference}',
@@ -1074,6 +1081,7 @@ export const sourceBoardI18n = {
   uk: {
     'sourceBoard.toast.merging': "Злиття {reference}",
     'sourceBoard.reply.toast.approving': "Схвалення {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "Запит змін у {reference}",
     'sourceBoard.reply.startThread': 'Почати тред',
     'sourceBoard.reply.startThreadHint': 'Опублікувати як тред, який хтось має вирішити',
     'sourceBoard.reply.toast.threadStarted': 'Тред у {reference} почато',
@@ -1227,6 +1235,7 @@ export const sourceBoardI18n = {
   ko: {
     'sourceBoard.toast.merging': "{reference} 병합 중",
     'sourceBoard.reply.toast.approving': "{reference} 승인 중",
+    'sourceBoard.reply.toast.requestingChanges': "{reference}에 변경 요청 중",
     'sourceBoard.reply.startThread': '스레드 시작',
     'sourceBoard.reply.startThreadHint': '누군가 해결해야 하는 스레드로 게시합니다',
     'sourceBoard.reply.toast.threadStarted': '{reference}에서 스레드를 시작했습니다',
@@ -1380,6 +1389,7 @@ export const sourceBoardI18n = {
   pl: {
     'sourceBoard.toast.merging': "Scalanie {reference}",
     'sourceBoard.reply.toast.approving': "Zatwierdzanie {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "Wysyłanie prośby o zmiany w {reference}",
     'sourceBoard.reply.startThread': 'Rozpocznij wątek',
     'sourceBoard.reply.startThreadHint': 'Opublikuj jako wątek, który ktoś musi rozwiązać',
     'sourceBoard.reply.toast.threadStarted': 'Rozpoczęto wątek w {reference}',
@@ -1533,6 +1543,7 @@ export const sourceBoardI18n = {
   'zh-CN': {
     'sourceBoard.toast.merging': "正在合并 {reference}",
     'sourceBoard.reply.toast.approving': "正在批准 {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "正在请求修改 {reference}",
     'sourceBoard.reply.startThread': '发起讨论串',
     'sourceBoard.reply.startThreadHint': '作为需要有人解决的讨论串发布',
     'sourceBoard.reply.toast.threadStarted': '已在 {reference} 发起讨论串',
@@ -1686,6 +1697,7 @@ export const sourceBoardI18n = {
   'zh-TW': {
     'sourceBoard.toast.merging': "正在合併 {reference}",
     'sourceBoard.reply.toast.approving': "正在核准 {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "正在要求變更 {reference}",
     'sourceBoard.reply.startThread': '開始討論串',
     'sourceBoard.reply.startThreadHint': '以需要有人解決的討論串發佈',
     'sourceBoard.reply.toast.threadStarted': '已在 {reference} 開始討論串',
@@ -1839,6 +1851,7 @@ export const sourceBoardI18n = {
   tr: {
     'sourceBoard.toast.merging': "{reference} birleştiriliyor",
     'sourceBoard.reply.toast.approving': "{reference} onaylanıyor",
+    'sourceBoard.reply.toast.requestingChanges': "{reference} için değişiklik isteniyor",
     'sourceBoard.reply.startThread': 'Konu başlat',
     'sourceBoard.reply.startThreadHint': 'Birinin çözmesi gereken bir konu olarak gönder',
     'sourceBoard.reply.toast.threadStarted': '{reference} üzerinde konu başlatıldı',
@@ -1992,6 +2005,7 @@ export const sourceBoardI18n = {
   ar: {
     'sourceBoard.toast.merging': "جارٍ دمج {reference}",
     'sourceBoard.reply.toast.approving': "جارٍ اعتماد {reference}",
+    'sourceBoard.reply.toast.requestingChanges': "جارٍ طلب تغييرات على {reference}",
     'sourceBoard.reply.startThread': 'بدء نقاش',
     'sourceBoard.reply.startThreadHint': 'انشر كنقاش يجب أن يحلّه أحد',
     'sourceBoard.reply.toast.threadStarted': 'بدأ نقاش في {reference}',
@@ -2145,6 +2159,7 @@ export const sourceBoardI18n = {
   he: {
     'sourceBoard.toast.merging': "מיזוג {reference} מתבצע",
     'sourceBoard.reply.toast.approving': "אישור {reference} מתבצע",
+    'sourceBoard.reply.toast.requestingChanges': "מתבצעת בקשת שינויים ב-{reference}",
     'sourceBoard.reply.startThread': 'פתח שרשור',
     'sourceBoard.reply.startThreadHint': 'פרסום כשרשור שמישהו צריך לסמן כנפתר',
     'sourceBoard.reply.toast.threadStarted': 'נפתח שרשור ב-{reference}',

@@ -52,7 +52,7 @@ const ReviewComment: React.FC<{ comment: GitHubPendingReviewComment; controller:
 };
 
 /** A review is submitted once, with every saved inline comment and its summary. */
-export const PendingReviewSection: React.FC<{ controller: PendingReviewController; onSubmitted: () => void; onApproveSubmitted?: () => void }> = ({ controller, onSubmitted, onApproveSubmitted }) => {
+export const PendingReviewSection: React.FC<{ controller: PendingReviewController; onSubmitted: () => void; onReviewDispatched?: () => void; onReviewCompleted?: () => void }> = ({ controller, onSubmitted, onReviewDispatched, onReviewCompleted }) => {
   const { t } = useI18n();
   const confirmation = useConfirmDialog();
   const summaryKey = `${controller.key}:summary`;
@@ -70,8 +70,8 @@ export const PendingReviewSection: React.FC<{ controller: PendingReviewControlle
     if (text.trim()) action.body = text;
     await controller.mutate(action, data.headSha, currentRuntime => {
       usePendingReviewDraftStore.getState().clearText(summaryKey);
-      if (currentRuntime) onSubmitted();
-    }, verdict === 'approve' ? onApproveSubmitted : undefined);
+      if (currentRuntime) (verdict === 'comment' ? onSubmitted : onReviewCompleted ?? onSubmitted)();
+    }, verdict === 'comment' ? undefined : onReviewDispatched);
   };
   const discard = async () => {
     const approved = await confirmation.confirm({ title: t('pendingReview.discard'), message: t('pendingReview.discardConfirm'), action: t('pendingReview.discard'), destructive: true });
