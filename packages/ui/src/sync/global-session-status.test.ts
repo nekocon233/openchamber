@@ -23,7 +23,8 @@ import { getRuntimeKey } from "@/lib/runtime-switch"
 
 const statusEvent = (sessionID: string, type: "busy" | "retry" | "idle"): SyncEvent => ({
   type: "session.status",
-  properties: { sessionID, status: type === "retry" ? { type, attempt: 1, message: "wait", next: 1 } : { type } },
+  properties: { sessionID, status: type === "retry" ? { type, attempt: 1, message: "wait", next: 1 } : { type },
+    turnStart: type === "idle" ? undefined : { at: Date.now(), source: "live" } },
 } satisfies SyncEvent)
 
 beforeEach(() => {
@@ -354,7 +355,7 @@ describe("global session status index", () => {
     const unsubscribeTiming = useSessionActivityTimingStore.subscribe(() => { timingPublications += 1 })
     const events = Array.from({ length: 1_000 }, (_, index) => ({
       type: "session.status",
-      properties: { sessionID: `session-${index}`, status: { type: "busy" } },
+      properties: { sessionID: `session-${index}`, status: { type: "busy" }, turnStart: { at: Date.now(), source: "live" } },
     } as SyncEvent))
 
     applyGlobalSessionStatusEvents("/repo", events)
@@ -387,7 +388,7 @@ describe("global session status index", () => {
 })
 
 describe("background subagent keeps its parent's turn open", () => {
-  const busy = (sessionID: string): SyncEvent => ({ type: "session.status", properties: { sessionID, status: { type: "busy" } } } as SyncEvent)
+  const busy = (sessionID: string): SyncEvent => ({ type: "session.status", properties: { sessionID, status: { type: "busy" }, turnStart: { at: Date.now(), source: "live" } } } as SyncEvent)
   const idle = (sessionID: string): SyncEvent => ({ type: "session.idle", properties: { sessionID } } as SyncEvent)
   const timing = () => useSessionActivityTimingStore.getState()
 
@@ -485,7 +486,7 @@ describe("background tasks keep a session's turn open", () => {
 })
 
 describe("a background command keeps its session's turn open", () => {
-  const busy = (sessionID: string): SyncEvent => ({ type: "session.status", properties: { sessionID, status: { type: "busy" } } } as SyncEvent)
+  const busy = (sessionID: string): SyncEvent => ({ type: "session.status", properties: { sessionID, status: { type: "busy" }, turnStart: { at: Date.now(), source: "live" } } } as SyncEvent)
   const idle = (sessionID: string): SyncEvent => ({ type: "session.idle", properties: { sessionID } } as SyncEvent)
   const started: SyncEvent = {
     type: "shell.started",
