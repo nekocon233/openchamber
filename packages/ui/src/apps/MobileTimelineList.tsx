@@ -259,7 +259,7 @@ const MobileTimelineRow: React.FC<{
             ) : null}
             {showActivityDuration ? (
               <SessionActivityDuration sessionId={session.id} running={isStreaming} className="shrink-0 typography-micro" />
-            ) : time ? (
+            ) : !isStreaming && time ? (
               <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>
             ) : null}
           </>

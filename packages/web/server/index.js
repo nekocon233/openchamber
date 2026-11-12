@@ -713,6 +713,9 @@ const sessionRuntime = createSessionRuntime({
   getNotificationClients: () => uiNotificationClients,
   broadcastEvent: broadcastGlobalUiEvent,
   isNativeSessionId,
+  readTurnStart: (sessionId) => createTurnStartReader({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).readTurnStart(sessionId),
+  buildOpenCodeUrl: (...args) => buildOpenCodeUrl(...args),
+  getOpenCodeAuthHeaders: () => getOpenCodeAuthHeaders(),
 });
 
 const getActiveSessionCount = () => sessionRuntime.getActiveSessionCount();
@@ -1483,7 +1486,7 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   // Session status, push notifications and follow-up terminalization apply to
   // native CLI sessions as well as OpenCode ones.
   eventSources: [GLOBAL_EVENT_SOURCE_OPENCODE, GLOBAL_EVENT_SOURCE_NATIVE],
-  onPayload: (payload, directory) => {
+  onPayload: (payload, { directory, spaceId }) => {
     const terminalization = followUpQueueRuntime.terminalizeSessionFromEvent(payload);
     if (terminalization) {
       void terminalization.catch(() => {
@@ -1492,14 +1495,14 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
     }
     maybeCacheSessionInfoFromEvent(payload);
     void maybeSendPushForTrigger(payload, directory);
-    sessionRuntime.processOpenCodeSsePayload(payload);
+    sessionRuntime.processOpenCodeSsePayload(payload, { spaceId });
   },
   // Turns already running when the stream (re)connects sent no start this
   // server saw; OpenCode's running list names them.
-  onConnect: async () => {
+  onConnect: async ({ signal, isCurrent }) => {
     const readAt = Date.now();
-    const statuses = await createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).fetchActiveSessionStatuses();
-    if (statuses) sessionRuntime.adoptRunningSessions(Object.keys(statuses), readAt);
+    const statuses = await createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders, signal }).fetchActiveSessionStatuses();
+    if (statuses && isCurrent()) sessionRuntime.adoptRunningSessions(Object.keys(statuses), readAt);
   },
 });
 

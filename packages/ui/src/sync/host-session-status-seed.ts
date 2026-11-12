@@ -1,11 +1,11 @@
 import { hostTurnStart, type SessionTurnStart, type SyncEvent } from '@/lib/opencode/events';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { HostSessionStatusSnapshot } from '@/lib/opencode/session-status';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { applyGlobalSessionStatusEvents, hasBackgroundWork, useGlobalSessionStatusStore } from './global-session-status';
 import { readHostBlockingRequestsSnapshot } from './global-blocking-requests';
-import { applyHostTurnStarts, needsHostTurnStarts } from './session-activity-timing';
+import { applyHostTurnStarts, getSessionTimingRevision, hasSessionTimingChangedSince, needsHostTurnStarts } from './session-activity-timing';
 
 // Seeds the cross-directory status index from the host's own map.
 //
@@ -84,28 +84,32 @@ const isHeldHere = (sessionId: string, activeSessionIds: ReadonlySet<string>): b
   !activeSessionIds.has(sessionId) && hasBackgroundWork(sessionId, activeSessionIds)
 );
 
-let inFlight: Promise<void> | null = null;
+let inFlight: { runtimeKey: string; generation: number; promise: Promise<void> } | null = null;
 
 /** Fetches the host map once and seeds unobserved busy sessions. Coalesces overlapping calls. */
 export const seedGlobalSessionStatusFromHost = (): Promise<void> => {
-  if (inFlight) return inFlight;
   const runtimeKey = getRuntimeKey();
+  const generation = getRuntimeEndpointGeneration();
+  if (inFlight?.runtimeKey === runtimeKey && inFlight.generation === generation) return inFlight.promise;
+  const isCurrent = () => getRuntimeKey() === runtimeKey && getRuntimeEndpointGeneration() === generation;
+  const baselineRevision = getSessionTimingRevision();
   const requestedAt = Date.now();
-  inFlight = (async () => {
+  const operation = (async () => {
     const snapshot = await readHostBlockingRequestsSnapshot(async () => {
       const response = await opencodeClient.getHostSessionStatusSnapshot();
-      return getRuntimeKey() === runtimeKey ? response : null;
+      return isCurrent() ? response : null;
     }, (sessionId) => {
       const session = useGlobalSessionsStore.getState().entityById.get(sessionId);
       return session ? resolveGlobalSessionDirectory(session) : null;
     });
     // A runtime switch between request and response clears the index; the old
     // host's sessions must not be written into the new one.
-    if (!snapshot || getRuntimeKey() !== runtimeKey) return;
+    if (!snapshot || !isCurrent()) return;
     // Turns that begin from here on, the statuses below included, are newer than the map.
     const answeredAt = Date.now();
     const status = useGlobalSessionStatusStore.getState();
     const entities = useGlobalSessionsStore.getState().entityById;
+    const changed = new Set(Object.keys(snapshot.sessions).filter((sessionId) => hasSessionTimingChangedSince(sessionId, baselineRevision)));
     const events = buildHostStatusSeedEvents(snapshot, {
       isKnown: (sessionId) => status.statusById.has(sessionId) || status.observedById.has(sessionId),
       resolveDirectory: (sessionId) => {
@@ -119,11 +123,14 @@ export const seedGlobalSessionStatusFromHost = (): Promise<void> => {
     // After the statuses: a session seeded busy just now is in its turn here.
     const { activeSessionIds } = useGlobalSessionStatusStore.getState();
     const held = new Set(Object.keys(snapshot.sessions).filter((sessionId) => isHeldHere(sessionId, activeSessionIds)));
-    applyHostTurnStarts(buildHostTurnStarts(snapshot, (sessionId) => held.has(sessionId)), held, { requestedAt, answeredAt });
+    const starts = buildHostTurnStarts(snapshot, (sessionId) => held.has(sessionId));
+    for (const sessionId of changed) starts.delete(sessionId);
+    applyHostTurnStarts(starts, held, { requestedAt, answeredAt });
   })().finally(() => {
-    inFlight = null;
+    if (inFlight?.promise === operation) inFlight = null;
   });
-  return inFlight;
+  inFlight = { runtimeKey, generation, promise: operation };
+  return operation;
 };
 
 // Long enough for the host's own status event, which carries the start of a
