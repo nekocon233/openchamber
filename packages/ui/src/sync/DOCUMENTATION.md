@@ -1333,6 +1333,11 @@ selection are owned by `components/chat/message/parts/DOCUMENTATION.md`.
 Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 (optimistic marker, composer restore, rollback) with a native branch:
 
+The marker changes optimistically; prompt text, files and attached context
+reach the composer only after the server confirms the revert. A refusal leaves
+the current draft intact. A response from an obsolete runtime cannot publish
+a restore into the newly selected server.
+
 - The server stops a running turn and restores the files itself, so the UI
   sends no abort, and it cascades nothing to subagent sessions, which are
   views of the parent's transcript. The reverted message must already be in

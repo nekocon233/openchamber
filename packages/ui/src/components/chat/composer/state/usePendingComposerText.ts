@@ -26,16 +26,15 @@ import { useChatColumnActions, useChatColumnSession } from '../../chatColumnSess
 import { appendInlineText, appendWithLineBreaks } from '../text';
 
 export interface PendingComposerTextOptions {
-    enabled?: boolean;
     /** Column role: null for the main chat's composer, a session id for a pinned one. */
     target: string | null;
     /** The session this composer is showing, which a session-scoped restore addresses. */
-    sessionId?: string | null;
+    sessionId: string | null;
     setMessage: React.Dispatch<React.SetStateAction<string>>;
     focus: () => void;
 }
 
-export function usePendingComposerText({ target, sessionId = null, setMessage, focus }: PendingComposerTextOptions): void {
+export function usePendingComposerText({ target, sessionId, setMessage, focus }: PendingComposerTextOptions): void {
     const column = useChatColumnSession();
     const { pinned } = useChatColumnActions();
     // A pinned column keeps its own session and takes only text addressed to it.
