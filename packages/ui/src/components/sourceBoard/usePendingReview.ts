@@ -58,7 +58,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
     if (!drafts.begin(key)) return false;
     const operation = beginPullRequestAction(scope.context, scope.pull);
     if (!operation) { drafts.end(key); return false; }
-    const backgroundApproval = action.kind === 'submit' && action.verdict === 'approve' && Boolean(onDispatched);
+    const backgroundReview = action.kind === 'submit' && action.verdict !== 'comment' && Boolean(onDispatched);
     const reference = `${scope.pull.owner}/${scope.pull.repo} #${scope.pull.number}`;
     let toastId: string | number | undefined;
     const fingerprint = JSON.stringify([headSha, action]);
@@ -80,14 +80,14 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
       if (!sourceControl.githubPendingReviewAction) throw new Error(t('pendingReview.actionFailed'));
       const request = sourceControl.githubPendingReviewAction({ ...scope.context, idempotencyKey,
         target: { project: { owner: scope.pull.owner, name: scope.pull.repo }, number: scope.pull.number, headSha }, action: requestAction });
-      if (backgroundApproval) {
-        toastId = operation.showProgress(t('sourceBoard.reply.toast.approving', { reference }));
+      if (backgroundReview && action.kind === 'submit') {
+        toastId = operation.showProgress(t(action.verdict === 'approve' ? 'sourceBoard.reply.toast.approving' : 'sourceBoard.reply.toast.requestingChanges', { reference }));
         onDispatched?.();
       }
       await request;
       usePendingReviewDraftStore.getState().clearAttempt(key, signature);
       if (action.kind === 'submit' && operation.isRuntimeCurrent()) {
-        if (backgroundApproval) toast.success(t('sourceBoard.reply.toast.approved', { reference }), { id: toastId });
+        if (backgroundReview) toast.success(t(action.verdict === 'approve' ? 'sourceBoard.reply.toast.approved' : 'sourceBoard.reply.toast.changesRequested', { reference }), { id: toastId });
         else toast.success(t('pendingReview.submitted'));
       }
       onSucceeded?.(operation.isRuntimeCurrent());
@@ -103,7 +103,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
         usePendingReviewDraftStore.getState().clearAttempt(key, signature);
       }
       setFailure({ key, message });
-      if (backgroundApproval && operation.isRuntimeCurrent()) toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference }), { id: toastId, description: message });
+      if (backgroundReview && operation.isRuntimeCurrent()) toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference }), { id: toastId, description: message });
       if (operation.isRuntimeCurrent()) await cache.ensure(key, read, { force: true }).catch(() => {});
       return false;
     } finally { usePendingReviewDraftStore.getState().end(key); operation.finish(); }

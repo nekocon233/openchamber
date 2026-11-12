@@ -82,6 +82,10 @@ class KeyedStore<R> {
         return this.records.get(key);
     }
 
+    entries(): Array<[string, R]> {
+        return [...this.records.entries()];
+    }
+
     set(key: string, record: R): void {
         // Re-inserting keeps the map in least-recently-written order.
         this.records.delete(key);
@@ -128,6 +132,8 @@ export type ListCache<T> = {
     loadMore: (key: string) => void;
     read: (key: string) => CachedList<T> | null;
     subscribe: (key: string, listener: Listener) => () => void;
+    /** Retain matching lists while retiring reads started before invalidation. */
+    invalidate: (matches: (key: string) => boolean) => void;
     clear: () => void;
 };
 
@@ -135,6 +141,7 @@ export type ListCache<T> = {
 export function createListCache<T>(limit = 40, now: () => number = Date.now): ListCache<T> {
     const store = new KeyedStore<ListRecord<T>>(limit);
     const pendingReads = new Map<string, Promise<void>>();
+    const queuedReads = new Map<string, { running: Promise<void>; promise: Promise<void> }>();
     let generationSequence = 0;
     let clearEpoch = 0;
 
@@ -144,13 +151,18 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
 
     const ensure: ListCache<T>['ensure'] = (key, fetchPage, options) => {
         const running = pendingReads.get(key);
-        if (options?.force && running) {
+        const existing = store.get(key);
+        if (running && (options?.force || !existing?.refreshing)) {
+            const queued = queuedReads.get(key);
+            if (queued?.running === running) return queued.promise;
             const epoch = clearEpoch;
             // The caller may have invalidated the server cache. Finish the old
             // response before asking again, so its in-flight answer is not reused.
-            return running.then(() => epoch === clearEpoch ? ensure(key, fetchPage, options) : undefined);
+            const promise = running.then(() => epoch === clearEpoch ? ensure(key, fetchPage, { force: true }) : undefined);
+            queuedReads.set(key, { running, promise });
+            void promise.finally(() => { if (queuedReads.get(key)?.promise === promise) queuedReads.delete(key); });
+            return promise;
         }
-        const existing = store.get(key);
         if (existing && (existing.refreshing || (!options?.force && now() - existing.fetchedAt < FRESH_MS))) {
             if (existing.fetchPage !== fetchPage) update(key, existing, { fetchPage });
             return Promise.resolve();
@@ -247,7 +259,12 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
         loadMore,
         read: (key) => store.get(key) ?? null,
         subscribe: (key, listener) => store.subscribe(key, listener),
-        clear: () => { clearEpoch += 1; pendingReads.clear(); store.clear(); },
+        invalidate: (matches) => {
+            for (const [key, record] of store.entries()) {
+                if (matches(key)) update(key, record, { fetchedAt: -Infinity, generation: ++generationSequence, refreshing: false, loadingMore: false });
+            }
+        },
+        clear: () => { clearEpoch += 1; pendingReads.clear(); queuedReads.clear(); store.clear(); },
     };
 }
 

@@ -106,6 +106,29 @@ test('clearing a list retires both its old response and a queued forced refresh'
     expect(cache.read('k')?.items).toEqual(['current']);
 });
 
+test('invalidating a repository keeps its list and rereads after an older request', async () => {
+    const cache = createListCache<string>();
+    await cache.ensure('repo-a', async () => page(['shown']));
+    await cache.ensure('repo-b', async () => page(['other']));
+    const old = deferred<ListPage<string>>();
+    const prior = cache.ensure('repo-a', () => old.promise, { force: true });
+    cache.invalidate((key) => key === 'repo-a');
+    expect(cache.read('repo-a')?.items).toEqual(['shown']);
+    const fresh = deferred<ListPage<string>>();
+    let reads = 0;
+    const reload = cache.ensure('repo-a', () => { reads += 1; return fresh.promise; });
+    expect(reads).toBe(0);
+    old.resolve(page(['obsolete']));
+    await prior;
+    await flush();
+    expect(cache.read('repo-a')?.items).toEqual(['shown']);
+    expect(reads).toBe(1);
+    fresh.resolve(page(['current']));
+    await reload;
+    expect(cache.read('repo-a')?.items).toEqual(['current']);
+    expect(cache.read('repo-b')?.items).toEqual(['other']);
+});
+
 test('later pages append, and a refresh drops a page still in flight', async () => {
     const cache = createListCache<string>();
     const more = deferred<ListPage<string>>();

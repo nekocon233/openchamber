@@ -78,14 +78,17 @@ ordinary merge control, with the same selected method and a destructive
 confirmation. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
 owns capability gating, target changes and pending-operation behavior.
 
-Merges and approvals in project details and linked previews invoke their existing
-Back action immediately after dispatch. This includes administrator merges and
-approvals that submit a pending review. Confirmation still precedes merge
+Merges, approvals and requests for changes in project details and linked previews
+invoke their existing Back action immediately after dispatch. This includes
+administrator merges and verdicts that submit a pending review. Confirmation still precedes merge
 dispatch; cancelling it keeps the detail. The navigation clears only the
 submitted detail's selection and preserves the destination's retained state.
 Progress and results continue in repository-labelled toasts after returning;
 failures and queued merges never navigate again. Unposted text remains saved.
-Comments, requests for changes, board and current-branch navigation keep their
+Successful review verdicts invalidate the provider's list reads and revalidate
+the affected repository's project lists after the receipt, including lists
+hidden while the request completes. Failed refreshes keep the displayed list
+and report the error. Comments, board and current-branch navigation keep their
 existing behavior. The [shared action owner](../sourceBoard/DOCUMENTATION.md)
 retains pending locks and runtime-scoped feedback across detail unmounts.
 
