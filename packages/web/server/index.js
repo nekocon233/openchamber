@@ -154,6 +154,7 @@ import { guestServiceRegistryDir } from './lib/guests/service-registry.js';
 import { findInstalledGuest, listInstalledGuests } from './lib/guests/catalog.js';
 import { createExtensionSessionEvents } from './lib/guests/session-events.js';
 import { extensionsPersistPath } from './lib/guests/persist.js';
+import { createGuestServiceSocketRuntime } from './lib/guests/service-ws.js';
 import { createGuestSurfaceRuntime } from './lib/guests/surface.js';
 import { BROWSER_PROVIDER_IDLE_MS, NOTIFICATIONS_OUTBOUND_PATH } from '@openchamber/sdk';
 import { setHostCallbackRoute } from './lib/guests/host-callback.js';
@@ -831,6 +832,7 @@ let dictationRuntime = null;
 // Built once the HTTP server exists (it hooks `upgrade`); the browser
 // provider router is built earlier and reaches it through this holder.
 let guestSurfaceRuntime = null;
+let guestServiceSocketRuntime = null;
 let realtimeProxyRuntime = null;
 let relayServiceInstance = null;
 let relayReconcileTimer = null;
@@ -2540,7 +2542,7 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   beginGuestServiceShutdown,
   stopAllGuestServices,
   extensionSessionEvents,
-  getGuestSurfaceRuntime: () => guestSurfaceRuntime,
+  getGuestSurfaceRuntime: () => ({ stop: () => { guestServiceSocketRuntime?.stop(); guestSurfaceRuntime?.stop(); } }),
   getRealtimeProxyRuntime: () => realtimeProxyRuntime,
   getDictationRuntime: () => dictationRuntime,
   getRelayService: () => relayServiceInstance,
@@ -3203,6 +3205,7 @@ async function main(options = {}) {
     openchamberVersion: OPENCHAMBER_VERSION,
     nativeAgentsRuntime,
     onGuestDeactivated: async (event) => {
+      guestServiceSocketRuntime?.endForGuest(event.guestId);
       guestSurfaceRuntime?.endForGuest(event.guestId);
       return browserControlRouter.handleGuestDeactivated(event);
     },
@@ -3295,6 +3298,11 @@ async function main(options = {}) {
   });
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
+  guestServiceSocketRuntime = createGuestServiceSocketRuntime({
+    server, uiAuthController, tunnelAuthController, isRequestOriginAllowed, rejectWebSocketUpgrade, trackAuthChannel,
+    persistPath: extensionsPersistPath(OPENCHAMBER_DATA_DIR),
+    findGuest: (id) => findInstalledGuest(id, extensionsPersistPath(OPENCHAMBER_DATA_DIR)),
+  });
   guestSurfaceRuntime = createGuestSurfaceRuntime({
     server,
     uiAuthController,

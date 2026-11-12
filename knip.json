@@ -12,11 +12,16 @@
         "oxlint.config.ts",
         "oxlint.anti-slop.config.ts",
         "postcss.config.js",
-        "scripts/**/*.{js,cjs,mjs,ts}"
+        "scripts/**/*.{js,cjs,mjs,ts}",
+        "packages/extensions/remote-desktop/panel/main.ts",
+        "packages/extensions/remote-desktop/service/main.ts",
+        "packages/extensions/**/*.test.ts",
+        "packages/extensions/**/*.d.ts"
       ],
       "project": [
         "*.{js,cjs,mjs,ts}",
-        "scripts/**/*.{js,cjs,mjs,ts}"
+        "scripts/**/*.{js,cjs,mjs,ts}",
+        "packages/extensions/**/*.ts"
       ]
     },
     "packages/ui": {

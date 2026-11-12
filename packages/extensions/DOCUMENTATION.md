@@ -5,7 +5,7 @@
 - `registry.json` is the app-owned allowlist. IDs use the reserved `openchamber-builtin-` prefix and remain stable across releases.
 - Each package uses the ordinary SDK manifest and public SDK APIs. Built-in status does not expose private stores, credentials, or native bridges to its iframe.
 - `scripts/build-builtin-extensions.mjs` copies only declared files, bundles declared entries, stamps the app version, and validates the staged output before replacing the previous complete bundle. Browser output is a self-contained IIFE. Node service output is ESM.
-- Panel translations live with the package and use `HostReadyContext.locale`. They cannot consume the host React i18n context across the iframe boundary. Keep all 12 host locales covered.
+- Panel translations live with the package and use `HostReadyContext.locale`. They cannot consume the host React i18n context across the iframe boundary. Keep all 15 host locales covered.
 - `packages/web/server/built-in-extensions/` is generated app code, not user data. Web builds, web prepack and root postinstall prepare it. Packaged Electron keeps it in `app.asar.unpacked/node_modules/@openchamber/web/server/built-in-extensions` and supplies that physical root to the in-process backend.
 
 ## Runtime authority
@@ -26,3 +26,11 @@
 3. Add source type-check/lint coverage to the root checks when introducing executable package source. Run the build command in the README and the focused build/catalog/route tests.
 4. Check Enable/Disable, retained data, automatic grants, and account placement. A newly requested capability should appear in the server's granted set without an approval dialog.
 5. Verify the web tarball includes the registry and built files. Native services also need the unpacked Electron resource path.
+
+## Remote desktop
+
+`remote-desktop` provides a panel and full-screen page through the public SDK.
+Its Node service owns X11 discovery, loopback VNC authentication and process
+cleanup. The service contract and lifecycle decisions live in
+`remote-desktop/DOCUMENTATION.md`. noVNC is a root development dependency,
+bundled into the panel; no runtime dependency is added to the web package.

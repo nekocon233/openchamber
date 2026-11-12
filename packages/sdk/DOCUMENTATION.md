@@ -257,3 +257,27 @@ An extension built against an older SDK has no listener, and a push it ignores w
 `issues.search` / `issues.get` on the host, a public OAuth broker, a second `host.provider`, file watching or globbing from the guest (it gets `listDir` and `stat`, not a search). `attach` is the chip. `startSession` creates a session and writes that snapshot. `sessionLink` writes that snapshot on the current session. `prompt` writes or sends on that session. `onSessionLifecycle` is the live phase. Search and the task list live in the guest. `@openchamber/sdk/ui` is the drawing kit: buttons, fields, select, list, tabs, badges, banners, menu, and `mountText`. No issue page, card, attach picker, or PR window; the guest composes those from the blocks. `mountText` lifts `![alt](https://…)` and `[label](https://…)` and hands link clicks to `onOpenUrl`. `ready.theme.tokens` carries the host surface and interactive colors. Call `applyHostReady` before mount.
 
 Local services ship on `apiVersion: 1` (`contributes.service`, `serviceRequest`, grant UI, platform socket bindings + override). Contract detail: `GUEST_SERVICES.md`. Declared `sockets` / `exec` are shown on the grant card and do not confine the process; there is no sandbox for services. VS Code and mobile do not load guests or services yet.
+
+## Service sockets and own-page navigation
+
+`src/service-socket.ts` owns the WebSocket-shaped guest client, wire payloads,
+limits and zod-free path/request checks. `protocol.ts` parses untrusted guest
+frames; `host.ts` owns per-client channels and disposes them. The transport and
+lifecycle contract is in `GUEST_SERVICES.md#service-websockets`. UI ownership is
+`lib/guests/service-socket.ts`, one registry per `PluginPane` document, with
+runtime and effective-grant checks at asynchronous boundaries. Catalog loading
+alone does not withdraw an existing document's authorization.
+
+`openPage()` posts `open-page` with no target id. `features.pages` is present
+only when the calling extension declares a page on a supported runtime. The
+host opens that same extension's page. A call from its visible panel hides
+that panel's zone while retaining its tabs. It refuses missing contributions or
+unsupported runtimes. The existing sidebar entry and page lifecycle remain
+authoritative; navigation never grants another extension's identity.
+
+### Why the iframe carries socket bytes through the host
+
+The opaque sandbox and CSP prevent direct network access and keep runtime
+authentication out of guest code. The host can route the same byte stream
+through direct web, Electron remote proxy and encrypted Private Relay without
+giving the extension a host token, service port or network exception.

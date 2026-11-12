@@ -286,3 +286,39 @@ describe('realtime proxy', () => {
     }
   });
 });
+
+
+it('preserves the service socket subprotocol and binary frames through the Electron remote proxy', async () => {
+  const server = http.createServer();
+  const wsServer = new WebSocketServer({ server, handleProtocols: (offered) => offered.has('binary') ? 'binary' : false });
+  let closed;
+  wsServer.on('connection', (socket, request) => {
+    expect(new URL(request.url, 'http://localhost').pathname).toBe('/api/guests/desktop/service/ws');
+    expect(request.headers['sec-websocket-protocol']).toBe('binary');
+    closed = new Promise((resolve) => socket.once('close', (code, reason) => resolve([code, reason.toString()])));
+    socket.on('message', (data, binary) => socket.send(data, { binary }));
+  });
+  const upstream = await listen(server);
+  const proxy = await startProxyServer({ apiBaseUrl: upstream });
+  const client = new WebSocket(buildRealtimeProxyWsUrl(proxy.origin, `${upstream.replace('http:', 'ws:')}/api/guests/desktop/service/ws?path=%2Frfb`), ['binary'], { headers: { Origin: 'openchamber-ui://app' } });
+  try {
+    await new Promise((resolve, reject) => { client.once('open', resolve); client.once('error', reject); });
+    expect(client.protocol).toBe('binary');
+    const message = new Promise((resolve) => client.once('message', (data, binary) => resolve([Buffer.from(data), binary])));
+    client.send(Buffer.from([0, 255, 1])); expect(await message).toEqual([Buffer.from([0, 255, 1]), true]);
+    client.close(4001, 'done'); expect(await closed).toEqual([4001, 'done']);
+  } finally { client.terminate(); proxy.runtime.stop(); wsServer.close(); }
+});
+
+it('closes a pending service upgrade on proxy shutdown', async () => {
+  let seen;
+  const upgraded = new Promise((resolve) => { seen = resolve; });
+  const server = http.createServer(); const sockets = new Set();
+  server.on('upgrade', (_req, socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); seen(); });
+  const upstream = await listen(server); const proxy = await startProxyServer({ apiBaseUrl: upstream });
+  const client = new WebSocket(buildRealtimeProxyWsUrl(proxy.origin, `${upstream.replace('http:', 'ws:')}/api/guests/desktop/service/ws?path=%2Frfb`), { headers: { Origin: 'openchamber-ui://app' } });
+  client.on('error', () => {});
+  const closed = new Promise((resolve) => client.once('close', resolve));
+  try { await upgraded; proxy.runtime.stop(); await closed; expect(client.readyState).toBe(WebSocket.CLOSED); }
+  finally { client.terminate(); proxy.runtime.stop(); for (const socket of sockets) socket.destroy(); }
+});

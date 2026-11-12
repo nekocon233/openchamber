@@ -1,0 +1,12 @@
+diff --git a/core/util/browser.js b/core/util/browser.js
+--- a/core/util/browser.js
++++ b/core/util/browser.js
+@@ -152 +152,7 @@
+-supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();
++// OpenChamber's sandbox requires a classic IIFE. Keep the feature probe
++// asynchronous without top-level await; RFB negotiates after the host opens.
++_checkWebCodecsH264DecodeSupport().then((supported) => {
++    supportsWebCodecsH264Decode = supported;
++}).catch(() => {
++    supportsWebCodecsH264Decode = false;
++});

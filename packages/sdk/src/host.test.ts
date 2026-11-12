@@ -1214,3 +1214,84 @@ describe('connectHost resolve and badge', () => {
     host.dispose();
   });
 });
+
+describe('service sockets', () => {
+  const envelope = { channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION };
+  const setup = () => {
+    const frame = createFrame();
+    const host = connectHost({ target: frame, acceptSource: () => true });
+    const receive = (message: HostMessage) => frame.dispatch(new MessageEvent('message', { data: message }));
+    receive({ ...ready, payload: { ...ready.payload, features: { serviceSockets: true, pages: true } } });
+    return { host, frame, receive };
+  };
+  test('negotiates, preserves binary views, reports buffering and delivers typed events', () => {
+    const { host, frame, receive } = setup();
+    const socket = host.openServiceSocket({ path: '/rfb', query: { session: 'one' }, protocols: ['binary'] });
+    expect(socket.readyState).toBe(0);
+    expect(() => socket.send(new Uint8Array([1]))).toThrow();
+    const events: string[] = [];
+    socket.addEventListener('open', () => events.push('open'));
+    receive({ ...envelope, type: 'service-ws-open', payload: { socketId: socket.socketId, protocol: 'binary' } });
+    expect(socket.protocol).toBe('binary');
+    const source = new Uint8Array([0, 1, 2, 3]);
+    socket.send(source.subarray(1, 3));
+    expect(source.byteLength).toBe(4);
+    const posted = frame.posted.at(-1);
+    expect(posted?.type).toBe('service-ws-send');
+    if (posted?.type !== 'service-ws-send' || !('data' in posted.payload)) throw new Error('Expected socket bytes');
+    expect(posted.payload.data).toEqual(new Uint8Array([1, 2]));
+    expect(socket.bufferedAmount).toBe(2);
+    receive({ ...envelope, type: 'service-ws-message', payload: { socketId: socket.socketId, sent: 2 } });
+    expect(socket.bufferedAmount).toBe(0);
+    let received: unknown;
+    socket.onmessage = (event) => { received = event.data; };
+    receive({ ...envelope, type: 'service-ws-message', payload: { socketId: socket.socketId, data: new Uint8Array([4, 5]) } });
+    expect(received).toEqual(new Uint8Array([4, 5]).buffer);
+    expect(frame.posted.at(-1)).toMatchObject({ type: 'service-ws-send', payload: { received: 2 } });
+    socket.close(1000, 'done');
+    expect(socket.readyState).toBe(2);
+    receive({ ...envelope, type: 'service-ws-closed', payload: { socketId: socket.socketId, code: 1000, reason: 'done', wasClean: true } });
+    expect(socket.readyState).toBe(3);
+    expect(events).toEqual(['open']);
+    host.dispose();
+  });
+  test('requires support, validates requests, caps concurrent streams, and disposes every pending socket', () => {
+    const unsupported = connectHost({ target: createFrame(), acceptSource: () => true });
+    expect(() => unsupported.openServiceSocket({ path: '/rfb' })).toThrow(HostRequestError);
+    unsupported.dispose();
+    const { host, frame, receive } = setup();
+    for (const path of ['https://outside.test', '//outside.test', '/rfb?path=other', '/a/../rfb']) expect(() => host.openServiceSocket({ path })).toThrow(HostRequestError);
+    const sockets = Array.from({ length: 8 }, () => host.openServiceSocket({ path: '/rfb' }));
+    expect(() => host.openServiceSocket({ path: '/rfb' })).toThrow(HostRequestError);
+    host.dispose();
+    for (const socket of sockets) {
+      expect(socket.readyState).toBe(3);
+      expect(socket.errorCode).toBe('HOST_UNAVAILABLE');
+      receive({ ...envelope, type: 'service-ws-open', payload: { socketId: socket.socketId, protocol: '' } });
+      expect(socket.readyState).toBe(3);
+    }
+    expect(frame.posted.filter((item) => item.type === 'service-ws-close')).toHaveLength(8);
+  });
+  test('fails oversized binary data locally and forwards host refusal codes', () => {
+    const { host, receive } = setup();
+    const socket = host.openServiceSocket({ path: '/rfb' });
+    receive({ ...envelope, type: 'service-ws-open', payload: { socketId: socket.socketId, protocol: '' } });
+    socket.send(new Uint8Array(8_000_001));
+    expect(socket.readyState).toBe(3);
+    expect(socket.errorCode).toBe('RESPONSE_TOO_LARGE');
+    const refused = host.openServiceSocket({ path: '/rfb' });
+    receive({ ...envelope, type: 'service-ws-closed', payload: { socketId: refused.socketId, code: 1008, reason: 'disabled', wasClean: false, error: 'DISABLED' } });
+    expect(refused.errorCode).toBe('DISABLED');
+    host.dispose();
+  });
+  test('opens only the calling extension page after host negotiation', async () => {
+    const { host, frame, receive } = setup();
+    const opening = host.openPage();
+    const message = frame.posted.at(-1);
+    if (!message || message.type !== 'open-page') throw new Error('Expected own page request');
+    expect('payload' in message).toBe(false);
+    receive({ ...envelope, type: 'result', id: message.id, ok: true });
+    await opening;
+    host.dispose();
+  });
+});

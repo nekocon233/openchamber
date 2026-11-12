@@ -100,6 +100,9 @@ var hostRequestErrorCodeSet = new Set(HOST_REQUEST_ERROR_CODES);
 var serviceStatusSet = new Set(SERVICE_STATUS_VALUES);
 var fileStatKindSet = new Set(GUEST_FILE_STAT_KINDS);
 var HOST_PUSH_TYPES = new Set([
+  "service-ws-open",
+  "service-ws-message",
+  "service-ws-closed",
   "workspace",
   "shells",
   "ready",

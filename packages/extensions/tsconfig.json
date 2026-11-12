@@ -1,0 +1,11 @@
+{
+  "extends": "../sdk/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@openchamber/sdk": ["../sdk/src/index.ts"],
+      "@openchamber/sdk/ui": ["../sdk/src/ui/index.ts"]
+    }
+  },
+  "include": ["remote-desktop/**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}

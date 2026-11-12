@@ -1,3 +1,4 @@
+import { GUEST_SERVICE_SOCKET_FRAME_MAX, isServiceSocketRequest, isServiceSocketCloseCode } from './service-socket.ts';
 import { z } from 'zod';
 import { guestSessionWorktreeSchema, guestStorageRequestSchema, guestStorageResultSchema, guestWorkspaceQuerySchema, guestWorkspaceSnapshotSchema } from './workspace-schemas.ts';
 import { guestStatusControlEventSchema, guestStatusControlsSchema } from './status-control-schemas.ts';
@@ -265,6 +266,8 @@ const readyPayloadSchema = z.object({
     statusControls: z.literal(true).optional(),
     popovers: z.literal(true).optional(),
     browserTabs: z.literal(true).optional(),
+    serviceSockets: z.literal(true).optional(),
+    pages: z.literal(true).optional(),
   }).optional(),
 });
 
@@ -335,7 +338,13 @@ const guestRunningShellsSnapshotSchema = z.object({
   ended: z.array(guestEndedShellSchema).max(GUEST_SHELLS_MAX),
 }).strict();
 
+const socketIdSchema = z.string().min(1).max(128);
+const socketDataSchema = z.union([z.string().refine((value) => new TextEncoder().encode(value).byteLength <= GUEST_SERVICE_SOCKET_FRAME_MAX), z.instanceof(Uint8Array).refine((value) => value.byteLength <= GUEST_SERVICE_SOCKET_FRAME_MAX)]);
+const socketBytesSchema = z.number().int().min(0).max(GUEST_SERVICE_SOCKET_FRAME_MAX);
 export const hostMessageSchema = z.union([
+  z.object({ ...envelope, type: z.literal('service-ws-open'), payload: z.object({ socketId: socketIdSchema, protocol: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('service-ws-message'), payload: z.union([z.object({ socketId: socketIdSchema, data: socketDataSchema }), z.object({ socketId: socketIdSchema, sent: socketBytesSchema })]) }),
+  z.object({ ...envelope, type: z.literal('service-ws-closed'), payload: z.object({ socketId: socketIdSchema, code: z.number().int(), reason: z.string(), wasClean: z.boolean(), error: z.enum(HOST_REQUEST_ERROR_CODES).optional() }) }),
   z.object({ ...envelope, type: z.literal('workspace'), payload: z.object({ subscriptionId: z.string().min(1).max(128), snapshot: guestWorkspaceSnapshotSchema }) }),
   z.object({
     ...envelope,
@@ -449,6 +458,10 @@ export const hostMessageSchema = z.union([
 const filePathSchema = z.string().min(1).max(GUEST_FILE_PATH_MAX).refine(isGuestFilePath);
 
 export const guestMessageSchema = z.discriminatedUnion('type', [
+  z.object({ ...envelope, type: z.literal('open-page'), id: z.string().min(1) }),
+  z.object({ ...envelope, type: z.literal('service-ws-open'), payload: z.object({ socketId: socketIdSchema, path: z.string(), query: z.record(z.string(), z.string()).optional(), protocols: z.array(z.string()).optional() }).refine(isServiceSocketRequest) }),
+  z.object({ ...envelope, type: z.literal('service-ws-send'), payload: z.union([z.object({ socketId: socketIdSchema, data: socketDataSchema }), z.object({ socketId: socketIdSchema, received: socketBytesSchema })]) }),
+  z.object({ ...envelope, type: z.literal('service-ws-close'), payload: z.object({ socketId: socketIdSchema, code: z.number().refine(isServiceSocketCloseCode).optional(), reason: z.string().refine((value) => new TextEncoder().encode(value).byteLength <= 123).optional() }) }),
   z.object({
     ...envelope,
     type: z.literal('action-result'),

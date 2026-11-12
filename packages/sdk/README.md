@@ -157,7 +157,7 @@ Copy keeps the toast open and shows Copied on success. A failed copy shows an er
 
 ## In the page
 
-For a full-screen board, add `"page": true` under `contributes`, or `"page": { "entry": "panel/page.html", "title": "Board" }` for separate HTML. Users open it from the Extension pages menu above the session list. `ctx.surface` is `"page"`. The extension cannot open the page itself.
+For a full-screen board, add `"page": true` under `contributes`, or `"page": { "entry": "panel/page.html", "title": "Board" }` for separate HTML. Users open it from the Extension pages menu above the session list. `ctx.surface` is `"page"`. When `ctx.features.pages` is true, `host.openPage()` opens this extension's own declared page.
 
 For a small readout in the chat's Work Status panel, add `"statusSection": { "entry": "status/index.html", "title": "Recent commits" }`. It needs no `panel.entry`, so a section-only extension has no rail icon. `ctx.surface` is `"status"`. Call `host.setHeight(px)` when your content changes size; the host stops growing the frame at 320 px and your page scrolls after that. Object-form sections can opt into `defaultExpanded: false` or `requiresProject: true`; omitted fields keep the existing expanded, directory-independent behavior. `examples/git-graph-status` is a complete section with a local service.
 

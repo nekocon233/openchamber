@@ -1,3 +1,4 @@
+import type { GuestServiceSocketMessage, HostServiceSocketMessage } from './service-socket.ts';
 
 import { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL } from './api-version.ts';
 import type { FileEditorChange, FileEditorDocument, FileSnapshotRequest, FileSnapshotResultPayload } from './file-editor.ts';
@@ -235,6 +236,8 @@ export type HostReadyContext = {
     popovers?: true;
     lateGenerateResults?: true;
     browserTabs?: true;
+    serviceSockets?: true;
+    pages?: true;
   };
 };
 
@@ -647,6 +650,7 @@ export type HostResultMessage = Envelope & { type: 'result'; id: string } & (
 export type HostShellsMessage = Envelope & { type: 'shells'; payload: { subscriptionId: string; snapshot: GuestRunningShellsSnapshot } };
 
 export type HostMessage =
+  | (Envelope & HostServiceSocketMessage)
   | (Envelope & { type: 'workspace'; payload: GuestWorkspaceUpdate })
   | HostShellsMessage
   | HostReadyMessage
@@ -673,6 +677,7 @@ type GuestCall<Type extends string, Payload = never> = Envelope & { type: Type; 
 export type GuestHelloMessage = Envelope & { type: 'hello' };
 export type GuestToastMessage = GuestCall<'toast', ToastRequest>;
 export type GuestOpenUrlMessage = GuestCall<'open-url', { url: string }>;
+export type GuestOpenPageMessage = GuestCall<'open-page'>;
 export type GuestOpenBrowserMessage = GuestCall<'open-browser', { url: string }>;
 export type GuestOpenSurfaceMessage = GuestCall<'open-surface', { surfaceId: string }>;
 export type GuestClipboardWriteMessage = GuestCall<'clipboard-write', { text: string }>;
@@ -720,6 +725,7 @@ export type GuestShellOutputMessage = GuestCall<'shell-output', GuestShellOutput
 export type GuestShellStopMessage = GuestCall<'shell-stop', { shellId: string }>;
 
 export type GuestMessage =
+  | (Envelope & GuestServiceSocketMessage)
   | GuestCall<'workspace-read', GuestWorkspaceQuery>
   | GuestCall<'workspace-subscribe', GuestWorkspaceSubscription>
   | GuestCall<'workspace-unsubscribe', { subscriptionId: string }>
@@ -732,6 +738,7 @@ export type GuestMessage =
   | GuestHelloMessage
   | GuestToastMessage
   | GuestOpenUrlMessage
+  | GuestOpenPageMessage
   | GuestOpenBrowserMessage
   | GuestOpenSurfaceMessage
   | GuestClipboardWriteMessage
@@ -801,6 +808,7 @@ export const isGenerateResult = (
 ): value is GenerateResult => Boolean(value && 'text' in value && String(value.text) === value.text && !('status' in value));
 
 const HOST_PUSH_TYPES: ReadonlySet<string> = new Set([
+  'service-ws-open', 'service-ws-message', 'service-ws-closed',
   'workspace',
   'shells',
   'ready', 'directory', 'session', 'connection', 'settings', 'session-lifecycle', 'item', 'resolve', 'action',

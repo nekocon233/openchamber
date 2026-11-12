@@ -64,6 +64,7 @@
       },
       "devDependencies": {
         "@clack/prompts": "^1.1.0",
+        "@novnc/novnc": "1.7.0",
         "@oxlint/plugins": "1.90.0",
         "@remixicon/react": "^4.7.0",
         "@tailwindcss/postcss": "^4.0.0",
@@ -454,6 +455,7 @@
     "@codemirror/view@6.43.15": "bun-patches/@codemirror%2Fview@6.43.15.patch",
     "happy-dom@18.0.1": "bun-patches/happy-dom@18.0.1.patch",
     "@legendapp/list@3.7.1": "bun-patches/@legendapp%2Flist@3.7.1.patch",
+    "@novnc/novnc@1.7.0": "packages/extensions/remote-desktop/noVNC.browser.patch",
     "bun-pty@0.6.0": "bun-patches/bun-pty@0.6.0.patch",
     "@tanstack/virtual-core@3.19.10": "bun-patches/@tanstack+virtual-core+3.19.10.patch",
   },
@@ -1126,6 +1128,8 @@
     "@napi-rs/keyring-win32-x64-msvc": ["@napi-rs/keyring-win32-x64-msvc@1.3.0", "", { "os": "win32", "cpu": "x64" }, "sha512-4DnCWXwDc0HRKwyRlG5y0VhKZW2tNRQfKKfyj6IX/KWfDNyq9hn4n+GL1auyDcOO/v8PwnhmYo2+rOOqCkvvOg=="],
 
     "@noble/hashes": ["@noble/hashes@1.8.0", "", {}, "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A=="],
+
+    "@novnc/novnc": ["@novnc/novnc@1.7.0", "", {}, "sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA=="],
 
     "@npmcli/agent": ["@npmcli/agent@3.0.0", "", { "dependencies": { "agent-base": "^7.1.0", "http-proxy-agent": "^7.0.0", "https-proxy-agent": "^7.0.1", "lru-cache": "^10.0.1", "socks-proxy-agent": "^8.0.3" } }, "sha512-S79NdEgDQd/NGCay6TCoVzXSj74skRZIKJcpJjC5lOq34SZzyI6MqtiiWoiVWoVrTcGjNeC4ipbh1VIHlpfF5Q=="],
 

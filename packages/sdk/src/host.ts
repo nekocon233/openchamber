@@ -1,3 +1,4 @@
+import { GuestServiceSocket, GUEST_SERVICE_SOCKET_MAX, isHostServiceSocketMessage, isServiceSocketRequest, type GuestServiceSocketRequest } from './service-socket.ts';
 import { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL } from './api-version.ts';
 import { GUEST_STORAGE_KEY_MAX, GUEST_STORAGE_VALUE_BYTES, type GuestProjectsSnapshot, type GuestWorktreesSnapshot, type GuestSessionsSnapshot, type GuestWorkspaceQuery, type GuestWorkspaceSnapshot, type GuestStorageOptions, type GuestStorageRequest, type GuestStorageResult } from './workspace.ts';
 import type { GuestStatusControl, GuestStatusControlEvent } from './status-controls.ts';
@@ -79,10 +80,11 @@ import {
 import { GUEST_SHELL_ID_MAX, GUEST_SHELL_OUTPUT_TAIL_MAX, type GuestRunningShellsSnapshot, type GuestShellOutputResult, type GuestShellStopResult, type GuestShellsScope } from './shells.ts';
 
 export type HostFrame = {
+  postMessage: (message: GuestMessage, targetOrigin: string, transfer?: Transferable[]) => void;
   addEventListener: Window['addEventListener'];
   removeEventListener: Window['removeEventListener'];
   parent: {
-    postMessage: (message: GuestMessage, targetOrigin: string) => void;
+    postMessage: (message: GuestMessage, targetOrigin: string, transfer?: Transferable[]) => void;
   };
 };
 
@@ -173,6 +175,9 @@ export type HostClient = {
   oauthDisconnect: () => Promise<void>;
   request: (request: GuestRequest) => Promise<GuestRequestResult>;
   serviceRequest: (request: GuestRequest) => Promise<GuestRequestResult>;
+  /** Open this extension's declared full-screen page. */
+  openPage: () => Promise<void>;
+  openServiceSocket: (request: GuestServiceSocketRequest) => GuestServiceSocket;
   serviceStatus: () => Promise<ServiceStatusResult>;
   /**
    * Read a UTF-8 text file. A relative path is inside the open project
@@ -324,6 +329,7 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
   let fileSnapshotHandler: ((purpose: FileSnapshotPurpose) => Promise<FileEditorSnapshot> | FileEditorSnapshot) | null = null;
   let lastFile: FileEditorDocument | null = null;
   let saveShortcutInstalled = false;
+  const sockets = new Map<string, GuestServiceSocket>();
   const pending = new Map<string, Pending>();
   const workspaceListeners = new Map<string, (snapshot: GuestWorkspaceSnapshot) => void>();
   const shellsListeners = new Map<string, (snapshot: GuestRunningShellsSnapshot) => void>();
@@ -343,8 +349,8 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     };
   };
 
-  const post = (message: GuestMessage): void => {
-    target.parent.postMessage(message, '*');
+  const post = (message: GuestMessage, transfer?: Transferable[]): void => {
+    target.parent.postMessage(message, '*', transfer);
   };
 
   // Sent again on every `ready`: the host forgets a listening frame when it
@@ -372,6 +378,7 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     if (!acceptSource(event.source)) return;
     const message = readHostMessage(event.data);
     if (!message) return;
+    if (isHostServiceSocketMessage(message)) { sockets.get(message.payload.socketId)?.receive(message); return; }
     if (message.type === 'workspace') {
       const listener = workspaceListeners.get(message.payload.subscriptionId);
       if (listener) emit([listener], message.payload.snapshot);
@@ -1044,6 +1051,19 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       }
       return result;
     }),
+    openPage: () => lastReady?.features?.pages === true
+      ? request({ ...envelope, type: 'open-page', id: nextId(ids) })
+      : Promise.reject(new HostRequestError('UNSUPPORTED', 'This host cannot open extension pages.')),
+    openServiceSocket: (payload) => {
+      if (disposed || target.parent === target) throw new HostRequestError('HOST_UNAVAILABLE', 'No host frame.');
+      if (lastReady?.features?.serviceSockets !== true) throw new HostRequestError('UNSUPPORTED', 'This host does not support service sockets.');
+      if (!isServiceSocketRequest(payload)) throw new HostRequestError('BAD_PATH', 'Invalid service socket request.');
+      if (sockets.size >= GUEST_SERVICE_SOCKET_MAX) throw new HostRequestError('HOST_REJECTED', 'Too many service sockets in this frame.');
+      const id = nextId(ids);
+      const socket = new GuestServiceSocket(id, payload, post, () => sockets.delete(id), requestTimeoutMs);
+      sockets.set(id, socket);
+      return socket;
+    },
     serviceStatus: () => send({
       channel: OPENCHAMBER_SDK_CHANNEL,
       v: OPENCHAMBER_SDK_API_VERSION,
@@ -1198,6 +1218,7 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
         post({ ...envelope, type: 'shells-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
       }
       shellsListeners.clear();
+      for (const socket of [...sockets.values()]) socket.fail('HOST_UNAVAILABLE');
       disposed = true;
       resolveHandler = null;
       actionHandler = null;

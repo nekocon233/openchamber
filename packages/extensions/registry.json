@@ -1,4 +1,12 @@
 {
   "version": 1,
-  "extensions": []
+  "extensions": [{
+    "id": "openchamber-builtin-desktop",
+    "directory": "remote-desktop",
+    "files": ["panel/index.html", "NOTICE.md", "LICENSE.noVNC.txt", "LICENSE.pako.txt", "LICENSE.zod.txt", "noVNC.browser.patch"],
+    "build": [
+      { "entry": "panel/main.ts", "out": "panel/main.js", "target": "browser" },
+      { "entry": "service/main.ts", "out": "service/main.js", "target": "node" }
+    ]
+  }]
 }

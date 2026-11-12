@@ -193,3 +193,26 @@ and reaps nothing.
 Orphans are rare on Windows: libuv puts every spawned child in a job object that
 is killed with the host, even on a hard kill, so the Windows branch of the
 reaper is a safety net.
+
+## Service socket proxy
+
+`service-ws.js` owns `/api/guests/:id/service/ws`, a text/binary WebSocket proxy
+to the requesting extension's host-spawned loopback service. It shares
+`authorizeWebSocketUpgrade` and authenticated-channel expiry/revocation with
+other long-lived channels. Opaque origins are refused even on external paths.
+Effective grants, enabled state, enterprise policy and the SDK's service path
+checks run before startup. `ensureGuestServiceReady` owns spawn/stop epochs for
+both HTTP and socket callers and returns a lease checked immediately before
+dialing. The loopback upgrade carries only the host-minted service bearer.
+
+A connection holds the service from startup through closure. Frames are capped
+at 8,000,000 bytes with bounded forwarding queues; Node pauses reads during a
+write, while Bun closes a channel that exceeds its buffer. Text/binary flags
+and negotiated subprotocols are retained. `endForGuest` also cancels handshakes
+awaiting readiness. `subscribeGuestServiceStop` ends channels synchronously
+before process teardown, covering Pause, Remove, replacement, socket changes
+and withdrawn grants. `stop` retires admission and every connection at shutdown.
+
+The UI auth URL-token, relay and Electron realtime-proxy path allowlists all
+include this exact endpoint shape. Extension asset grants cannot authenticate
+it. The browser holds neither a loopback port nor a service bearer.

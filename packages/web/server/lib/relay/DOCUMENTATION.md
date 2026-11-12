@@ -252,3 +252,17 @@ A URL the browser loads itself (`<img src>`, `<video src>`, an iframe) never ent
 - The two implementations stay byte-compatible and the wire format is versioned/negotiated so mixed client/host app versions degrade gracefully rather than break.
 
 For the operational rules that keep future changes (new WebSocket endpoints, transport refactors, terminal/voice porting) from breaking this, load the `relay-transport` skill.
+
+
+## Extension service channels
+
+The exact `/api/guests/:id/service/ws` path family is allowlisted alongside
+surface sockets. The host forwards the client's URL token and loopback Origin
+through the ordinary auth gate. `WsOpened.protocol` is retained on the virtual
+socket; peers without that optional field still report an empty protocol.
+
+Client virtual sockets expose conservative transport buffering: pending batch
+bytes, queued encryption plaintext and native wire `bufferedAmount`. This is
+shared tunnel pressure, so a bounded service-stream caller refuses new data
+while the common transport is saturated. Encryption and wire sends remain
+serialized with the existing per-direction counter; no wire format changes.

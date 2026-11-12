@@ -45,6 +45,7 @@ const isHttpRequestPayload = (
   typeof value === 'object' && value !== null && typeof (value as { path?: unknown }).path === 'string';
 
 class FakeEndpoint implements TunnelWireSocket {
+  bufferedAmount = 0;
   readyState = WS_OPEN;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
@@ -248,6 +249,7 @@ const setupClient = async (
   killWire: (code?: number) => void;
   sendTextToClient: (text: string) => void;
   clientBinaryCount: () => number;
+  setWireBufferedAmount: (bytes: number) => void;
   connectionUrls: string[];
 }> => {
   const hostKeyPair = await generateEcdhKeyPair();
@@ -287,6 +289,7 @@ const setupClient = async (
     killWire: (code = 1006) => lastClientEndpoint?.close(code, 'killed'),
     sendTextToClient: (text: string) => lastHostEndpoint?.send(text),
     clientBinaryCount: () => lastClientEndpoint?.binarySent ?? 0,
+    setWireBufferedAmount: (bytes) => { if (lastClientEndpoint) lastClientEndpoint.bufferedAmount = bytes; },
   };
 };
 
@@ -846,4 +849,18 @@ describe('terminal close recovery', () => {
     expect(connectionCount()).toBe(before + 1);
     expect(client.getStatus().state).toBe('connected');
   });
+});
+
+
+test('virtual WebSocket exposes queued plaintext, negotiated protocol and shared wire pressure', async () => {
+  const { client, setWireBufferedAmount } = await setupClient(); track(client);
+  await client.fetch('/health');
+  const socket = client.openWebSocket('/api/guests/desktop/service/ws', ['binary']);
+  await new Promise<void>((resolve) => { socket.onopen = resolve; });
+  expect(socket.protocol).toBe('binary');
+  socket.send(new Uint8Array(64_000));
+  expect(socket.bufferedAmount).toBeGreaterThan(0);
+  await wait(20); expect(socket.bufferedAmount).toBe(0);
+  setWireBufferedAmount(8_000_000); expect(socket.bufferedAmount).toBe(8_000_000);
+  setWireBufferedAmount(0); socket.close();
 });

@@ -31,12 +31,12 @@
     "extensions:build": "bun scripts/build-builtin-extensions.mjs",
     "build:electron": "bun run --cwd packages/electron build",
     "build:mobile": "bun run --cwd packages/mobile build",
-    "type-check": "bun run --cwd packages/ui type-check && bun run --filter '*' type-check",
+    "type-check": "tsc -p packages/extensions/tsconfig.json && bun run --cwd packages/ui type-check && bun run --filter '*' type-check",
     "type-check:web": "bun run --cwd packages/web type-check",
     "type-check:ui": "bun run --cwd packages/ui type-check",
     "settings-registry:generate": "bun run --cwd packages/ui src/lib/settings/registry-snapshot.ts",
     "type-check:electron": "bun run --cwd packages/electron type-check",
-    "lint": "bun run --filter '*' lint",
+    "lint": "oxlint -c oxlint.config.ts --report-unused-disable-directives packages/extensions && bun run --filter '*' lint",
     "lint:web": "bun run --cwd packages/web lint",
     "lint:ui": "bun run --cwd packages/ui lint",
     "lint:electron": "bun run --cwd packages/electron lint",
@@ -179,6 +179,7 @@
   },
   "devDependencies": {
     "@clack/prompts": "^1.1.0",
+    "@novnc/novnc": "1.7.0",
     "@oxlint/plugins": "1.90.0",
     "@remixicon/react": "^4.7.0",
     "@tailwindcss/postcss": "^4.0.0",
@@ -207,6 +208,7 @@
     "happy-dom@18.0.1": "bun-patches/happy-dom@18.0.1.patch",
     "@legendapp/list@3.7.1": "bun-patches/@legendapp%2Flist@3.7.1.patch",
     "@codemirror/view@6.43.15": "bun-patches/@codemirror%2Fview@6.43.15.patch",
-    "bun-pty@0.6.0": "bun-patches/bun-pty@0.6.0.patch"
+    "bun-pty@0.6.0": "bun-patches/bun-pty@0.6.0.patch",
+    "@novnc/novnc@1.7.0": "packages/extensions/remote-desktop/noVNC.browser.patch"
   }
 }

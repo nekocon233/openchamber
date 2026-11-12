@@ -300,8 +300,13 @@ const trackInflight = (guestId, delta) => {
  * host quit): ends the process and cancels any request or start in flight.
  * @param {string} guestId
  */
+const serviceStopListeners = new Set();
+/** Long-lived consumers close before process teardown can wait on a child. */
+export const subscribeGuestServiceStop = (listener) => { serviceStopListeners.add(listener); return () => serviceStopListeners.delete(listener); };
+
 export const stopGuestService = async (guestId) => {
   stopEpochs.set(guestId, stopEpochOf(guestId) + 1);
+  for (const listener of serviceStopListeners) { try { listener(guestId); } catch { /* Teardown continues for every consumer. */ } }
   clearIdleStop(guestId);
   await discardRuntime(guestId);
 };
@@ -592,59 +597,12 @@ const ensureGuestService = async (params) => {
   return pending;
 };
 
-/**
- * Starts the guest's service if needed and sends it one HTTP request, giving
- * back the raw `Response`. This is the one place a host-driven caller (a
- * provider role, a shared surface) or a panel proxy talks to the loopback:
- * the enabled check, the grant, the spawn, the epoch, and the bearer live
- * here. The caller reads the body as it needs it (text, JSON, image bytes).
- *
- * @param {{
- *   guestId: string,
- *   guestName?: string,
- *   packageRoot: string,
- *   service: { entry: string, permissions?: { sockets?: Array<{ id: string, candidatesByPlatform?: Partial<Record<'linux' | 'darwin' | 'win32', string[]>> }>, exec?: string[] } },
- *   granted: string[],
- *   persistPath: string,
- *   method: string,
- *   path: string,
- *   query?: Record<string, string>,
- *   body?: string,
- *   accept?: string,
- *   headers?: Record<string, string>,
- *   timeoutMs?: number,
- *   idleStopMs?: number,
- *   signal?: AbortSignal,
- * }} params `timeoutMs` and `idleStopMs` are for host-driven calls; a
- * panel's `serviceRequest` keeps the SDK limits. With `idleStopMs` the
- * service stops itself after that long without a request; `holdGuestService`
- * suspends that while a long-lived consumer (a surface viewer) is attached.
+/** Start and authorize a service for a host-owned HTTP or WebSocket caller.
+ * The returned lease must still be current immediately before dialing loopback.
  */
-export const openGuestServiceRequest = async ({
-  guestId,
-  guestName,
-  packageRoot,
-  service,
-  granted,
-  persistPath,
-  method,
-  path: requestPath,
-  query,
-  body,
-  accept = 'application/json',
-  headers: extraHeaders,
-  timeoutMs = GUEST_REQUEST_TIMEOUT_MS,
-  idleStopMs,
-  signal,
-}) => {
+export const ensureGuestServiceReady = async ({ guestId, guestName, packageRoot, service, granted, persistPath }) => {
   const lifecycle = hostLifecycle;
   assertGuestHostActive(lifecycle);
-  if (!METHODS.has(method)) {
-    throw new GuestServiceError('Unsupported request method.', 'BAD_METHOD');
-  }
-  if (!isGuestRequestPath(requestPath)) {
-    throw new GuestServiceError('Request path must stay on the service.', 'BAD_PATH');
-  }
   // A Pause that lands anywhere between here and the proxied call bumps
   // this; the request then ends with NO_SERVICE instead of using the
   // enabled flag it read before the pause.
@@ -694,6 +652,59 @@ export const openGuestServiceRequest = async ({
     }
     throw new GuestServiceError('The service was stopped before the request could run.', 'NO_SERVICE');
   }
+
+  return { runtime, isCurrent: () => lifecycle.accepting && stopEpochOf(guestId) === epoch && runtimes.get(guestId) === runtime };
+};
+
+/**
+ * Starts the guest's service if needed and sends it one HTTP request, giving
+ * back the raw `Response`. This is the one place a host-driven caller (a
+ * provider role, a shared surface) or a panel proxy talks to the loopback:
+ * the enabled check, the grant, the spawn, the epoch, and the bearer live
+ * here. The caller reads the body as it needs it (text, JSON, image bytes).
+ *
+ * @param {{
+ *   guestId: string,
+ *   guestName?: string,
+ *   packageRoot: string,
+ *   service: { entry: string, permissions?: { sockets?: Array<{ id: string, candidatesByPlatform?: Partial<Record<'linux' | 'darwin' | 'win32', string[]>> }>, exec?: string[] } },
+ *   granted: string[],
+ *   persistPath: string,
+ *   method: string,
+ *   path: string,
+ *   query?: Record<string, string>,
+ *   body?: string,
+ *   accept?: string,
+ *   headers?: Record<string, string>,
+ *   timeoutMs?: number,
+ *   idleStopMs?: number,
+ *   signal?: AbortSignal,
+ * }} params `timeoutMs` and `idleStopMs` are for host-driven calls; a
+ * panel's `serviceRequest` keeps the SDK limits. With `idleStopMs` the
+ * service stops itself after that long without a request; `holdGuestService`
+ * suspends that while a long-lived consumer (a surface viewer) is attached.
+ */
+export const openGuestServiceRequest = async ({
+  guestId,
+  guestName,
+  packageRoot,
+  service,
+  granted,
+  persistPath,
+  method,
+  path: requestPath,
+  query,
+  body,
+  accept = 'application/json',
+  headers: extraHeaders,
+  timeoutMs = GUEST_REQUEST_TIMEOUT_MS,
+  idleStopMs,
+  signal,
+}) => {
+  if (!METHODS.has(method)) throw new GuestServiceError('Unsupported request method.', 'BAD_METHOD');
+  if (!isGuestRequestPath(requestPath)) throw new GuestServiceError('Request path must stay on the service.', 'BAD_PATH');
+  const { runtime, isCurrent } = await ensureGuestServiceReady({ guestId, guestName, packageRoot, service, granted, persistPath });
+  if (!isCurrent()) throw new GuestServiceError('The service was stopped.', 'NO_SERVICE');
 
   let url;
   try {

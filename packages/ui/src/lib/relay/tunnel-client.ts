@@ -72,6 +72,7 @@ const abortError = (): DOMException => new DOMException('The operation was abort
 // Minimal wire surface the client needs from the relay WebSocket. Injectable
 // so tests can substitute an in-memory transport pair.
 export interface TunnelWireSocket {
+  readonly bufferedAmount?: number;
   readonly readyState: number;
   send(data: string | ArrayBuffer | Uint8Array): void;
   close(code?: number, reason?: string): void;
@@ -84,6 +85,7 @@ export interface TunnelWireSocket {
 const wrapNativeWebSocket = (ws: WebSocket): TunnelWireSocket => {
   ws.binaryType = 'arraybuffer';
   const wire: TunnelWireSocket = {
+    get bufferedAmount() { return ws.bufferedAmount; },
     get readyState() {
       return ws.readyState;
     },
@@ -119,6 +121,8 @@ export interface RelayTunnelSocketCloseEvent {
 }
 
 export interface RelayTunnelWebSocket {
+  readonly bufferedAmount?: number;
+  readonly protocol?: string;
   readonly readyState: number;
   // Native-only hint; the tunnel always delivers binary as ArrayBuffer, so it
   // accepts the setter as a no-op to keep the two socket shapes interchangeable.
@@ -133,6 +137,8 @@ export interface RelayTunnelWebSocket {
 
 export const wrapBrowserWebSocket = (ws: WebSocket): RelayTunnelWebSocket => {
   const socket: RelayTunnelWebSocket = {
+    get bufferedAmount() { return ws.bufferedAmount; },
+    get protocol() { return ws.protocol; },
     get readyState() {
       return ws.readyState;
     },
@@ -243,6 +249,7 @@ type ActiveChannel = {
   streams: Map<number, StreamHandler>;
   assembler: ReturnType<typeof createFragmentAssembler>;
   nextStreamId(): number;
+  readonly bufferedAmount: number;
   send(frame: Uint8Array): void;
   dead: boolean;
 };
@@ -539,10 +546,12 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
       const allocator = createStreamIdAllocator();
       const assembler = createFragmentAssembler();
       let sendChain: Promise<void> = Promise.resolve();
+      let encryptionQueuedBytes = 0;
       // Serialize encrypt+send: the per-direction IV counter must hit the wire in
       // encryption order or the receiver fails closed. One call == one encrypted
       // WS message == one counter tick, whether it carries a batch or a lone frame.
       const sendEncryptedPlaintext = (plaintext: Uint8Array): void => {
+        encryptionQueuedBytes += plaintext.byteLength;
         sendChain = sendChain
           .then(async () => {
             if (channelObj.dead) return;
@@ -552,13 +561,14 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
           })
           .catch(() => {
             failAttemptLocal(new Error('relay encrypt/send failed'));
-          });
+          }).finally(() => { encryptionQueuedBytes -= plaintext.byteLength; });
       };
       const localBatcher = batch
         ? createOutboundFrameBatcher({ windowMs: batchWindowMs, sendBatch: sendEncryptedPlaintext })
         : null;
       batcher = localBatcher;
       const channelObj: ActiveChannel = {
+        get bufferedAmount() { return encryptionQueuedBytes + (localBatcher?.bufferedAmount ?? 0) + (wire.bufferedAmount ?? 0); },
         streams,
         assembler,
         nextStreamId: () => allocator.next(),
@@ -961,11 +971,14 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
 
   const openTunnelWebSocket = (pathWithQuery: string, protocols?: string[]): RelayTunnelWebSocket => {
     let readyState = WS_CONNECTING;
+    let protocol = '';
     let channelRef: ActiveChannel | null = null;
     let streamId = 0;
     let finished = false;
 
     const socket: RelayTunnelWebSocket = {
+      get protocol() { return protocol; },
+      get bufferedAmount() { return channelRef?.bufferedAmount ?? 0; },
       get readyState() {
         return readyState;
       },
@@ -1041,6 +1054,8 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
       channel.streams.set(streamId, {
         handleFrame(frameType, payload) {
           if (frameType === TunnelFrameType.WsOpened) {
+            const opened = decodeJsonPayload(payload, (value): value is { protocol?: string } => value !== null && typeof value === 'object' && !Array.isArray(value) && (!('protocol' in value) || typeof value.protocol === 'string'));
+            protocol = opened.protocol ?? '';
             if (readyState === WS_CONNECTING) {
               readyState = WS_OPEN;
               try {

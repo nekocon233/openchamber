@@ -106,3 +106,20 @@ describe('built-in extension build', () => {
     await expect(buildBuiltInExtensions({ sourceRoot, outDir: path.join(root, 'out') })).rejects.toThrow();
   });
 });
+
+test('bundles the shipped desktop with sandboxed IIFE, native service and license sources', async () => {
+  const root = await temporary();
+  const outDir = path.join(root, 'bundle');
+  const registry = await buildBuiltInExtensions({ outDir });
+  expect(registry.extensions).toContainEqual({ id: 'openchamber-builtin-desktop', directory: 'remote-desktop' });
+  const desktop = path.join(outDir, 'remote-desktop');
+  const panel = await fs.readFile(path.join(desktop, 'panel/main.js'), 'utf8');
+  const service = await fs.readFile(path.join(desktop, 'service/main.js'), 'utf8');
+  expect(panel).not.toMatch(/^\s*(?:import|export)\s/m);
+  expect(panel).toContain('service-ws-open');
+  expect(service).toContain('node:http');
+  expect(service).toContain('node:net');
+  expect(service).not.toMatch(/from ["'](?:ws|@novnc\/novnc|@openchamber\/sdk)["']/);
+  expect(await fs.readFile(path.join(desktop, 'noVNC.browser.patch'), 'utf8')).toContain('_checkWebCodecsH264DecodeSupport().then');
+  expect((await fs.stat(path.join(desktop, 'LICENSE.noVNC.txt'))).size).toBeGreaterThan(0);
+});
