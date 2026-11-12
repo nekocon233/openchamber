@@ -54,6 +54,12 @@ session-metadata popup. Context and quota readouts remain in the work-status
 sheet. This applies to hosted mobile, PWA and Capacitor; desktop keeps its own
 header controls.
 
+The sheet's Context row retains its percentage and meter and names the used
+tokens and window beneath it, for example `128.0K / 1.0M`. The message's reported
+window wins over the model catalog. After compaction the used count is unknown;
+before the first usage report, a known model window still appears with a dash
+for the used count. Session visibility preferences apply to this readout too.
+
 Sheet presentation changes only the host:
 
 - no fixed width, height cap or inner scroller; `MobileOverlayPanel` owns
