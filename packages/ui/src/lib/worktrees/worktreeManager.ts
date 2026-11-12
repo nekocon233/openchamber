@@ -17,6 +17,7 @@ import { clearWorktreeRemoval, markWorktreeRemoving } from '@/lib/worktrees/work
 import { checkoutHoldsSubfolder } from '@/lib/worktrees/worktreePaths';
 export { checkoutHoldsSubfolder };
 import type {
+  ArchiveGitWorktreePayload,
   CreateGitWorktreePayload,
   GitWorktreeBootstrapStatus,
   GitWorktreeValidationResult,
@@ -826,7 +827,7 @@ const forgetRemovedWorktree = (project: ProjectRef, worktree: WorktreeMetadata):
 export async function archiveProjectWorktree(
   project: ProjectRef,
   worktree: WorktreeMetadata,
-  input: { id: string; sessionIds: string[]; title?: string },
+  input: Omit<ArchiveGitWorktreePayload, 'directory'>,
 ): Promise<GitWorktreeArchive> {
   markWorktreeRemoving(worktree.path);
   let archive: GitWorktreeArchive;

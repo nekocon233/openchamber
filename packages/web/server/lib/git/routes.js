@@ -1899,6 +1899,7 @@ export function registerGitRoutes(app, {
         id: req.body.id,
         sessionIds: req.body.sessionIds,
         title: req.body.title,
+        forceLocked: req.body.forceLocked === true,
         disposeInstance: canDisposeWorktreeInstance
           ? createWorktreeInstanceDisposer({ buildOpenCodeUrl, getOpenCodeAuthHeaders })
           : undefined,

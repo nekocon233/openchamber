@@ -4995,13 +4995,15 @@ describe('worktree archives', () => {
     return { repo, linked };
   };
 
-  it('archives a worktree with its changes and restores them into a new checkout of the branch', async () => {
+  it.each([false, true])('archives a worktree with its changes and restores them into a new checkout of the branch, locked=%s', async (locked) => {
     if (!canRunGit()) return;
     const { repo, linked } = createArchivableWorktree();
+    if (locked) runGit(repo, ['worktree', 'lock', '--reason', '活动节点 AI 与收缩迁移实施中', linked]);
 
-    const archived = await archiveWorktree(repo, { directory: linked, id: 'a1', sessionIds: ['ses_1', 'ses_2'] });
+    const archived = await archiveWorktree(repo, { directory: linked, id: 'a1', sessionIds: ['ses_1', 'ses_2'], forceLocked: locked });
     expect(archived).toMatchObject({ id: 'a1', branch: 'feature/task', title: 'Login timeout fix', sessionIds: ['ses_1', 'ses_2'] });
     expect(fs.existsSync(linked)).toBe(false);
+    expect(runGit(repo, ['worktree', 'list', '--porcelain'])).not.toContain(linked);
     expect(runGit(repo, ['branch', '--list', 'feature/task']).trim()).toBe('feature/task');
 
     const [listed] = await listWorktreeArchives(repo);
@@ -5019,6 +5021,23 @@ describe('worktree archives', () => {
     expect(await listWorktreeArchives(repo)).toEqual([]);
     // No cherry-pick is left in progress.
     expect(() => runGit(linked, ['rev-parse', '--verify', '--quiet', 'CHERRY_PICK_HEAD'])).toThrow();
+  });
+
+  it.each([undefined, false])('preserves a locked worktree and rolls back its archive when forceLocked=%s', async (forceLocked) => {
+    if (!canRunGit()) return;
+    const { repo, linked } = createArchivableWorktree();
+    const reason = '活动节点 AI 与收缩迁移实施中';
+    runGit(repo, ['worktree', 'lock', '--reason', reason, linked]);
+    const lockPath = normalizeGitOutputPath(runGit(linked, ['rev-parse', '--git-path', 'locked']).trim());
+    const status = runGit(linked, ['status', '--porcelain']);
+
+    await expect(archiveWorktree(repo, { directory: linked, id: 'locked', forceLocked })).rejects.toThrow(reason);
+
+    expect(fs.readFileSync(lockPath, 'utf8')).toBe(`${reason}\n`);
+    expect(runGit(linked, ['status', '--porcelain'])).toBe(status);
+    expect(fs.readFileSync(path.join(linked, 'README.md'), 'utf8')).toBe('# Changed\n');
+    expect(fs.readFileSync(path.join(linked, 'new.txt'), 'utf8')).toBe('untracked\n');
+    expect(await listWorktreeArchives(repo)).toEqual([]);
   });
 
   it('applies the changes over commits the branch got after archiving', async () => {

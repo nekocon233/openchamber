@@ -6650,13 +6650,13 @@ const replaceWorktreeGitDirectoryLink = async (primaryWorktree, worktreePath) =>
 // registration but left the folder behind (the caller removes it as an orphan).
 // Once git has started deleting it drops the registration, whatever stopped it:
 // a busy folder, or a path longer than git can handle even with core.longpaths.
-// A refusal before any deletion (a locked worktree) exits 128 like every git
+// A refusal before any deletion (a lock without forceLocked) exits 128 like every git
 // `die`, and leaves the folder untouched. A busy folder is released again
 // before the next attempt, git's or the orphan removal's: a request that
 // reached OpenCode after the first release has started the folder again.
-const removeGitWorktreeWhenFree = async (primaryWorktree, worktreePath, targetCanonical, releaseInstance) => {
+const removeGitWorktreeWhenFree = async (primaryWorktree, worktreePath, targetCanonical, releaseInstance, forceLocked) => {
   for (let attempt = 0; ; attempt += 1) {
-    const result = await runGitCommand(primaryWorktree, ['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', worktreePath]);
+    const result = await runGitCommand(primaryWorktree, ['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', ...(forceLocked ? ['--force'] : []), worktreePath]);
     if (result.success) return true;
     const busy = isWorktreeBusyError(result.message);
     if (!busy && result.exitCode === 128) {
@@ -6756,7 +6756,7 @@ export async function removeWorktree(directory, input = {}, { bootstrapStore } =
 
     const restoreGitDirectoryLink = await replaceWorktreeGitDirectoryLink(context.primaryWorktree, matchedEntry.worktree);
     try {
-      const removedByGit = await removeGitWorktreeWhenFree(context.primaryWorktree, matchedEntry.worktree, targetCanonical, releaseInstance);
+      const removedByGit = await removeGitWorktreeWhenFree(context.primaryWorktree, matchedEntry.worktree, targetCanonical, releaseInstance, input?.forceLocked === true);
       if (!removedByGit) {
         // Git deleted its registration but not the still-locked folder.
         await removeManagedOrphan({ registered: true });
@@ -7003,6 +7003,7 @@ const archiveRegisteredWorktree = async ({ directory, id, worktreeDirectory, tar
       directory: worktreeDirectory,
       deleteLocalBranch: false,
       disposeInstance: input?.disposeInstance,
+      forceLocked: input?.forceLocked === true,
     }, options);
   } catch (error) {
     // `git worktree remove --force` deletes files before it gives up on a

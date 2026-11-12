@@ -101,6 +101,8 @@ export async function archiveWorktreeWork(input: {
   sessions: readonly Session[];
   /** The name the sidebar showed for the work, kept when the worktree has no task title. */
   title?: string;
+  /** Only merged-PR cleanup overrides a Git worktree lock. */
+  forceLocked?: boolean;
 }): Promise<void> {
   const sessionIds = input.sessions.map((session) => session.id);
   let partial: Error | null = null;
@@ -115,7 +117,9 @@ export async function archiveWorktreeWork(input: {
           throw new Error(`Could not archive ${sessionIds.length - archivedIds.length} session(s)`);
         }
         try {
-          await archiveProjectWorktree(input.project, input.worktree, { id: newArchiveId(), sessionIds: archivedIds, title: input.title });
+          await archiveProjectWorktree(input.project, input.worktree, {
+            id: newArchiveId(), sessionIds: archivedIds, title: input.title, forceLocked: input.forceLocked,
+          });
         } catch (error) {
           if (!(error instanceof GitWorktreeRequestError) || error.code !== 'WORKTREE_ARCHIVE_PARTIAL') throw error;
           partial = error;
