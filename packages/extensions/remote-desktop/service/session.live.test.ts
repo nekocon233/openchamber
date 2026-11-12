@@ -28,6 +28,7 @@ describe.skipIf(process.env.OPENCHAMBER_DESKTOP_LIVE !== '1')('local TigerVNC li
     const session = await sessions.start('virtual');
     const second = await sessions.start('virtual'); expect(second.id).toBe(session.id);
     expect(await canConnect(session.port)).toBe(true);
+    expect((await fs.stat(`/proc/${session.child!.pid}`)).uid).toBe(process.getuid?.());
     expect((await fs.stat(path.join(session.directory!, 'vnc-password'))).mode & 0o777).toBe(0o600);
     const release = sessions.watch(session, () => {}); release();
     expect(sessions.get(session.id)?.id).toBe(session.id);

@@ -20,6 +20,9 @@ to an owned VNC TCP listener and never accepts a viewer-selected TCP target.
 - Display discovery reads socket ownership and local process display metadata.
   When the host runs as root, a physical desktop's owning UID/GID runs its VNC
   server. Xauthority bytes are never returned by `/status`.
+- Virtual sessions use the service account even when a physical desktop belongs
+  to another user. Their display and applications launched by the host share
+  the same account; physical capture retains its selected desktop's identity.
 - VNC servers must be native executables. Prefer Debian's `X0tigervnc` over its
   `x0vncserver` wrapper, which forks a separate daemon and would escape group
   cleanup. x11vnc is the fallback for an existing display; Xtigervnc creates a
@@ -48,6 +51,14 @@ to an owned VNC TCP listener and never accepts a viewer-selected TCP target.
   Both controls are available in More. No automatic reconnect loop is used.
 
 ## Decisions
+
+### Why virtual desktops use the service account
+
+An independent virtual desktop belongs to the service that creates it. Borrowing
+the physical login's UID while host-launched Chromium retains the service UID
+can leave its visible X11 window blank even though Chromium renders internally.
+Keeping the virtual display under the service account restores window painting
+without changing the owner of an existing physical desktop.
 
 ### Why the service owns the VNC listener
 
