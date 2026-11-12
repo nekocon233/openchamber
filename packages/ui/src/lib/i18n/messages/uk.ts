@@ -55,6 +55,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "references.projectPulls.files.single": "Файлів: {count}",
+  "references.projectPulls.files.plural": "Файлів: {count}",
+  "references.projectPulls.files.loading": "Завантаження статистики файлів",
+  "references.projectPulls.files.failed": "Статистика файлів недоступна",
   "chat.toolPart.checklist.title": "Оновити список завдань",
   "chat.toolPart.checklist.empty": "Список завдань очищено.",
   ...ciRunsI18n['uk'],

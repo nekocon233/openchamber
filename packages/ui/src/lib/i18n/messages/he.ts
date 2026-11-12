@@ -53,6 +53,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "references.projectPulls.files.single": "מספר קבצים: {count}",
+  "references.projectPulls.files.plural": "מספר קבצים: {count}",
+  "references.projectPulls.files.loading": "טוען נתוני קבצים",
+  "references.projectPulls.files.failed": "נתוני הקבצים אינם זמינים",
   "chat.toolPart.checklist.title": "עדכון רשימת המשימות",
   "chat.toolPart.checklist.empty": "רשימת המשימות נוקתה.",
   ...ciRunsI18n['he'],

@@ -53,6 +53,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "references.projectPulls.files.single": "عدد الملفات: {count}",
+  "references.projectPulls.files.plural": "عدد الملفات: {count}",
+  "references.projectPulls.files.loading": "جار تحميل إحصاءات الملفات",
+  "references.projectPulls.files.failed": "إحصاءات الملفات غير متاحة",
   "chat.toolPart.checklist.title": "تحديث قائمة المهام",
   "chat.toolPart.checklist.empty": "تم مسح قائمة المهام.",
   ...ciRunsI18n['ar'],

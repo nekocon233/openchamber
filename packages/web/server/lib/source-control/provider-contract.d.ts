@@ -316,6 +316,9 @@ export interface ProviderImplementation {
       /** Only with `capabilities.revisions`: files and diff of that revision (40-hex). */
       revision?: string;
     }): Promise<Json>;
+    changeRequestFileStats?(input: ReadInput & {
+      number: number; project?: ProjectSelector; expectedHeadSha?: string; signal: AbortSignal;
+    }): Promise<Json>;
     listIssues?(input: ReadInput & { page: number; query?: string; state: string; people: string }): Promise<Json>;
     getIssue?(input: ReadInput & { number: number; project?: ProjectSelector }): Promise<Json>;
     issueComments?(input: ReadInput & { number: number; project?: ProjectSelector }): Promise<Json>;
@@ -338,6 +341,10 @@ export interface ProviderImplementation {
     resolveChangeRequestSource?(input: ReadInput & {
       project: { id: string; owner: string; name: string }; number: number;
       expectedHeadSha: string; requestedRemoteName: string;
+    }): Promise<Json>;
+    /** Immutable target-repository coordinates for an internal PR snapshot. */
+    resolveChangeRequestSnapshotSource?(input: ReadInput & {
+      repo: { owner: string; repo: string }; number: number; expectedHeadSha?: string; expectedBaseSha?: string; linked: boolean;
     }): Promise<Json>;
     /** Capability `referencePicker`: one searched page of issues, change requests or (`discussions`) discussions. */
     references?(input: ReadInput & { kind: 'issue' | 'pull' | 'discussion'; scope?: 'repository' | 'network'; state: string; people: string; query: string; cursor: string | null }): Promise<Json>;

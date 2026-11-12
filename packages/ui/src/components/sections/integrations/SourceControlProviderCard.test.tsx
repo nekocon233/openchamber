@@ -165,7 +165,7 @@ describe('SourceControlProviderCard', () => {
     issueSetState: unexpected, changeRequestSetLabels: unexpected, issueSetLabels: unexpected,
     discussionComment: unexpected, discussionSetState: unexpected, discussionSetAnswer: unexpected, discussionSetLabels: unexpected,
     changeRequestSetReviewers: unexpected, refreshProviderReads: unexpected, referenceLabels: unexpected,
-    referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected,
+    referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected, changeRequestFileStats: unexpected,
     issuesList: unexpected, issueGet: unexpected, issueComments: unexpected, projectUpstream: unexpected,
     projectBranches: unexpected, references: unexpected, referenceDetail: unexpected,
     changeRequestListStatuses: unexpected, ciRunsList: unexpected, ciRunDetail: unexpected, ciJobLog: unexpected,

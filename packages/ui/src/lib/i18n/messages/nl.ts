@@ -53,6 +53,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "references.projectPulls.files.single": "{count} bestand",
+  "references.projectPulls.files.plural": "{count} bestanden",
+  "references.projectPulls.files.loading": "Bestandsstatistieken laden",
+  "references.projectPulls.files.failed": "Bestandsstatistieken niet beschikbaar",
   "chat.toolPart.checklist.title": "Takenlijst bijwerken",
   "chat.toolPart.checklist.empty": "Takenlijst gewist.",
   ...ciRunsI18n['nl'],

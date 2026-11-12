@@ -54,6 +54,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  "references.projectPulls.files.single": "{count} dosya",
+  "references.projectPulls.files.plural": "{count} dosya",
+  "references.projectPulls.files.loading": "Dosya istatistikleri yükleniyor",
+  "references.projectPulls.files.failed": "Dosya istatistikleri kullanılamıyor",
   "chat.toolPart.checklist.title": "Görev listesini güncelle",
   "chat.toolPart.checklist.empty": "Görev listesi temizlendi.",
   ...ciRunsI18n['tr'],

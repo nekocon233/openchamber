@@ -35,6 +35,10 @@ project.
 
 ## Lists and the cache
 
+The project PR host supplies each row's filtered file statistics through
+`ReferenceBrowserList.renderPullFileStats`; the project view owns their reads
+and file-type exclusions. Picker and board rows do not mount this reader.
+
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
   open PRs only, with Awaiting my review, Created by me, and All categories in
   that order. The saved project category is restored, defaulting to Awaiting my

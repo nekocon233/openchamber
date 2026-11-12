@@ -95,7 +95,7 @@ const sourceControl: SourceControlAPI = {
   changeRequestReviewState: unexpected, changeRequestReviewComment: unexpected, changeRequestReviewCommentUpdate: unexpected,
   changeRequestReviewCommentDelete: unexpected, changeRequestReviewDiscard: unexpected,
   changeRequestSetReviewers: unexpected, refreshProviderReads: unexpected, referenceLabels: unexpected,
-  referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected,
+  referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected, changeRequestFileStats: unexpected,
   issuesList: unexpected, issueGet: unexpected, issueComments: unexpected, projectUpstream: unexpected,
   projectBranches: unexpected, referenceDetail: unexpected, changeRequestListStatuses: unexpected,
   ciRunsList: unexpected, ciRunDetail: unexpected, ciJobLog: unexpected,

@@ -326,7 +326,7 @@ export function registerSourceControlRoutes(app, dependencies = {}) {
     readGitLabChangeRequestPatch: shell.readChangeRequestPatch,
     readGitLabChangeRequestFile: shell.readChangeRequestFile,
     readGitLabLiveSummaries: shell.readLiveSummaries,
-    resolveGitHubPullRequestSnapshot: shell.resolveChangeRequestSource,
+    resolveGitHubPullRequestSnapshot: shell.resolveChangeRequestSnapshotSource,
     resolveChangeRequestSource: shell.resolveChangeRequestSource,
     // The Change-Id amend (`POST /api/git/change-id`) rewrites a branch tip.
     invalidateBranchStatus: shell.invalidateBranchStatus,

@@ -69,6 +69,7 @@ export function createProvider({
   resolveRepoNetwork,
   resolveGitHubPrStatus,
   readContributorProvenance,
+  readPullRequestSnapshot,
 }) {
   const enterprise = authStore?.github ?? null;
   const enterpriseHosts = async () => (await enterprise?.listInstances?.()) ?? [];
@@ -144,6 +145,7 @@ export function createProvider({
     resolveNetwork,
     resolvePrStatus: async (input) => (resolveGitHubPrStatus ?? (await modules()).prStatus.resolveGitHubPrStatus)(input),
     readContributorProvenance,
+    readPullRequestSnapshot,
     invalidateAccount: (identity, persisted) => invalidateAccount({ ...identity, persisted }),
   });
   const mutations = createGitHubMutations({
@@ -263,6 +265,7 @@ export function createProvider({
       changeRequestStatus: resources.changeRequestStatus,
       listChangeRequests: resources.listChangeRequests,
       changeRequestContext: resources.changeRequestContext,
+      changeRequestFileStats: resources.changeRequestFileStats,
       listIssues: resources.listIssues,
       getIssue: resources.getIssue,
       issueComments: resources.issueComments,
@@ -282,6 +285,7 @@ export function createProvider({
       referenceStatuses: resources.referenceStatuses,
       readChangeRequestHead: resources.readChangeRequestHead,
       resolveChangeRequestSource: resources.resolveChangeRequestSource,
+      resolveChangeRequestSnapshotSource: resources.resolveChangeRequestSnapshotSource,
       listCiRuns: resources.listCiRuns,
       ciRunDetail: resources.ciRunDetail,
       ciJobLog: resources.ciJobLog,

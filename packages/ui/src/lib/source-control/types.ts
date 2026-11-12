@@ -395,6 +395,13 @@ export interface ChangeRequestFile {
   patch?: string;
 }
 
+/** A complete file list for one immutable PR revision, without patch content. */
+export interface ChangeRequestFileStats {
+  headSha: string;
+  baseSha: string;
+  files: Array<{ path: string; additions: number | null; deletions: number | null }>;
+}
+
 export interface ChangeRequestReviewComment extends IssueComment {
   path?: string;
   line?: number | null;

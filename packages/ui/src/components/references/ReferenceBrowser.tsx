@@ -35,6 +35,7 @@ import {
     type ReferencePickerItem,
 } from './referencePickerItems';
 import type { ReferenceBrowser } from './useReferenceBrowser';
+import type { GitHubPullReference } from '@/lib/api/types';
 
 /** Issues and pull requests (merge requests on GitLab); GitHub only. */
 export const ReferenceBrowserTabs: React.FC<{ browser: ReferenceBrowser }> = ({ browser }) => {
@@ -202,7 +203,8 @@ export const ReferenceBrowserList: React.FC<{
     onActivate?: (item: ReferencePickerItem) => void;
     /** After a row is clicked to show it, as when the list closes then. */
     onShow?: () => void;
-}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onShow }) => {
+    renderPullFileStats?: (pull: GitHubPullReference) => React.ReactNode;
+}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onShow, renderPullFileStats }) => {
     const { t } = useI18n();
     const { source, sourceStatus, list, items, isGitLab, isMobile, directory, debouncedQuery, githubKind } = browser;
 
@@ -278,6 +280,7 @@ export const ReferenceBrowserList: React.FC<{
                         item={item}
                         pullStatus={item.source === 'github' ? browser.pullStatusOf(item.reference) : null}
                         showChecks={browser.mode === 'project-pulls' && !browser.isGitLab}
+                        pullFileStats={item.source === 'github' && item.reference.kind === 'pull' ? renderPullFileStats?.(item.reference) : undefined}
                         highlighted={!isMobile && key === browser.effectiveHighlightKey}
                         checked={selection?.checked ?? null}
                         diffIncluded={selection?.diffIncluded ?? false}

@@ -2210,6 +2210,12 @@ export interface SourceControlAPI {
       revision?: string;
     },
   ): Promise<ChangeRequestContext>;
+  /** Complete per-file counts; incomplete or obsolete reads throw. */
+  changeRequestFileStats(
+    context: SourceControlReadContext,
+    number: number,
+    options?: { project?: { owner: string; name: string }; expectedHeadSha?: string; signal?: AbortSignal },
+  ): Promise<import('../source-control/types').ChangeRequestFileStats>;
 
   issuesList(
     context: SourceControlReadContext,

@@ -55,6 +55,10 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "references.projectPulls.files.single": "파일 {count}개",
+  "references.projectPulls.files.plural": "파일 {count}개",
+  "references.projectPulls.files.loading": "파일 통계 불러오는 중",
+  "references.projectPulls.files.failed": "파일 통계를 사용할 수 없음",
   "chat.toolPart.checklist.title": "작업 목록 업데이트",
   "chat.toolPart.checklist.empty": "작업 목록을 비웠습니다.",
   ...ciRunsI18n['ko'],
