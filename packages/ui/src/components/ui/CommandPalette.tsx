@@ -20,6 +20,7 @@ import { useEnterpriseMode, useJevBlockedByEnterprise } from '@/stores/useEnterp
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from '@/stores/useGlobalSessionsStore';
 import { orderVisibleRootSessions } from '@/lib/sessionListOrder';
+import { useOpenTurnSessionIds } from '@/sync/use-open-turn-session-ids';
 import { settingsPageTitleKey } from '@/lib/settings/pageTitle';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { isSessionPinned } from '@/lib/sessionPins';
@@ -212,6 +213,7 @@ export const CommandPalette: React.FC = () => {
     (state) => isCommandPaletteOpen ? state.rankById : EMPTY_SESSION_ORDER_RANKS,
     [isCommandPaletteOpen],
   ));
+  const openTurnSessionIds = useOpenTurnSessionIds(isCommandPaletteOpen);
   const currentDirectory = useDirectoryStore((s) => s.currentDirectory);
   const activeProject = useProjectsStore((s) => s.getActiveProject());
   const projects = useProjectsStore((s) => s.projects);
@@ -639,8 +641,8 @@ export const CommandPalette: React.FC = () => {
   const orderedActiveSessions = React.useMemo(
     () => orderVisibleRootSessions(activeSessions.filter((session) => (
       isSessionDirectoryAdmitted(resolveGlobalSessionDirectory(session), projects, worktreesByProject)
-    )), pinnedSessionIds, sessionOrderRanks),
-    [activeSessions, pinnedSessionIds, projects, sessionOrderRanks, worktreesByProject],
+    )), pinnedSessionIds, sessionOrderRanks, openTurnSessionIds),
+    [activeSessions, openTurnSessionIds, pinnedSessionIds, projects, sessionOrderRanks, worktreesByProject],
   );
 
   const allBranches = useGitAllBranches();

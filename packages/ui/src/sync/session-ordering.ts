@@ -14,6 +14,7 @@ type SessionOrderingState = {
 };
 
 export const EMPTY_SESSION_ORDER_RANKS: ReadonlyMap<string, number> = new Map();
+const EMPTY_OPEN_TURNS: ReadonlySet<string> = new Set();
 
 const phaseById = new Map<string, SessionActivityPhase>();
 const baselineRankById = new Map<string, { created?: number; updated?: number }>();
@@ -226,7 +227,11 @@ export const compareSessionsByLifecycleOrder = (
   right: Session,
   pinnedSessionIds: Set<string>,
   rankById: ReadonlyMap<string, number>,
+  openTurnSessionIds: ReadonlySet<string> = EMPTY_OPEN_TURNS,
 ): number => {
+  const leftRunning = openTurnSessionIds.has(left.id);
+  const rightRunning = openTurnSessionIds.has(right.id);
+  if (leftRunning !== rightRunning) return leftRunning ? -1 : 1;
   const leftPinned = isSessionPinned(pinnedSessionIds, sessionDirectory(left), left.id);
   const rightPinned = isSessionPinned(pinnedSessionIds, sessionDirectory(right), right.id);
   if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
@@ -256,6 +261,7 @@ export const orderSessionsByLifecycleScopes = (
   },
   options?: {
     compareRoots?: (left: Session, right: Session) => number;
+    openTurnSessionIds?: ReadonlySet<string>;
   },
 ): Session[] => {
   countSyncPerformance('sidebarOrderBuilds');
@@ -306,6 +312,7 @@ export const orderSessionsByLifecycleScopes = (
     const fallback = baselineRank(session, pinned);
     return [session.id, {
       parentId,
+      running: options?.openTurnSessionIds?.has(session.id) ?? false,
       pinned,
       fallback,
       lifecycle: rankById.get(session.id) ?? fallback,
@@ -317,6 +324,7 @@ export const orderSessionsByLifecycleScopes = (
     const leftMetadata = metadataById.get(left.id);
     const rightMetadata = metadataById.get(right.id);
     if (!leftMetadata || !rightMetadata) return left.id.localeCompare(right.id);
+    if (leftMetadata.running !== rightMetadata.running) return leftMetadata.running ? -1 : 1;
     if (leftMetadata.pinned !== rightMetadata.pinned) return leftMetadata.pinned ? -1 : 1;
     if (leftMetadata.parentId === rightMetadata.parentId) {
       const rankDelta = rightMetadata.lifecycle - leftMetadata.lifecycle;

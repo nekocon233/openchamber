@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import { getPinnedSessionKey } from '@/lib/sessionPins';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import {
   comparePinnedZoneSessions,
   compareSessionsByLifecycleOrder,
@@ -145,6 +147,25 @@ describe('session lifecycle ordering', () => {
       'child-newer',
       'root-newer',
     ]);
+  });
+
+  test('places open turns ahead of idle pins while keeping each tree together', () => {
+    const idlePin = { ...session('idle-pin', 50), directory: '/repo' };
+    const runningPin = { ...session('running-pin', 20), directory: '/repo' };
+    const runningRoot = { ...session('running-root', 10), directory: '/repo' };
+    const runningChild = { ...session('running-child', 5, 'running-root'), directory: '/repo' };
+    const idleChild = { ...session('idle-child', 30, 'running-root'), directory: '/repo' };
+    const recentIdle = { ...session('recent-idle', 100), directory: '/repo' };
+    const keys = [idlePin, runningPin].map((item) => getPinnedSessionKey(getRuntimeKey(), '/repo', item.id));
+    if (!keys[0] || !keys[1]) throw new Error('expected valid pin keys');
+    const pins = new Set([keys[0], keys[1]]);
+    const running = new Set(['running-pin', 'running-root', 'running-child']);
+    const items = [idlePin, runningRoot, recentIdle, idleChild, runningChild, runningPin];
+
+    expect(orderSessionsByLifecycleScopes(items, pins, new Map(), undefined, { openTurnSessionIds: running })
+      .map((item) => item.id)).toEqual(['running-pin', 'running-root', 'running-child', 'idle-child', 'idle-pin', 'recent-idle']);
+    expect(compareSessionsByLifecycleOrder(runningRoot, idlePin, pins, new Map(), running)).toBeLessThan(0);
+    expect(compareSessionsByLifecycleOrder(runningRoot, idlePin, pins, new Map(), new Set())).toBeGreaterThan(0);
   });
 
   test('orders roots, siblings, orphan parents, and cyclic parent scopes deterministically', () => {
