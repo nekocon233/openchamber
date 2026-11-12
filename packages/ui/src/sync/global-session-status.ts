@@ -549,6 +549,8 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       settledIds.push(sessionId);
       if (!hasBackgroundWork(sessionId, activeSessionIds)) {
         timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
+      } else {
+        timingMutations.push({ type: 'hold', sessionId });
       }
     };
     const remove = (sessionId: string): void => {
@@ -590,7 +592,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
           draftActiveIds().add(props.sessionID);
         }
         orderingMutations.push({ type: 'observe', sessionId: props.sessionID, phase: 'active' });
-        timingMutations.push({ type: 'observe', sessionId: props.sessionID, phase: 'active' });
+        timingMutations.push({ type: 'observe', sessionId: props.sessionID, phase: 'active', turnStart: props.turnStart });
         continue;
       }
 

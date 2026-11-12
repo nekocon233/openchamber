@@ -1701,7 +1701,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       pinnedMarker={isPinnedSession && !isSessionActionPending && !hidePinnedMarker ? pinnedMarkerContent : null}
       timeSlot={showActivityDuration
         ? <SessionActivityDuration sessionId={session.id} running={isStreaming} className="typography-micro" />
-        : sessionCompactUpdatedLabel}
+        : isStreaming ? null : sessionCompactUpdatedLabel}
       // Project rows leave the action indicator to their worktree header.
       directoryIndicator={!archivedBucket && sessionDirectory && renderContext !== 'project' ? <DirectoryActionIndicator directory={sessionDirectory} /> : null}
       prBadge={timelinePrBadge}

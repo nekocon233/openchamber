@@ -92,7 +92,7 @@ describe('createOpenCodeWatcherRuntime', () => {
       type: 'session.updated',
       properties: { sessionID: 'ses_1', info: { id: 'ses_1', title: 'New' } },
     });
-    expect(directories).toEqual(['/tmp/project']);
+    expect(directories).toEqual([{ directory: '/tmp/project', spaceId: null }]);
   });
 
   it('resumes watcher reconnects with Last-Event-ID after a stalled upstream stream', async () => {
@@ -192,7 +192,7 @@ describe('createOpenCodeWatcherRuntime', () => {
       type: 'session.updated',
       properties: { sessionID: 'ses_1', info: { id: 'ses_1', title: 'New' } },
     });
-    expect(directories).toEqual(['/tmp/project']);
+    expect(directories).toEqual([{ directory: '/tmp/project', spaceId: null }]);
   });
 
   it('hands an event of an isolated space on with the space\'s id, and the host\'s without one', async () => {
@@ -284,6 +284,62 @@ describe('createOpenCodeWatcherRuntime', () => {
     expect(statuses.size).toBe(0);
   });
 
+  it('recovers running sessions when an already-connected hub is attached and on reconnect', async () => {
+    let statusListener;
+    let connections = 0;
+    const signals = [];
+    const hub = {
+      start() {}, isConnected: () => true,
+      subscribeEvent: () => () => {},
+      subscribeStatus: (listener) => { statusListener = listener; return () => {}; },
+    };
+    const watcher = createOpenCodeWatcherRuntime({ waitForOpenCodePort: async () => {}, globalEventHub: hub,
+      onPayload() {}, onConnect: ({ signal }) => { connections += 1; signals.push(signal); } });
+    await watcher.start();
+    await Promise.resolve();
+    expect(connections).toBe(1);
+    statusListener({ type: 'connect' });
+    await Promise.resolve();
+    expect(connections).toBe(2);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    watcher.stop();
+    expect(signals[1].aborted).toBe(true);
+  });
+
+  it('retires a recovery read when the watcher stops', async () => {
+    let release;
+    let accepted = false;
+    const hub = { start() {}, isConnected: () => true, subscribeEvent: () => () => {}, subscribeStatus: () => () => {} };
+    const watcher = createOpenCodeWatcherRuntime({ waitForOpenCodePort: async () => {}, globalEventHub: hub, onPayload() {},
+      onConnect: async ({ isCurrent }) => { await new Promise((resolve) => { release = resolve; }); accepted = isCurrent(); } });
+    await watcher.start();
+    await Promise.resolve();
+    watcher.stop();
+    release();
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+  });
+
+  it('retires a recovery read as soon as the upstream disconnects', async () => {
+    let release;
+    let statusListener;
+    let accepted = false;
+    let signal;
+    const hub = { start() {}, isConnected: () => true, subscribeEvent: () => () => {},
+      subscribeStatus: (listener) => { statusListener = listener; return () => {}; } };
+    const watcher = createOpenCodeWatcherRuntime({ waitForOpenCodePort: async () => {}, globalEventHub: hub, onPayload() {},
+      onConnect: async (context) => { signal = context.signal; await new Promise((resolve) => { release = resolve; }); accepted = context.isCurrent(); } });
+    await watcher.start();
+    await Promise.resolve();
+    statusListener({ type: 'disconnect', reason: 'stopped' });
+    expect(signal.aborted).toBe(true);
+    release();
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+    watcher.stop();
+  });
+
   it('receives native hub events before OpenCode is reachable when it opts in', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const hub = createGlobalMessageStreamHub({
@@ -313,7 +369,7 @@ describe('createOpenCodeWatcherRuntime', () => {
     });
     expect(payloads).toEqual([{
       payload: { type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'busy' } } },
-      directory: '/work/project',
+      directory: { directory: '/work/project', spaceId: null },
     }]);
 
     watcher.stop();

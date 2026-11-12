@@ -171,7 +171,25 @@ const askedHost = new Set<string>();
 const heldTurns = new Set<string>();
 /** When this device learned a running turn's start, to tell a host answer that predates it. */
 const turnBeganAt = new Map<string, number>();
+const timingRevisionById = new Map<string, number>();
+let timingRevision = 0;
+let timingRevisionFloor = 0;
 let hostTurnStartRequester: (() => void) | null = null;
+
+/** Revision of actual turn boundaries, excluding repeated busy events. */
+export const getSessionTimingRevision = (): number => timingRevision;
+export const hasSessionTimingChangedSince = (sessionId: string, baseline: number): boolean => (
+  (timingRevisionById.get(sessionId) ?? timingRevisionFloor) > baseline
+);
+const noteTimingChange = (sessionId: string): void => {
+  timingRevisionById.delete(sessionId);
+  timingRevisionById.set(sessionId, ++timingRevision);
+  if (timingRevisionById.size <= 2_000) return;
+  const oldest = timingRevisionById.keys().next().value;
+  if (oldest === undefined) return;
+  timingRevisionFloor = Math.max(timingRevisionFloor, timingRevisionById.get(oldest) ?? 0);
+  timingRevisionById.delete(oldest);
+};
 
 /**
  * How this page asks the host for the starts it lacks, wired by the sync
@@ -628,6 +646,7 @@ const applyTransitions = (
   for (const sessionId of heldSessionIds) heldTurns.add(sessionId);
 
   const settleTurn = (sessionId: string, start: number): void => {
+    noteTimingChange(sessionId);
     draftStarted().delete(sessionId);
     liveSeen.delete(sessionId);
     forgetTurnStart(sessionId);
@@ -658,7 +677,10 @@ const applyTransitions = (
       settleTurn(sessionId, start);
     }
     for (const sessionId of startUnknown) {
-      if (!activeSessionIds.has(sessionId) && settle.isCovered(sessionId)) forgetTurnStart(sessionId);
+      if (!activeSessionIds.has(sessionId) && settle.isCovered(sessionId)) {
+        noteTimingChange(sessionId);
+        forgetTurnStart(sessionId);
+      }
     }
   }
 
@@ -674,6 +696,7 @@ const applyTransitions = (
   // Published after the maps above, so a fresh attach reads this pass's set.
   if (trimmedSettled) dropTurns(trimmedSettled);
   if (touched.size > 0) syncTrackedTurns(touched);
+  finishPass(pass);
 
   if (next.started) {
     if (next.started.size > 0) ensureLivenessStampOnHide();
@@ -729,6 +752,7 @@ export const applySessionActivityTimingMutations = (
     }
 
     if (mutation.type === 'remove') {
+      noteTimingChange(mutation.sessionId);
       if (getRestoredStarts().delete(mutation.sessionId)) restoredChanged = true;
       liveSeen.delete(mutation.sessionId);
       forgetTurnStart(mutation.sessionId);
@@ -741,14 +765,20 @@ export const applySessionActivityTimingMutations = (
     if (mutation.phase === 'active') {
       sawActive = true;
       liveSeen.set(mutation.sessionId, now);
-      if (!currentStarted().has(mutation.sessionId)) {
-        draftStarted().set(mutation.sessionId, restored.get(mutation.sessionId)?.start ?? now);
+      if (mutation.turnStart) noteTimingChange(mutation.sessionId);
+      if (!isInTurn(pass, mutation.sessionId)) {
+        beginTurn(pass, mutation.sessionId, mutation.turnStart, restored);
+        touched.add(mutation.sessionId);
+      } else if (mutation.turnStart) {
+        offerHostStart(pass, mutation.sessionId, mutation.turnStart);
+        if (mutation.turnStart.source === 'host') turnBeganAt.set(mutation.sessionId, now);
         touched.add(mutation.sessionId);
       }
       if (currentSettled().has(mutation.sessionId)) draftSettled().delete(mutation.sessionId);
       continue;
     }
 
+    noteTimingChange(mutation.sessionId);
     if (getRestoredStarts().delete(mutation.sessionId)) restoredChanged = true;
     const start = currentStarted().get(mutation.sessionId);
     forgetTurnStart(mutation.sessionId);
@@ -861,6 +891,8 @@ export const resetSessionActivityTiming = (options: { pageLoadAt?: number } = {}
   askedHost.clear();
   heldTurns.clear();
   turnBeganAt.clear();
+  timingRevisionById.clear();
+  timingRevisionFloor = ++timingRevision;
   lastPersistAt = 0;
   pageLoadAt = options.pageLoadAt ?? Date.now();
   turnWatcher?.dispose();

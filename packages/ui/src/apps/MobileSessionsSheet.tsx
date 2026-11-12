@@ -92,6 +92,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useAllLiveSessions, useAllAuthoritativeLiveSessionIds, useAllSessionStatuses } from '@/sync/sync-context';
 import { useGlobalSyncStore } from '@/sync/global-sync-store';
 import { applyGlobalSessionStatusSnapshot, getGlobalSessionStatusRevision, useGlobalSessionStatusStore } from '@/sync/global-session-status';
+import { seedGlobalSessionStatusFromHost } from '@/sync/host-session-status-seed';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
 import { useSessionAiRenameAction } from '@/components/session/useSessionAiRenameAction';
@@ -551,7 +552,7 @@ const SessionRow: React.FC<{
                 running={isStreaming}
                 className="typography-micro"
               />
-            ) : time ? (
+            ) : !isStreaming && time ? (
               <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>
             ) : null}
           </span>
@@ -974,7 +975,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       setConfirmingRemoveProjectId(null);
       return;
     }
-    void refreshGlobalSessions(liveSessions);
+    void refreshGlobalSessions(liveSessions).then(() => seedGlobalSessionStatusFromHost());
     // intentionally only on open transition — session events keep the list current after that
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);

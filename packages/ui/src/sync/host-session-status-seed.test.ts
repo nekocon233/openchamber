@@ -201,6 +201,58 @@ describe('seedGlobalSessionStatusFromHost', () => {
     expect(requests).toBe(2);
   });
 
+  test('a new host start during a snapshot wins even in the same clock tick', async () => {
+    const originalNow = Date.now;
+    Date.now = () => 42_000;
+    try {
+      applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' }, turnStart: { at: 1_000, source: 'host' } } });
+      const deferred = deferredSnapshot();
+      opencodeClient.getHostSessionStatusSnapshot = () => deferred.promise;
+      const load = seedGlobalSessionStatusFromHost();
+      applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' }, turnStart: { at: 12_000, source: 'host' } } });
+      deferred.resolve({ serverTime: 42_000, sessions: { 'settled-here': { status: 'busy', lastUpdateAt: 42_000, turnStartedAt: 1_000 } } });
+      await load;
+      expect(useSessionActivityTimingStore.getState().startedAt.get('settled-here')).toBe(12_000);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test('a repeated busy event does not discard the current turn start from the host', async () => {
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' } } });
+    const deferred = deferredSnapshot();
+    opencodeClient.getHostSessionStatusSnapshot = () => deferred.promise;
+    const load = seedGlobalSessionStatusFromHost();
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' } } });
+    const before = Date.now();
+    deferred.resolve({ serverTime: NOW, sessions: { 'settled-here': { status: 'busy', lastUpdateAt: NOW, turnStartedAt: NOW - 60_000 } } });
+    await load;
+    expect(useSessionActivityTimingStore.getState().startedAt.get('settled-here')).toBeGreaterThanOrEqual(before - 60_000);
+  });
+
+  test('a busy event first seen during the snapshot can adopt its start', async () => {
+    const deferred = deferredSnapshot();
+    opencodeClient.getHostSessionStatusSnapshot = () => deferred.promise;
+    const load = seedGlobalSessionStatusFromHost();
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' } } });
+    const before = Date.now();
+    deferred.resolve({ serverTime: NOW, sessions: { 'settled-here': { status: 'busy', lastUpdateAt: NOW, turnStartedAt: NOW - 60_000 } } });
+    await load;
+    expect(useSessionActivityTimingStore.getState().startedAt.get('settled-here')).toBeGreaterThanOrEqual(before - 60_000);
+  });
+
+  test('an old snapshot cannot date a new turn whose start is not known yet', async () => {
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' }, turnStart: { at: Date.now() - 60_000, source: 'host' } } });
+    const deferred = deferredSnapshot();
+    opencodeClient.getHostSessionStatusSnapshot = () => deferred.promise;
+    const load = seedGlobalSessionStatusFromHost();
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.idle', properties: { sessionID: 'settled-here' } });
+    applyGlobalSessionStatusEvent('/repo', { type: 'session.status', properties: { sessionID: 'settled-here', status: { type: 'busy' } } });
+    deferred.resolve({ serverTime: NOW, sessions: { 'settled-here': { status: 'busy', lastUpdateAt: NOW, turnStartedAt: NOW - 60_000 } } });
+    await load;
+    expect(useSessionActivityTimingStore.getState().startedAt.get('settled-here')).toBeUndefined();
+  });
+
   const waitingPage = (id: string, sessionID = 'settled-here') => ({ id, sessionID, title: 'Services page binding' });
   const askPage = (id: string, sessionID = 'settled-here', directory = '/repo') => applyWaitingPageEvent({
     type: 'openchamber.page-waiting', properties: { sessionID, directory, page: waitingPage(id, sessionID) },

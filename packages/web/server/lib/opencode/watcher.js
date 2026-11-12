@@ -8,6 +8,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
     onPayload,
+    onConnect,
     fetchImpl = fetch,
     upstreamStallTimeoutMs,
     upstreamReconnectDelayMs = 1000,
@@ -21,11 +22,28 @@ export const createOpenCodeWatcherRuntime = (deps) => {
   let reader = null;
   let unsubscribeEvent = null;
   let unsubscribeStatus = null;
+  let connectController = null;
+  const retireConnectionRead = () => {
+    connectController?.abort();
+    connectController = null;
+  };
 
   // `onPayload` consumers speak the server's own event vocabulary, so the v2
   // wire payload is translated here rather than in each consumer.
   const emitTranslated = (payload, directory) => {
-    for (const translated of translateWireEvent(payload)) onPayload(translated, directory);
+    for (const translated of translateWireEvent(payload)) onPayload(translated, { directory, spaceId: null });
+  };
+
+  const notifyConnected = () => {
+    if (!onConnect || !abortController || abortController.signal.aborted) return;
+    retireConnectionRead();
+    const controller = new AbortController();
+    connectController = controller;
+    const isCurrent = () => connectController === controller && !controller.signal.aborted && !abortController?.signal.aborted;
+    void Promise.resolve().then(() => isCurrent() ? onConnect({ signal: controller.signal, isCurrent }) : undefined).catch((error) => {
+      if (!isCurrent()) return;
+      console.warn('[PushWatcher] could not recover running sessions:', error?.message ?? error);
+    });
   };
 
   const unwrapGlobalEventPayload = (eventData) => {
@@ -65,7 +83,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
           return;
         }
         const translated = event.translated?.() ?? (event.source === GLOBAL_EVENT_SOURCE_NATIVE ? [payload] : translateWireEvent(payload));
-        for (const item of translated) onPayload(item, normalizeEventDirectory(event.directory));
+        for (const item of translated) onPayload(item, { directory: normalizeEventDirectory(event.directory), spaceId: event.spaceId ?? null });
       }, { sources: eventSources, spaces: true });
       unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
         if (signal.aborted) {
@@ -73,9 +91,12 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         }
         if (status.type === 'connect') {
           console.log('[PushWatcher] connected');
+          notifyConnected();
           return;
         }
+        if (status.type === 'disconnect') retireConnectionRead();
         if (status.type === 'error' || status.type === 'initial-error') {
+          retireConnectionRead();
           console.warn('[PushWatcher] disconnected', status.error?.error?.message ?? status.error?.message ?? status.error);
         }
       });
@@ -84,6 +105,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         return;
       }
       globalEventHub.start();
+      if (globalEventHub.isConnected()) notifyConnected();
       return;
     }
 
@@ -101,6 +123,10 @@ export const createOpenCodeWatcherRuntime = (deps) => {
       reconnectDelayMs: upstreamReconnectDelayMs,
       onConnect() {
         console.log('[PushWatcher] connected');
+        notifyConnected();
+      },
+      onDisconnect() {
+        retireConnectionRead();
       },
       onEvent(event) {
         const payload = unwrapGlobalEventPayload(event.payload);
@@ -110,6 +136,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         emitTranslated(payload, normalizeEventDirectory(event.directory));
       },
       onError(error) {
+        retireConnectionRead();
         if (signal.aborted) {
           return;
         }
@@ -125,6 +152,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
       return;
     }
     try {
+      retireConnectionRead();
       abortController.abort();
       reader?.stop();
       unsubscribeEvent?.();

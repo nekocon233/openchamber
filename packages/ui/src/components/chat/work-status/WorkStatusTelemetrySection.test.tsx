@@ -264,8 +264,8 @@ describe('mounted turn telemetry with live sync stores', () => {
         message: { [sessionId]: [user, assistant, nextUser, nextAssistant] } }));
       expect(dom.container.textContent).toContain('900 ↑ · 120 ↓');
       expect(dom.container.textContent).toContain('Elapsed3.0s');
-      expect(dom.container.textContent).toContain('Avg speed~17 tok/s');
-      expect(dom.container.textContent).toContain('Avg cache hit12%');
+      expect(dom.container.textContent).toContain('Avg speed~40 tok/s');
+      expect(dom.container.textContent).toContain('Avg cache hit10%');
       expect(dom.container.textContent).toContain('Cost$0.02');
       expect(dom.container.textContent).not.toContain('100 ↑ · 30 ↓');
     });
@@ -317,22 +317,22 @@ describe('mounted turn telemetry with live sync stores', () => {
     expect(dom.container.textContent).not.toContain('100 ↑ · 30 ↓');
   });
 
-  test('shows a token-weighted average across loaded completed turns, not the latest turn alone', async () => {
+  test('shows speed and cache for the latest completed turn', async () => {
     const user2: UserMessage = { id: 'user-2', sessionID: sessionId, role: 'user', time: { created: 8000 } };
     const assistant2: AssistantMessage = {
       id: 'assistant-2', sessionID: sessionId, role: 'assistant',
       agent: 'build', providerID: 'test', modelID: 'test',
       time: { created: 9000, completed: 10000 }, cost: 0,
-      tokens: { input: 900, output: 10, reasoning: 0, cache: { read: 100, write: 0 } },
+      tokens: { input: 900, output: 20, reasoning: 0, cache: { read: 100, write: 0 } },
     };
     await act(async () => store().setState({
       sessionStatusReady: true,
       message: { [sessionId]: [user, assistant, user2, assistant2] },
       part: { [assistant.id]: [], [assistant2.id]: [] },
     }));
-    expect(dom.container.textContent).toContain('Avg speed~5 tok/s');
-    expect(dom.container.textContent).toContain('Avg cache hit12%');
-    expect(dom.container.textContent).not.toContain('~10 tok/s');
+    expect(dom.container.textContent).toContain('Avg speed~10 tok/s');
+    expect(dom.container.textContent).toContain('Avg cache hit10%');
+    expect(dom.container.textContent).not.toContain('Avg cache hit12%');
   });
 
   test('session and directory changes cannot retain another scope, including equal IDs', async () => {
@@ -429,7 +429,7 @@ describe('mounted turn telemetry with live sync stores', () => {
     expect(speed.hasAttribute('data-popup-open')).toBe(false);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
     expect(speed.hasAttribute('data-popup-open')).toBe(true);
-    expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain('Generated tokens across completed turns loaded in this session');
+    expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain('Generated tokens in the latest completed turn');
     expect(dom.container.querySelector('[data-slot="tooltip-content"]')).toBeNull();
   });
 

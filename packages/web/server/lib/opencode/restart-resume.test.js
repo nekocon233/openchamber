@@ -216,9 +216,21 @@ describe('restart auto-resume fallback', () => {
     }, { spaceId: 'space-1' });
     markBusy(runtime, 'host-session');
     runtime.interruptBusySessionsAfterRestart();
+    expect(runtime.getSessionStateSnapshot()['space-session'].status).toBe('busy');
     await vi.advanceTimersByTimeAsync(RESTART_RESUME_GRACE_MS);
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0][0]).toContain('/host-session/');
+  });
+
+  it('does not revive a deleted space session during a host restart', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchImpl = vi.fn(async () => jsonResponse(200));
+    const runtime = createRuntime(fetchImpl);
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'space-session', status: { type: 'busy' } } }, { spaceId: 'space-1' });
+    runtime.processOpenCodeSsePayload({ type: 'session.deleted', properties: { sessionID: 'space-session' } }, { spaceId: 'space-1' });
+    expect(runtime.interruptBusySessionsAfterRestart()).toEqual({ sessionIds: [], autoResumeSessionIds: [] });
+    await vi.advanceTimersByTimeAsync(RESTART_RESUME_GRACE_MS);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('keeps the budget spent when another restart lands during the POST', async () => {

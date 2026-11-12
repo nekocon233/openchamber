@@ -117,7 +117,7 @@ native task summaries request their session snapshot once and follow live events
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | same provider grouping in desktop and mobile work status |
 | Linked threads | `lib/linkedIssues.ts` over session metadata | written by the flows that attach an issue or PR |
-| Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; cache and speed average the completed history through it; the header shows the same average speed as the speed row; without a complete previous turn, the existing waiting row remains; a rate above 5,000 tok/s is unknown |
+| Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; cache and speed use that same completed turn; the header shows the same speed as the speed row; without a complete previous turn, the existing waiting row remains; a rate above 5,000 tok/s is unknown |
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | the switch reuses the dropdown's `setEnabled` |
 | Pinned messages | `getContextObligatoryMessages` + `state.part`, else one `getSessionMessage` read | see below |
@@ -236,35 +236,19 @@ tooltip. Model-only session updates invalidate the live-session comparison.
 
 The section follows Usage by default and reuses the panel's existing rows. Only its header
 has an icon; metric rows use labels and values without leading icons. It
-reads already-loaded records without fetching history. Turn metrics describe
-the newest turn, which needs a preceding user message and completed assistant
-steps. The cache and speed rows average every
-complete turn in the loaded records, so paging in older history recalculates
-them. A truncated leading segment or an unfinished trailing turn is skipped
-rather than counted as zero.
+reads already-loaded records without fetching history. Every metric describes
+the most recent completed turn, which needs a preceding user message and
+completed assistant steps. While a new turn runs, the last completed turn stays
+visible. A truncated or unfinished turn is never counted as zero.
 
-The header and speed row both show average speed. A single speed readout keeps
-their measurement consistent even when final-text delivery timing is available.
-
-Average speed sums output plus reasoning tokens and model time across every
-complete loaded turn, then divides the totals. Model time is the turn's
-wall-clock time from its user message through its last completed step, minus
-blocking tool waits, and minus every gap
-longer than 5 minutes between finished steps. Using the whole turn covers
-thinking and queue time before each step's first content block, which per-step
-windows leave out and which made proxy sessions report implausibly high rates.
-The long-gap exclusion covers waits that belong to no tool: Claude Code keeps
-a turn open while a background task it started runs, and a CLI closed mid-turn
-resumes the turn later. A 2 hour wait for a render once made a turn whose own
-steps ran at 90 report 13 tok/s. The average is token-weighted, so a short turn
-cannot dominate a long one. Average cache sums the same steps' input and cache fields and divides
-cache reads by input plus reads and writes, also token-weighted. Both tooltips
-say that the value covers history loaded in the session and changes when older
-history is paged in. Invalid or missing inputs omit the dependent metric rather
-than becoming zero; reported zeros remain valid. TTFT averages the earliest
-text/reasoning start delay from every step of the newest turn, only when all
-steps have a valid sample. Empty stream text/reasoning placeholders supply no
-first-token sample; their creation stamps cannot establish TTFT.
+The header and speed row show the same turn's average speed. It divides output
+plus reasoning tokens by the turn's model time. Model time runs from the user
+message through the last completed step, excluding blocking tool waits and gaps
+longer than 5 minutes between finished steps. Cache hit rate divides the turn's
+cache reads by its input plus cache reads and writes. Loading older turns does
+not change either value. Missing measurements omit the dependent metric;
+reported zeros remain valid. TTFT averages the earliest text or reasoning start
+delay from every step of the turn only when all steps have a valid sample.
 
 Codex supplies measured blocking waits in the assistant message's
 `metadata.openchamber.telemetry.toolWaitDurationMs`. A background command's

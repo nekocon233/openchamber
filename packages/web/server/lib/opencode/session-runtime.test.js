@@ -344,6 +344,10 @@ describe('session runtime', () => {
     expect(runtime.getActiveSessionCount()).toBe(0);
     expect(runtime.getSessionActivitySnapshot()).toEqual({});
     expect(runtime.getSessionStateSnapshot()).toEqual({});
+    runtime.adoptRunningSessions(['late-session'], Date.now() + 1);
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'late-session', status: { type: 'busy' } } });
+    expect(runtime.getSessionStateSnapshot()).toEqual({});
+    expect(runtime.getActiveSessionCount()).toBe(0);
   });
   describe('turn starts', () => {
     const setup = (readTurnStart = null) => {
@@ -491,11 +495,11 @@ describe('session runtime', () => {
     });
 
     broadcasts.length = 0;
-    expect(runtime.interruptBusySessionsAfterRestart()).toEqual({ sessionIds: ['ses_opencode'] });
+    expect(runtime.interruptBusySessionsAfterRestart()).toEqual({ sessionIds: ['ses_opencode'], autoResumeSessionIds: [] });
     expect(broadcasts.filter((event) => event.type === 'session.error').map((event) => event.properties.sessionID))
       .toEqual(['ses_opencode']);
     expect(runtime.getPendingBlockingRequestsSnapshot()).toEqual({
-      ncl_native: { permissions: [], questions: [nativeQuestion] },
+      ncl_native: { permissions: [], forms: [], pages: [], questions: [nativeQuestion] },
     });
     expect(runtime.getSessionActivitySnapshot()).toEqual({
       ncl_native: { type: 'busy' },
@@ -505,5 +509,23 @@ describe('session runtime', () => {
 
     runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'ncl_native', status: { type: 'idle' } } });
     expect(runtime.getActiveSessionCount()).toBe(0);
+  });
+
+  it('records a native turn from its live user message and exposes pending questions in the host snapshot', () => {
+    const events = [];
+    const runtime = createSessionRuntime({ writeSseEvent() {}, getNotificationClients: () => new Set(),
+      broadcastEvent: (event) => events.push(event), isNativeSessionId: (id) => id.startsWith('ncv_') });
+    runtimes.push(runtime);
+    const sessionID = 'ncv_native';
+    runtime.processOpenCodeSsePayload({ type: 'message.updated', properties: { info: { sessionID, id: 'user-1', role: 'user', time: { created: 5000 } } } });
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID, status: { type: 'busy' } } });
+    runtime.processOpenCodeSsePayload({ type: 'question.asked', properties: { id: 'q1', sessionID, questions: [{ header: 'Choose' }] } });
+    runtime.processOpenCodeSsePayload({ type: 'question.asked', properties: { id: 'q2', sessionID, questions: [{ header: '' }] } });
+    expect(runtime.getSessionStateSnapshot()[sessionID]).toMatchObject({ status: 'busy', turnStartedAt: 5000 });
+    expect(runtime.getPendingBlockingRequestsSnapshot()[sessionID]).toMatchObject({ forms: [{ id: 'q1', sessionID, title: 'Choose' }, { id: 'q2', sessionID, title: '' }], pages: [] });
+    expect(events.filter((event) => event.type === 'openchamber:session-status').at(-1).properties.turnStartedAt).toBe(5000);
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID, status: { type: 'idle' } } });
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID, status: { type: 'busy' } } });
+    expect(runtime.getRunningTurnStart(sessionID)).toBeNull();
   });
 });

@@ -73,7 +73,7 @@ const SwitcherRow: React.FC<{
           running={isStreaming}
           className="typography-micro"
         />
-      ) : timeLabel ? (
+      ) : !isStreaming && timeLabel ? (
         <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{timeLabel}</span>
       ) : null}
     </button>
