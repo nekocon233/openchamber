@@ -101,7 +101,7 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       if (!environment.binaries.password) throw new DesktopError('NO_PASSWORD_TOOL');
       environment.displays = environment.displays.filter((item) => item.display !== sessions.get('virtual')?.display);
       const display = environment.displays.find((item) => item.display === options.display) ?? (!options.display ? environment.displays.find((item) => item.authority) ?? environment.displays[0] : undefined);
-      let user = display ?? currentUser();
+      let user = session.mode === 'virtual' ? currentUser() : display ?? currentUser();
       let authority = '';
       if (session.mode === 'physical') {
         if (!display) throw new DesktopError('NO_X11');
