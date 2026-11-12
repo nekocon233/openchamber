@@ -222,6 +222,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         directory={directory}
         showSession={sectionVisible('session')}
         showRepository={repositoryEnabled && sectionVisible('repository')}
+        showContextTokens={isSheet}
         prewarmPrStatus={prewarmPrStatus}
         goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
       >

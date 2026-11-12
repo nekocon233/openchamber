@@ -44,6 +44,8 @@ type Props = {
   goalRow: React.ReactNode;
   showSession: boolean;
   showRepository: boolean;
+  /** The phone has no header tooltip for the context's token counts. */
+  showContextTokens?: boolean;
   /** Mobile sheet only: warm the branch's change-request summary on open. */
   prewarmPrStatus?: boolean;
   /** Lets the panel place the two readouts independently without duplicating their subscriptions. */
@@ -56,12 +58,18 @@ const formatPercent = (percent: number): string => `${Math.min(percent, 999).toF
 /** Shown after a compaction, until a response reports how much the window holds. */
 const UNKNOWN_PERCENT = '\u2014';
 
+const formatTokens = (tokens: number): string => {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
+  return String(tokens);
+};
+
 /**
  * The persistent readouts — how full the context is, what the working tree and
  * the pull request look like. All of it stays true for as long as the session
  * is open, so it sits above anything episodic.
  */
-export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository, prewarmPrStatus = false, children }) => {
+export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository, showContextTokens = false, prewarmPrStatus = false, children }) => {
   const { t } = useI18n();
   const projectActionsContext = useProjectActionsContext();
   const { git } = useRuntimeAPIs();
@@ -188,6 +196,8 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
     () => computeContextUsage(sessionMessages, contextLimit),
     [sessionMessages, contextLimit],
   );
+  const contextWindow = contextUsage?.limit ?? contextLimit;
+  const hasContext = contextUsage !== null || (showContextTokens && sessionId !== null && contextWindow > 0);
 
   const nav = useWorkStatusNavigation(directory);
   // The desktop context panel's tab actions have no mobile host. The work
@@ -247,7 +257,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   // without them the total *is* the session's own cost and the row would
   // restate the number directly above it.
   const showCostBreakdown = cost !== null && subagentCount > 0 && subagentCost > 0;
-  const hasSession = showSession && (contextUsage !== null || cost !== null || Boolean(goalRow));
+  const hasSession = showSession && (hasContext || cost !== null || Boolean(goalRow));
   const hasRepository = showRepository && Boolean(branch || changed || prSummary || branchCi.run || attentionLabel || showProjectActions);
 
   useReportWorkStatusPresence('session-repository', hasSession || hasRepository);
@@ -255,7 +265,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   return children({
       session: hasSession ? (
         <WorkStatusSection title={t('chat.workStatus.section.session')}>
-          {contextUsage !== null ? (
+          {hasContext ? (
             <>
               <WorkStatusRow
                 icon="donut-chart"
@@ -271,8 +281,23 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
                   </>
                 )}
               />
+              {showContextTokens ? (
+                <p
+                  dir="auto"
+                  className="mx-1 mb-1 typography-meta text-muted-foreground tabular-nums"
+                  title={[
+                    ...(contextUsage?.state === 'measured'
+                      ? [t('contextUsage.tooltip.usedTokens', { tokens: contextUsage.totalTokens })]
+                      : []),
+                    t('contextUsage.tooltip.contextLimit', { tokens: contextWindow }),
+                  ].join(' · ')}
+                >
+                  {contextUsage?.state === 'measured' ? formatTokens(contextUsage.totalTokens) : UNKNOWN_PERCENT}
+                  {' / '}{formatTokens(contextWindow)}
+                </p>
+              ) : null}
               <WorkStatusMeter percent={usagePercent ?? 0} color={meterColor} />
-              {contextUsage.state === 'compacted' ? (
+              {contextUsage?.state === 'compacted' ? (
                 <p className="mx-1 mb-1 text-[11px] leading-4 text-muted-foreground">
                   {t('contextUsage.compacted.description')}
                 </p>
