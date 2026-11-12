@@ -346,6 +346,12 @@ const IDLE: CachedValue<GitHubPullStatus | null> = { status: 'idle' };
 /** Forgets every PR's checks and mergeability, so the lists showing them ask again: the board's refresh. */
 export const forgetGitHubPullStatuses = (): void => githubPullStatuses.clear();
 
+/** A host refresh must read mergeability again even when the head has not changed. */
+export const invalidateGitHubPullStatuses = (context: SourceControlReadContext, runtime: string): void => {
+    const prefix = `${JSON.stringify([runtime, readContextCacheKey(context), context.directory])}|`;
+    githubPullStatuses.invalidate((key) => key.startsWith(prefix));
+};
+
 /** Project lists include historical checks; other readers colour open PRs. */
 const needsPullStatus = (reference: GitHubReference, includeClosed: boolean): reference is GitHubPullReference => (
     reference.kind === 'pull' && (includeClosed || reference.state === 'open')

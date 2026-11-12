@@ -46,3 +46,15 @@ test('empty checks, unavailable results and loading failures remain distinct', (
 test('other list consumers keep their existing compact rows', () => {
   expect(render(ready({ state: 'success', total: 4, success: 4, failure: 0, pending: 0 }), false)).not.toContain('checks passed');
 });
+
+test('project PR rows name conflicts without treating blocked or unknown status as a conflict', () => {
+  const status = (mergeable: boolean | null, mergeableState: string | null): CachedValue<GitHubPullStatus | null> => ({
+    status: 'ready', value: { owner: 'acme', repo: 'app', number: 7, checks: null, mergeable, mergeableState },
+  });
+  expect(render(status(false, 'dirty'))).toContain('Merge conflicts');
+  expect(render(status(null, 'dirty'))).toContain('Merge conflicts');
+  expect(render(status(null, 'blocked'))).not.toContain('Merge conflicts');
+  expect(render(status(null, 'unknown'))).not.toContain('Merge conflicts');
+  expect(render({ status: 'error', error: 'offline' })).not.toContain('Merge conflicts');
+  expect(render(status(false, 'dirty'), false)).not.toContain('Merge conflicts');
+});

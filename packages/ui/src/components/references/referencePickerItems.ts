@@ -118,6 +118,12 @@ type StateGlyph = { icon: IconName; color: string };
 
 type StateLook = StateGlyph & { labelKey: I18nKey };
 
+/** GitHub's conflicting merge state is distinct from failed checks or missing reviews. */
+export const hasGitHubPullConflict = (reference: GitHubReference, status: GitHubPullStatus | null): boolean => (
+    reference.kind === 'pull' && (reference.provider ?? 'github') === 'github' && reference.state === 'open'
+    && (status?.mergeable === false || status?.mergeableState === 'dirty')
+);
+
 /**
  * Issue and PR states in the theme's PR colours, the way the sidebar shows
  * them: open is open, done is merged, dropped is closed. An open PR turns

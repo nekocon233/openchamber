@@ -3,7 +3,6 @@ import * as React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
 import { useGitHubReadContext, useGitHubReferenceDetail, useGitHubReferenceList, useGitHubSourceStatus } from '@/components/references/referenceSources';
-import { IDLE_PULL_STATUS } from '@/components/references/useReferenceBrowser';
 import { isSameRepositoryItemLink } from '@/components/sourceBoard/boardLinkTarget';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
 import { SourceBoardLinkFeedback, type BoardLinkFeedbackState } from '@/components/sourceBoard/SourceBoardLinkFeedback';
@@ -105,7 +104,6 @@ const LinkedPullRequestBody: React.FC<{
           reference={reference}
           context={context}
           githubDetail={detail}
-          pullStatus={IDLE_PULL_STATUS}
           now={now}
           onChanged={lookup.retry}
           onSubmitted={onBack}

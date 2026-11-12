@@ -72,6 +72,11 @@ and file-type exclusions. Picker and board rows do not mount this reader.
   results and a successful empty check list have separate labels. Queued checks
   are distinguished when all pending checks are queued. Other list consumers
   continue reading statuses only for open PRs and retain their compact rows.
+- A confirmed GitHub merge conflict is named in the project list and PR
+  preview. Failed checks, a required review and unknown mergeability do not
+  imply a conflict. A directly opened PR reads its own status even when it is
+  absent from the list. Explicit host refresh discards the affected binding's
+  cached statuses, including answers still in flight.
 - PR status readers expose a value snapshot to memoized rows. A completed
   request updates that snapshot without fetching again. A failed batch stays
   failed until a list refresh, revalidation or return retries it; successful
