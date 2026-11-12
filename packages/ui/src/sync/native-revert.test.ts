@@ -38,6 +38,7 @@ const textPart = (messageID: string, text: string): Part => ({ id: `${messageID}
 
 let calls: Array<[string, ...Array<string | null>]> = []
 let revertResult: NativeRevertResult | NativeAgentsRequestError = { session: nativeSession(SESSION), filesRestored: 0, conversationOnly: false }
+let revertWait: Promise<void> | null = null
 let openCodeRequests: string[] = []
 let childStores = new ChildStoreManager()
 
@@ -62,12 +63,14 @@ const seedConversation = (revert?: { messageID: string }) => {
 beforeEach(() => {
   calls = []
   revertResult = { session: nativeSession(SESSION, { messageID: PROMPT_2 }), filesRestored: 0, conversationOnly: true }
+  revertWait = null
   openCodeRequests = []
   childStores = new ChildStoreManager()
   childStores.ensureChild(DIRECTORY, { bootstrap: false })
   registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
     revert: async (sessionId, messageId, directory) => {
       calls.push(["revert", sessionId, messageId, directory])
+      if (revertWait) await revertWait
       if (revertResult instanceof NativeAgentsRequestError) throw revertResult
       return revertResult
     },
@@ -87,7 +90,7 @@ beforeEach(() => {
   }
   setActionRefs(childStores, () => DIRECTORY)
   useConfigStore.setState({ isConnected: true })
-  useInputStore.setState({ pendingInputText: "draft", pendingInputMode: "replace", attachedFiles: [] })
+  useInputStore.setState({ pendingInputText: "draft", pendingInputMode: "replace", pendingSessionRestores: new Map(), attachedFiles: [] })
 })
 
 afterEach(() => {
@@ -104,7 +107,8 @@ describe("native session history actions", () => {
 
     expect(calls).toEqual([["revert", SESSION, PROMPT_2, DIRECTORY]])
     expect(sessionInStore(SESSION)?.revert).toEqual({ messageID: PROMPT_2 })
-    expect(useInputStore.getState().pendingInputText).toBe("second prompt")
+    expect(useInputStore.getState().consumePendingSessionRestore(SESSION)).toBe("second prompt")
+    expect(useInputStore.getState().pendingInputText).toBe("draft")
     expect(openCodeRequests).toEqual([])
   })
 
@@ -117,6 +121,21 @@ describe("native session history actions", () => {
     expect(failure).toMatchObject({ code: "NATIVE_REVERT_FIRST_MESSAGE" })
     expect(sessionInStore(SESSION)?.revert).toBeUndefined()
     expect(useInputStore.getState().pendingInputText).toBe("draft")
+    expect(useInputStore.getState().pendingSessionRestores.has(SESSION)).toBe(false)
+  })
+
+  test("waits for confirmation and preserves a restore written while the revert is refused", async () => {
+    seedConversation()
+    let release!: () => void
+    revertWait = new Promise<void>((resolve) => { release = resolve })
+    revertResult = new NativeAgentsRequestError("Revert refused", 409, "NATIVE_REVERT_FIRST_MESSAGE")
+    const pending = revertToMessage(SESSION, PROMPT_2).then(() => null, (error: Error) => error)
+    expect(useInputStore.getState().pendingSessionRestores.has(SESSION)).toBe(false)
+    useInputStore.getState().setPendingSessionRestore(SESSION, "newer draft")
+    release()
+
+    expect(await pending).toMatchObject({ code: "NATIVE_REVERT_FIRST_MESSAGE" })
+    expect(useInputStore.getState().consumePendingSessionRestore(SESSION)).toBe("newer draft")
   })
 
   test("unrevert through the server and show the messages again", async () => {
@@ -128,6 +147,17 @@ describe("native session history actions", () => {
     expect(sessionInStore(SESSION)?.revert).toBeUndefined()
     expect(store().getState().message[SESSION]?.map((message) => message.id)).toEqual([PROMPT_1, PROMPT_2])
     expect(openCodeRequests).toEqual([])
+  })
+
+  test("does not publish a confirmed restore after the action's runtime owner changes", async () => {
+    seedConversation()
+    let release!: () => void
+    revertWait = new Promise<void>((resolve) => { release = resolve })
+    const pending = revertToMessage(SESSION, PROMPT_2).then(() => null, (error: Error) => error)
+    setActionRefs(new ChildStoreManager(), () => "/other-runtime")
+    release()
+    expect(await pending).toMatchObject({ name: "SessionActionRuntimeChangedError" })
+    expect(useInputStore.getState().pendingSessionRestores.has(SESSION)).toBe(false)
   })
 
   test("fork through the server and open the fork", async () => {

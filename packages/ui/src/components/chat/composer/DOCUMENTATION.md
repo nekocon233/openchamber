@@ -835,7 +835,8 @@ command can leave the queue untouched and delivery can take only part of it.
   BTW. A revert is session-addressed and waits until that session owns the
   composer, even in a pinned column with an expanded BTW. Its text waits in a
   separate session-keyed mailbox so later quotes and plugin insertions leave
-  it intact. On return, the restore is applied before any column insertion.
+  it intact. `ChatInput` passes the displayed session explicitly, including
+  the expanded BTW fork. On return, the restore is applied before any column insertion.
   A `btw-pending:` identity holds text only in the hook's memory while the
   fork is being created. Collapse and navigation save that text in memory;
   failure recovery restores it there without writing the placeholder to storage.
