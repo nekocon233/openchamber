@@ -455,6 +455,11 @@ describe('Antigravity final response reconciliation', () => {
     expect(tool.state.time.end).toBeLessThanOrEqual(record.info.time.completed);
   });
 
+  it('marks truncated native compaction summaries as incomplete context', () => {
+    const records = project([{ step_index: 0, type: 'CHECKPOINT', content: 'Partial summary', truncated_fields: ['content'] }]);
+    expect(records[0].info).toMatchObject({ role: 'compaction', metadata: { nativeOutputTruncated: true } });
+  });
+
   it('recovers a completed compaction summary instead of retaining a running stream placeholder', async () => {
     const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
       publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),

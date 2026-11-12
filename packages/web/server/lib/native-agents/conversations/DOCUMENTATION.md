@@ -143,13 +143,28 @@ The public client instruction limit does not constrain this server-built context
 
 Legacy model-id aliases, including unified Opus, resolve to the same catalog row.
 The target catalog supplies context limits; an unknown window uses the existing
-64k estimate and character-budget convention. A long history keeps recent whole
-turns and summarizes earlier material in bounded chunks. Summary calls select
-the source Claude/Codex model, or the destination Claude/Codex model when the
-source is DeepSeek or Antigravity. They use existing tool-free utility generation
-and no global small-model fallback. DeepSeek and Antigravity have no utility
-generator; when neither end
-supplies one, an oversized handoff refuses with a retryable explanation.
+64k estimate and character-budget convention. Context first replaces each
+segment's covered prefix with its last completed, nonempty native compaction
+summary. Failed, running or truncated summaries cannot replace history. The
+rewind boundary is applied first, so a discarded checkpoint covers nothing.
+Other execution segments and the full visible transcript remain intact.
+
+A long history keeps recent whole turns and summarizes earlier material in
+bounded chunks. Summary calls try the source model, destination model, then
+the explicitly configured Small Model in Settings, with duplicate models
+attempted once. Utility generation remains tool-free. The Settings candidate
+must report `source: 'settings'`; implicit defaults and unrelated connected
+providers cannot receive the conversation. A failed candidate's partial
+summary is discarded before another model starts. Cancellation, enterprise
+policy and checkpoint write failures stop preparation. DeepSeek and
+Antigravity have no utility generator of their own.
+
+### Why handoff reuses completed native summaries
+
+The source CLI already continues from its completed checkpoint. Passing the
+covered tool history again can require another summary even when the retained
+native context fits the destination. Segment boundaries prevent a checkpoint
+from discarding another CLI's history.
 
 Revert snapshots belong to the logical ID. Revert sets a retained-prefix marker;
 redo restores its files until the next admitted prompt commits it. That prompt

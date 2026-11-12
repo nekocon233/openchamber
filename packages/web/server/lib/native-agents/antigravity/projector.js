@@ -267,6 +267,7 @@ export const projectAntigravityHistory = ({
         error: incomplete ? unknownError(entry.error || 'Antigravity compaction completion was not recorded') : null,
       });
       info.summary = entry.content ?? '';
+      if (entry.truncated_fields?.includes('content')) info.metadata = { nativeOutputTruncated: true };
       records.push({
         info,
         parts: [buildCompactionPart({
