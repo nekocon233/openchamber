@@ -71,6 +71,11 @@ export const BranchPullRequestPreview: React.FC<{
         // The status is the fresher source of state and head; the list adds what it lacks.
         return listed ? { ...live, labels: listed.labels, commentCount: listed.commentCount } : live;
     }, [changeRequest, listed]);
+    const pullStatus = context.provider === 'github' ? {
+        status: 'ready' as const,
+        value: { owner: changeRequest.project.owner, repo: changeRequest.project.name, number: changeRequest.number,
+            mergeable: changeRequest.mergeable ?? null, mergeableState: changeRequest.mergeableState ?? null, checks: null },
+    } : IDLE_PULL_STATUS;
     const { detail, refresh: refreshDetail } = useGitHubReferenceDetail(directory, reference, true);
     const attachments = usePullAttachments(reference);
 
@@ -88,7 +93,7 @@ export const BranchPullRequestPreview: React.FC<{
             <ReferencePreview
                 item={item}
                 directory={directory}
-                pullStatus={IDLE_PULL_STATUS}
+                pullStatus={pullStatus}
                 linearDetail={{ status: 'idle' }}
                 githubDetail={detail}
                 purpose="attach"

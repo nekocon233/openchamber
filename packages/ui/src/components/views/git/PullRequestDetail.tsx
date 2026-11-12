@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import type { CachedValue } from '@/components/references/referenceCache';
 import { ReferencePreview } from '@/components/references/ReferencePreview';
-import { invalidateProjectPullLists } from '@/components/references/referenceSources';
+import { invalidateGitHubPullStatuses, invalidateProjectPullLists, useGitHubPullStatuses } from '@/components/references/referenceSources';
 import { SourceBoardActions } from '@/components/sourceBoard/SourceBoardActions';
 import { SourceBoardChecksDialog } from '@/components/sourceBoard/SourceBoardChecksDialog';
 import { SourceBoardLabels, SourceBoardReviewers } from '@/components/sourceBoard/SourceBoardMetaEditors';
@@ -12,7 +12,7 @@ import { useThreadActions } from '@/components/sourceBoard/threadActions';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
-import type { GitHubPullReference, GitHubPullStatus, GitHubReferenceDetail, SourceControlReadContext } from '@/lib/api/types';
+import type { GitHubPullReference, GitHubReferenceDetail, SourceControlReadContext } from '@/lib/api/types';
 import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
 import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
@@ -22,18 +22,19 @@ export const PullRequestDetail: React.FC<{
   reference: GitHubPullReference;
   context: SourceControlReadContext;
   githubDetail: CachedValue<GitHubReferenceDetail>;
-  pullStatus: CachedValue<GitHubPullStatus | null>;
   now: number;
   onChanged: () => Promise<void>;
   onSubmitted: () => void;
   refreshDetail: () => Promise<void>;
   pullLinks: React.ReactNode;
-}> = ({ reference, context, githubDetail, pullStatus, now, onChanged, onSubmitted, refreshDetail, pullLinks }) => {
+}> = ({ reference, context, githubDetail, now, onChanged, onSubmitted, refreshDetail, pullLinks }) => {
   const { sourceControl } = useRuntimeAPIs();
   const { t } = useI18n();
   const runtime = getRuntimeKey();
   const owner = workspaceViewKey(getRuntimeKey(), context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
   const runtimeGeneration = getRuntimeEndpointGeneration();
+  const references = React.useMemo(() => context.provider === 'github' ? [reference] : [], [context.provider, reference]);
+  const pullStatusOf = useGitHubPullStatuses(context.directory, references);
   const activeOwner = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     activeOwner.current = owner;
@@ -49,6 +50,7 @@ export const PullRequestDetail: React.FC<{
   }, [onChanged, refreshDetail]);
   const refreshFromHost = async () => {
     await sourceControl.refreshProviderReads(context);
+    if (getRuntimeKey() === runtime && getRuntimeEndpointGeneration() === runtimeGeneration) invalidateGitHubPullStatuses(context, runtime);
     await refresh();
   };
   const reviewCompleted = async () => {
@@ -70,7 +72,7 @@ export const PullRequestDetail: React.FC<{
       <ReferencePreview
         item={item}
         directory={context.directory}
-        pullStatus={pullStatus}
+        pullStatus={pullStatusOf(reference)}
         linearDetail={{ status: 'idle' }}
         githubDetail={githubDetail}
         purpose="attach"

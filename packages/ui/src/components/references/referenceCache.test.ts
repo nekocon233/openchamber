@@ -205,6 +205,23 @@ test('a value is asked once while in flight and kept after an error', async () =
     expect(cache.read('w')).toEqual({ status: 'error', error: 'gone' });
 });
 
+test('invalidating a value prevents a late old answer from replacing the new one', async () => {
+    const cache = createValueCache<string>();
+    const old = deferred<string>();
+    const previous = cache.ensure('repo-a', () => old.promise);
+    await cache.ensure('repo-b', async () => 'other');
+    cache.invalidate((key) => key === 'repo-a');
+    let freshReads = 0;
+    const next = cache.ensure('repo-a', async () => { freshReads += 1; return 'current'; });
+    expect(freshReads).toBe(0);
+    old.resolve('obsolete');
+    await previous;
+    await next;
+    expect(freshReads).toBe(1);
+    expect(cache.read('repo-a')).toEqual({ status: 'ready', value: 'current' });
+    expect(cache.read('repo-b')).toEqual({ status: 'ready', value: 'other' });
+});
+
 test('many values are asked in batches, skipping fresh and in-flight keys', async () => {
     let clock = 0;
     const cache = createValueCache<string | null>(40, () => clock);

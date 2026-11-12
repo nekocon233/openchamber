@@ -9,6 +9,7 @@ import type { CachedValue } from './referenceCache';
 
 import {
     githubStateLook,
+    hasGitHubPullConflict,
     labelColor,
     LINEAR_PRIORITY_KEYS,
     linearStateLook,
@@ -169,6 +170,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
 }: RowProps) {
     const { t } = useI18n();
     const look = item.source === 'github' ? githubStateLook(item.reference, pullStatus?.status === 'ready' ? pullStatus.value : null) : linearStateLook(item.issue);
+    const conflict = showChecks && item.source === 'github' && hasGitHubPullConflict(item.reference, pullStatus?.status === 'ready' ? pullStatus.value : null);
     const title = item.source === 'github' ? item.reference.title : item.issue.title;
     const id = item.source === 'github' ? referenceNumberLabel(item.reference) : item.issue.identifier;
     const updated = relativeTimeOf(item.source === 'github' ? item.reference.updatedAt : item.issue.updatedAt, now);
@@ -248,6 +250,10 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                     ) : null}
                 </div>
                 {pullFileStats}
+                {conflict ? <div className="mt-1 flex items-center gap-1 typography-micro text-[var(--status-warning-text)]">
+                    <Icon name="error-warning" className="size-3.5 shrink-0" />
+                    {t('sessions.sidebar.group.pr.status.mergeConflicts')}
+                </div> : null}
                 {showChecks && pullStatus ? <PullChecks status={pullStatus} /> : null}
             </div>
         </div>

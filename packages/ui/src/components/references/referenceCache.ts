@@ -86,6 +86,12 @@ class KeyedStore<R> {
         return [...this.records.entries()];
     }
 
+    delete(key: string): void {
+        if (!this.records.delete(key)) return;
+        this.version += 1;
+        for (const listener of this.listeners.get(key) ?? []) listener();
+    }
+
     set(key: string, record: R): void {
         // Re-inserting keeps the map in least-recently-written order.
         this.records.delete(key);
@@ -285,12 +291,14 @@ export type ValueCache<T> = {
     subscribe: (key: string, listener: Listener) => () => void;
     /** Changes on every write; a snapshot for readers of several keys at once. */
     version: () => number;
+    invalidate: (matches: (key: string) => boolean) => void;
     clear: () => void;
 };
 
 export function createValueCache<T>(limit = 40, now: () => number = Date.now): ValueCache<T> {
     const store = new KeyedStore<ValueRecord<T>>(limit);
     const inflight = new Map<string, Promise<T>>();
+    const retired = new Set<Promise<T>>();
 
     const isFresh = (key: string) => {
         const existing = store.get(key);
@@ -303,6 +311,16 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
             store.set(key, { state: { status: 'loading' }, fetchedAt: 0 });
         }
         const promise = request.then((outcome) => {
+            const stale = retired.delete(promise);
+            if (inflight.get(key) !== promise || stale) {
+                if (inflight.get(key) === promise) {
+                    inflight.delete(key);
+                    // Active readers can now ask past the old server-side flight.
+                    revalidateReferences();
+                }
+                if (!outcome.ok) throw new Error(outcome.message);
+                return outcome.value;
+            }
             inflight.delete(key);
             if (!outcome.ok) {
                 store.set(key, { state: { status: 'error', error: outcome.message }, fetchedAt: 0 });
@@ -318,7 +336,7 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
     const ensure: ValueCache<T>['ensure'] = (key, fetch, options) => {
         const existing = store.get(key);
         const running = inflight.get(key);
-        if (options?.force) {
+        if (options?.force || (running && retired.has(running))) {
             const after = running ? running.then(() => undefined, () => undefined) : Promise.resolve();
             return track(key, settle(after.then(fetch)));
         }
@@ -353,8 +371,16 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
         read: (key) => store.get(key)?.state ?? null,
         subscribe: (key, listener) => store.subscribe(key, listener),
         version: () => store.version,
+        invalidate: (matches) => {
+            for (const [key] of store.entries()) {
+                if (!matches(key)) continue;
+                const running = inflight.get(key);
+                if (running) retired.add(running);
+                store.delete(key);
+            }
+        },
         clear: () => {
-            inflight.clear();
+            for (const running of inflight.values()) retired.add(running);
             store.clear();
         },
     };

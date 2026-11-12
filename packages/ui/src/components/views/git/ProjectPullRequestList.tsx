@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
 import { referencePickerItemKey } from '@/components/references/referencePickerItems';
-import { useGitHubReadContext, useGitHubReferenceList } from '@/components/references/referenceSources';
+import { invalidateGitHubPullStatuses, useGitHubReadContext, useGitHubReferenceList } from '@/components/references/referenceSources';
 import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
 import { useReferenceBrowser } from '@/components/references/useReferenceBrowser';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
@@ -72,6 +72,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     try {
       await sourceControl.refreshProviderReads(context);
       if (getRuntimeKey() === runtime) {
+        invalidateGitHubPullStatuses(context, runtime);
         setStatsRefreshVersion(version => version + 1);
         await browser.list.retry();
       }
@@ -147,7 +148,6 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               reference={selectedPull}
               context={context}
               githubDetail={browser.githubDetail}
-              pullStatus={browser.pullStatusOf(selectedPull)}
               now={browser.now}
               onChanged={browser.list.retry}
               onSubmitted={goBack}

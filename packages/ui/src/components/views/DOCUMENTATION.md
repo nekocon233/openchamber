@@ -72,6 +72,10 @@ action. Badge failures retain their existing automatic external fallback.
 GitLab, issues, Linear, mobile, VS Code and mini chat keep their existing routes;
 chat's external-link preference and modified clicks remain effective.
 
+GitHub merge conflicts appear by name in project PR rows and details, including
+directly linked previews. Each detail reads the selected PR's status even when
+it was not in a loaded list. An explicit refresh reads mergeability again.
+
 PR previews share `SourceBoardActions` with the board. On GitHub, a host that
 advertises administrator merge adds a separate Force merge button beside the
 ordinary merge control, with the same selected method and a destructive

@@ -19,6 +19,7 @@ import { buildReferenceTimeline, type ReferenceCommentItem, type ReferenceTimeli
 import { ChecksGlyph, ReferenceLabelChips } from './ReferencePickerRow';
 import {
     githubStateLook,
+    hasGitHubPullConflict,
     labelColor,
     LINEAR_PRIORITY_KEYS,
     linearStateLook,
@@ -344,6 +345,7 @@ const GitHubPreview: React.FC<{
     }, [detail, t]);
     const relative = useRelative(now);
     const look = githubStateLook(reference, pullStatus.status === 'ready' ? pullStatus.value : null);
+    const conflict = hasGitHubPullConflict(reference, pullStatus.status === 'ready' ? pullStatus.value : null);
     const labels = reference.labels.map((label) => ({ name: label.name, color: labelColor(label.color) }));
     const updated = relative(reference.updatedAt);
     const body = reference.body.trim() ? reference.body : '';
@@ -415,6 +417,10 @@ const GitHubPreview: React.FC<{
                     </a>
                 </div>
                 <h3 className="typography-ui-header font-semibold break-words text-foreground">{reference.title}</h3>
+                {conflict ? <div role="status" className="flex items-center gap-1.5 typography-meta text-[var(--status-warning-text)]">
+                    <Icon name="error-warning" className="size-4 shrink-0" />
+                    {t('sessions.sidebar.group.pr.status.mergeConflicts')}
+                </div> : null}
             </header>
 
             <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-1.5">
