@@ -5,6 +5,7 @@ import { createTunnelAuth } from './tunnel-auth.js';
 import { registerAuthAndAccessRoutes, registerCommonRequestMiddleware, registerHttpResponseDiagnostics, registerServerStatusRoutes } from './core-routes.js';
 import { createServerDiagnosticJournal } from '../diagnostics/server-journal.js';
 import { registerOpenCodeRoutes } from './routes.js';
+import { createGuestFrameGrants } from '../guests/frame-grants.js';
 import {
   createClientNotificationAuth,
   subscribeNotificationAuthInvalidation,
@@ -667,20 +668,32 @@ describe('core-routes', () => {
     }
   });
 
-  it('lets only GET html-preview and extension-frame file reads past API auth; the grant in the path is checked by the owning route', async () => {
+  it.each([
+    { scope: 'local', enabled: true },
+    { scope: 'tunnel', enabled: true },
+    { scope: 'unknown-public', enabled: true },
+    { scope: 'tunnel', enabled: false },
+    { scope: 'unknown-public', enabled: false },
+  ])('keeps file grants authoritative for $scope requests with UI auth $enabled', async ({ scope, enabled }) => {
     const app = express();
     const requireAuth = vi.fn((_req, res) => res.status(401).json({ error: 'Unauthorized' }));
+    const requireClientAuth = vi.fn((_req, res) => res.status(401).json({ error: 'Client authentication required' }));
+    let now = 0;
+    const grants = createGuestFrameGrants({ now: () => now });
+    const { grant } = grants.mint('panel');
     registerAuthAndAccessRoutes(app, {
       express,
       tunnelAuthController: {
-        classifyRequestScope: () => 'local',
+        classifyRequestScope: () => scope,
         requireTunnelSession: vi.fn(),
         getTunnelSessionFromRequest: vi.fn(),
         clearTunnelSessionCookie: vi.fn(),
         exchangeBootstrapToken: vi.fn(),
       },
       uiAuthController: {
+        enabled,
         requireAuth,
+        requireClientAuth,
         handleSessionStatus: vi.fn(),
         handleSessionCreate: vi.fn(),
         handlePasskeyStatus: vi.fn(),
@@ -698,7 +711,10 @@ describe('core-routes', () => {
     app.get(/^\/api\/fs\/preview\/.+$/, (_req, res) => res.json({ reached: true }));
     app.post('/api/fs/preview', (_req, res) => res.json({ reached: true }));
     app.get('/api/fs/read', (_req, res) => res.json({ reached: true }));
-    app.get(/^\/api\/guest-files\/.+$/, (_req, res) => res.json({ reached: true }));
+    app.get('/api/guest-files/:grant/{*filePath}', (req, res) => {
+      if (grants.use(req.params.grant) !== 'panel') return res.sendStatus(403);
+      return res.json({ reached: true });
+    });
     app.post(/^\/api\/guest-files\/.+$/, (_req, res) => res.json({ reached: true }));
     app.post('/api/guests/panel/frame-grant', (_req, res) => res.json({ reached: true }));
 
@@ -707,11 +723,22 @@ describe('core-routes', () => {
     await request(app).get('/api/fs/preview/grant-1').expect(401);
     await request(app).get('/api/fs/read?path=/repo/index.html').expect(401);
     // An extension frame reads its package by the grant in its path, and nothing more.
-    await request(app).get('/api/guest-files/grant-1/index.html').expect(200, { reached: true });
-    await request(app).get('/api/guest-files/grant-1').expect(401);
-    await request(app).post('/api/guest-files/grant-1/index.html').expect(401);
+    await request(app).get(`/api/guest-files/${grant}/index.html`).expect(200, { reached: true });
+    await request(app).get(`/api/guest-files/${grant}/panel/main.js`).set('Origin', 'null').expect(200, { reached: true });
+    await request(app).get(`/api/guest-files/${grant}`).expect(401);
+    for (const method of ['post', 'put', 'patch', 'delete']) {
+      await request(app)[method](`/api/guest-files/${grant}/index.html`).expect(401);
+    }
     await request(app).post('/api/guests/panel/frame-grant').expect(401);
-    expect(requireAuth).toHaveBeenCalledTimes(6);
+    await request(app).get('/api/guests/panel/service/status').expect(401);
+    await request(app).get(`/api/guest-files/${'x'.repeat(32)}/index.html`).expect(403);
+    now = 13 * 60 * 60 * 1000;
+    await request(app).get(`/api/guest-files/${grant}/index.html`).expect(403);
+    expect(requireAuth).toHaveBeenCalledTimes(scope === 'local' || enabled ? 10 : 0);
+    expect(requireClientAuth).toHaveBeenCalledTimes(scope === 'local' || enabled ? 0 : 10);
+    // Relay channel authentication still precedes a file's own grant.
+    await request(app).get(`/api/guest-files/${grant}/index.html`).set('x-openchamber-relay-connection', 'fixture').expect(401);
+    expect(requireClientAuth).toHaveBeenCalledTimes(scope === 'local' || enabled ? 1 : 11);
   });
 
   it('should probe loopback preview URLs and return ok: true for status codes 200-599', async () => {

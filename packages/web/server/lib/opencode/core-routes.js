@@ -61,7 +61,13 @@ const isPrivateRelayRequest = (req) => {
 
 const isExternalScope = (scope) => scope === 'tunnel' || scope === 'unknown-public';
 
+// These routes validate their own path grant, including for opaque frames
+// that cannot send a UI cookie. Keep both access gates on the same rule.
+const isFileGrantRead = (req) => req.method === 'GET'
+  && /^\/api\/(?:fs\/preview|guest-files)\/[^/]+\/./.test(getRequestPathname(req));
+
 const requiresExternalAuth = (req) => {
+  if (isFileGrantRead(req)) return false;
   const pathname = getRequestPathname(req).toLowerCase();
   if (req.method === 'POST' && pathname === '/api/client-auth/pairing/redeem') return false;
   if (pathname === '/api/version') return false;
@@ -844,24 +850,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     && /^\/(?:guests\/[a-z][a-z0-9-]*|tracker\/ext-[a-z][a-z0-9-]*)\/oauth\/callback$/.test(req.path || '')
   );
 
-  // An HTML preview runs in an opaque-origin sandbox and carries no session.
-  // The grant in its path is the capability; the fs route checks it.
-  const isFilePreviewRead = (req) => (
-    req.method === 'GET'
-    && /^\/fs\/preview\/[^/]+\/./.test(req.path || '')
-  );
-
-  // An extension frame is sandboxed the same way and loads its package
-  // through a grant in the path; the guests route checks it.
-  const isGuestFrameFileRead = (req) => (
-    req.method === 'GET'
-    && /^\/guest-files\/[^/]+\/./.test(req.path || '')
-  );
-
   const requireApiAuth = async (req, res, next) => {
     const pathname = (req.originalUrl || '').split('?')[0];
     if (selfAuthenticatedApiPaths.has(pathname)) return next();
-    if (isGuestOauthCallback(req) || isFilePreviewRead(req) || isGuestFrameFileRead(req)) {
+    if (isGuestOauthCallback(req) || isFileGrantRead(req)) {
       return next();
     }
     if (req.openchamberExternalAuthenticated === true) return next();
