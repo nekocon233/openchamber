@@ -86,13 +86,12 @@ import {
   orderSessionsByLifecycleScopes,
   useSessionOrderingStore,
 } from '@/sync/session-ordering';
-import { useBackgroundShellsStore } from '@/sync/background-shells';
-import { useSessionBackgroundTasksStore } from '@/sync/session-background-tasks';
+import { useOpenTurnSessionIds } from '@/sync/use-open-turn-session-ids';
 import { readDirectoryStatuses, type DirectoryStatusSnapshot } from '@/sync/native-directory-snapshots';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useAllLiveSessions, useAllAuthoritativeLiveSessionIds, useAllSessionStatuses } from '@/sync/sync-context';
 import { useGlobalSyncStore } from '@/sync/global-sync-store';
-import { applyGlobalSessionStatusSnapshot, getGlobalSessionStatusRevision, getOpenTurnSessionIds, useGlobalSessionStatusStore } from '@/sync/global-session-status';
+import { applyGlobalSessionStatusSnapshot, getGlobalSessionStatusRevision, useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
 import { useSessionAiRenameAction } from '@/components/session/useSessionAiRenameAction';
@@ -160,8 +159,6 @@ type MobileSessionsSheetProps = {
 };
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
-const EMPTY_LIVE_SESSION_IDS: ReadonlySet<string> = new Set();
-const EMPTY_BACKGROUND_TASKS: ReadonlyMap<string, unknown> = new Map();
 
 // Same orders, same labels as the desktop sidebar's sort menu — the setting
 // itself is shared, so the two surfaces must offer the same choices.
@@ -870,30 +867,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     },
     [presented],
   ));
-  const heldActiveSessionIdsRef = React.useRef<ReadonlySet<string>>(EMPTY_LIVE_SESSION_IDS);
-  const activeSessionIds = useGlobalSessionStatusStore(React.useCallback(
-    (state) => {
-      if (presented) heldActiveSessionIdsRef.current = state.activeSessionIds;
-      return heldActiveSessionIdsRef.current;
-    },
-    [presented],
-  ));
-  const heldBackgroundShellIdsRef = React.useRef<ReadonlySet<string>>(EMPTY_LIVE_SESSION_IDS);
-  const backgroundShellSessionIds = useBackgroundShellsStore(React.useCallback(
-    (state) => {
-      if (presented) heldBackgroundShellIdsRef.current = state.sessionIds;
-      return heldBackgroundShellIdsRef.current;
-    },
-    [presented],
-  ));
-  const heldBackgroundTasksRef = React.useRef(EMPTY_BACKGROUND_TASKS);
-  const backgroundTasksBySession = useSessionBackgroundTasksStore(React.useCallback(
-    (state) => {
-      if (presented) heldBackgroundTasksRef.current = state.tasksBySession;
-      return heldBackgroundTasksRef.current;
-    },
-    [presented],
-  ));
+  const openTurnSessionIds = useOpenTurnSessionIds(presented);
   const projects = useProjectsStore((state) => state.projects);
   const authoritativeProjects = useGlobalSyncStore((state) => state.projects);
   const activeProjectId = useProjectsStore((state) => state.activeProjectId);
@@ -1228,8 +1202,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     path: '',
     worktree: null,
     space: null,
-    sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks),
-  }), [pinnedSessionIds, chatSessions, sessionOrderRanks]);
+    sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks, undefined, { openTurnSessionIds }),
+  }), [pinnedSessionIds, chatSessions, sessionOrderRanks, openTurnSessionIds]);
   // Pins are keyed by runtime, directory and id, so the timeline's
   // "pinned chats always show" rule needs the plain ids of the pinned ones.
   const pinnedChatIds = React.useMemo(() => new Set(
@@ -1237,10 +1211,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       .filter((session) => isSessionPinned(pinnedSessionIds, getSessionDirectory(session) || null, session.id))
       .map((session) => session.id),
   ), [chatsBucket, pinnedSessionIds]);
-  const openTurnSessionIds = React.useMemo(
-    () => getOpenTurnSessionIds(activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession),
-    [activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession],
-  );
   const pinnedBucket = React.useMemo<WorktreeBucket>(() => ({
     key: PINNED_SECTION_ID,
     label: '',
@@ -1253,7 +1223,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
         pinnedSessionIds,
         sessionOrderRanks,
         undefined,
-        { compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) },
+        { openTurnSessionIds, compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) },
       )
       : [],
   }), [openTurnSessionIds, pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions]);
@@ -1264,9 +1234,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     worktree: null,
     space: null,
     sessions: workSessionIds.size > 0
-      ? orderSessionsByLifecycleScopes(sessions.filter((session) => workSessionIds.has(session.id) && !pinnedZoneSessionIds.has(session.id)), pinnedSessionIds, sessionOrderRanks)
+      ? orderSessionsByLifecycleScopes(sessions.filter((session) => workSessionIds.has(session.id) && !pinnedZoneSessionIds.has(session.id)), pinnedSessionIds, sessionOrderRanks, undefined, { openTurnSessionIds })
       : [],
-  }), [pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions, workSessionIds]);
+  }), [openTurnSessionIds, pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions, workSessionIds]);
   const chatsBucketKey = `${CHAT_DRAFT_PROJECT_ID}::${CHAT_DRAFT_PROJECT_ID}`;
   // The sessions the sheet can show: the project buckets, the chats when
   // shown, and the Pinned and In work zones (whose sessions stay in
@@ -1449,12 +1419,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
     for (const node of nodes) {
       for (const bucket of node.buckets) {
-        bucket.sessions = orderSessionsByLifecycleScopes(bucket.sessions, pinnedSessionIds, sessionOrderRanks);
+        bucket.sessions = orderSessionsByLifecycleScopes(bucket.sessions, pinnedSessionIds, sessionOrderRanks, undefined, { openTurnSessionIds });
       }
     }
 
     return nodes;
-  }, [activeProjectId, pinnedSessionIds, projectSortOrder, projectsMeta, runIndex, projectSessions, sessionOrderRanks, sessionOwnership, spaceList, spaces, t]);
+  }, [activeProjectId, openTurnSessionIds, pinnedSessionIds, projectSortOrder, projectsMeta, runIndex, projectSessions, sessionOrderRanks, sessionOwnership, spaceList, spaces, t]);
 
   const normalizedDirectory = normalizePath(currentDirectory);
 
@@ -1900,8 +1870,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       }),
       pinnedSessionIds,
       sessionOrderRanks,
+      undefined,
+      { openTurnSessionIds },
     );
-  }, [normalizedQuery, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessionOwnership, visibleSessions]);
+  }, [normalizedQuery, openTurnSessionIds, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessionOwnership, visibleSessions]);
 
   const searchProjectMatches = React.useMemo<ProjectMeta[]>(() => {
     if (!normalizedQuery) return [];
@@ -1972,6 +1944,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       projectSessions.filter((session) => !getParentId(session) && timelineContextById.has(session.id)),
       pinnedSessionIds,
       sessionOrderRanks,
+      undefined,
+      { openTurnSessionIds },
     );
     for (const entry of toTimelineEntries(roots)) {
       if (!entry.project) continue;
@@ -1980,7 +1954,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       else byProject.set(entry.project.id, [entry]);
     }
     return byProject;
-  }, [pinnedSessionIds, projectSessions, sessionOrderRanks, timelineActive, timelineContextById, toTimelineEntries]);
+  }, [openTurnSessionIds, pinnedSessionIds, projectSessions, sessionOrderRanks, timelineActive, timelineContextById, toTimelineEntries]);
   const workTimelineEntries = React.useMemo(
     () => (listActive ? toTimelineEntries(workBucket.sessions.filter((session) => !getParentId(session))) : []),
     [listActive, toTimelineEntries, workBucket],

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import { getPinnedSessionKey } from '@/lib/sessionPins';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 import {
   findSwitcherItemAncestorIds,
@@ -40,5 +42,14 @@ describe('session switcher initial selection', () => {
     expect(selectParents([...roots, child], 'child', 'project-b').map((item) => item.id)).toEqual([]);
     expect(selectParents([...roots.slice(0, 7), session('archived', { archived: true })], 'archived').map((item) => item.id)).toEqual(roots.slice(0, 7).map((item) => item.id));
     expect(selectParents([...roots, session('archived-child', { archived: true, parentID: 'root-7' })], 'archived-child').map((item) => item.id)).toEqual(roots.slice(0, 7).map((item) => item.id));
+  });
+
+  test('shows a running root before an idle pin in the switcher', () => {
+    const running = { ...session('running'), directory: '/repo' };
+    const pinned = { ...session('pinned'), directory: '/repo' };
+    const pin = getPinnedSessionKey(getRuntimeKey(), '/repo', pinned.id);
+    if (!pin) throw new Error('expected a valid pin key');
+    const result = selectSwitcherParents([pinned, running], new Set([pin]), new Map(), null, null, () => null, 7, undefined, new Set([running.id]));
+    expect(result.map((item) => item.id)).toEqual(['running', 'pinned']);
   });
 });

@@ -3,6 +3,7 @@ import { isBtwSession } from '@/lib/sessionBtwMetadata';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { EMPTY_SESSION_ORDER_RANKS, orderSessionsByLifecycleScopes, useSessionOrderingStore } from '@/sync/session-ordering';
+import { readOpenTurnSessionIds } from '@/sync/use-open-turn-session-ids';
 
 /**
  * The sessions the command palette lists and Go > Previous/Next steps
@@ -13,10 +14,13 @@ export const orderVisibleRootSessions = (
   activeSessions: readonly Session[],
   pinnedIds: Set<string>,
   ranks: ReadonlyMap<string, number>,
+  openTurnSessionIds?: ReadonlySet<string>,
 ): Session[] => orderSessionsByLifecycleScopes(
   activeSessions.filter((session) => !isBtwSession(session) && !session.parentID),
   pinnedIds,
   ranks,
+  undefined,
+  { openTurnSessionIds },
 );
 
 /** The palette's list, read from the stores outside React. */
@@ -24,6 +28,7 @@ export const readOrderedActiveSessions = (): Session[] => orderVisibleRootSessio
   useGlobalSessionsStore.getState().activeSessions,
   useSessionPinnedStore.getState().ids,
   useSessionOrderingStore.getState().rankById ?? EMPTY_SESSION_ORDER_RANKS,
+  readOpenTurnSessionIds(),
 );
 
 /** Wrap within the visible list; start at its nearest end if selection is absent. */

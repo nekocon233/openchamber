@@ -318,7 +318,7 @@ The display menu's Show pinned section toggle (`showPinnedSection`,
 `sidebarShowPinnedSection`, per surface, off by default) adds a `pinned`
 activity zone between Chats and In work, in both views. It lists pinned
 top-level, unarchived project sessions in the shared lifecycle order; pinned
-chats stay pinned at the top of Chats. A pinned session in work is listed in
+chats keep pin priority within the running or idle portion of Chats. A pinned session in work is listed in
 Pinned only. Like In work, its sessions also stay in their projects, search
 lists each of them once, in the zone (`zoneSessionIds` carries both zones' ids),
 and the rows follow the same render context. Tree's one-line Pinned rows keep
@@ -379,8 +379,8 @@ all / Expand all.
   headers are shared too, with the same hover actions and menu.
 - Below Chats, Pinned and In work it renders one project
   header per project followed by that project's non-archived root sessions
-  from every worktree and space, in the shared lifecycle order with pinned
-  sessions first. Projects keep the manual order whatever the stored project
+  from every worktree and space, with open turns first and pinned sessions first
+  among equally active sessions. Projects keep the manual order whatever the stored project
   sort: dragging a header is the timeline's only sort, and the display menu
   hides both sort sections. A project reveals 7 sessions, 7 more per Show more
   (`timelineProjectContainerKey`); collapsing it, from its header or Collapse

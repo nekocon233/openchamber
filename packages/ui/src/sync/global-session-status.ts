@@ -226,9 +226,10 @@ export const useFirstSessionWithOpenTurn = (sessionIds: readonly string[]): stri
 export const collectOpenTurnSessionIds = (
   activeSessionIds: ReadonlySet<string>,
   waitingSessionIds: readonly Iterable<string>[],
+  resolveParentId: SessionParentResolver = resolveSessionParentId,
 ): ReadonlySet<string> => {
   const open = new Set(activeSessionIds);
-  for (const activeId of activeSessionIds) forEachAncestorId(activeId, (ancestorId) => open.add(ancestorId));
+  for (const activeId of activeSessionIds) forEachAncestorId(activeId, (ancestorId) => open.add(ancestorId), resolveParentId);
   for (const sessionIds of waitingSessionIds) {
     for (const sessionId of sessionIds) open.add(sessionId);
   }

@@ -10,6 +10,7 @@ import type { SessionNode } from '../types';
 import { isPathWithinProject, normalizePath } from '../utils';
 import { buildWorktreeByPathIndex } from '../worktreeIndex';
 import { compareSessionsByLifecycleOrder, useSessionOrderingStore } from '@/sync/session-ordering';
+import { useOpenTurnSessionIds } from '@/sync/use-open-turn-session-ids';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { isChatDirectoryPath } from '@/lib/chatDirectories';
@@ -67,6 +68,7 @@ export const selectSwitcherParents = (
   getProjectId: (session: Session) => string | null,
   maxParents = MAX_PARENT_SESSIONS,
   isExcluded?: (session: Session) => boolean,
+  openTurnSessionIds?: ReadonlySet<string>,
 ): Session[] => {
   const sessionsById = new Map(activeSessions.map((session) => [session.id, session]));
   const isEligibleParent = (session: Session): boolean => {
@@ -78,7 +80,7 @@ export const selectSwitcherParents = (
   };
   const parents = activeSessions
     .filter(isEligibleParent)
-    .sort((a, b) => compareSessionsByLifecycleOrder(a, b, pinnedSessionIds, sessionOrderRanks));
+    .sort((a, b) => compareSessionsByLifecycleOrder(a, b, pinnedSessionIds, sessionOrderRanks, openTurnSessionIds));
 
   const currentSession = currentSessionId ? sessionsById.get(currentSessionId) ?? null : null;
   let currentRoot: Session | null = currentSession?.time?.archived ? null : currentSession;
@@ -108,6 +110,7 @@ export const useSwitcherItems = (enabled: boolean, options: SwitcherItemsOptions
   const projects = useProjectsStore((state) => state.projects);
   const pinnedSessionIds = useSessionPinnedStore((state) => state.ids);
   const sessionOrderRanks = useSessionOrderingStore((state) => state.rankById);
+  const openTurnSessionIds = useOpenTurnSessionIds(enabled);
   const branchesByDirectory = useGitAllBranches();
   const availableWorktreesByProject = useSessionUIStore((state) => state.availableWorktreesByProject);
   const isVSCode = React.useMemo(() => isVSCodeRuntime(), []);
@@ -159,7 +162,7 @@ export const useSwitcherItems = (enabled: boolean, options: SwitcherItemsOptions
       }
     }
     childrenByParent.forEach((list) => {
-      list.sort((a, b) => compareSessionsByLifecycleOrder(a, b, pinnedSessionIds, sessionOrderRanks));
+      list.sort((a, b) => compareSessionsByLifecycleOrder(a, b, pinnedSessionIds, sessionOrderRanks, openTurnSessionIds));
     });
 
     const parents = selectSwitcherParents(
@@ -172,6 +175,7 @@ export const useSwitcherItems = (enabled: boolean, options: SwitcherItemsOptions
       maxParents,
       // btw forks stay hidden until promoted to a full session
       (session) => isBtwSession(session) || (isVSCode && isChatDirectoryPath(resolveGlobalSessionDirectory(session))),
+      openTurnSessionIds,
     );
 
     const buildNode = (session: Session): SessionNode => {
@@ -202,7 +206,7 @@ export const useSwitcherItems = (enabled: boolean, options: SwitcherItemsOptions
         },
       };
     });
-  }, [activeSessions, branchesByDirectory, currentSessionId, enabled, findProjectForDirectory, isVSCode, maxParents, pinnedSessionIds, scopeProjectId, sessionOrderRanks, worktreeByPath]);
+  }, [activeSessions, branchesByDirectory, currentSessionId, enabled, findProjectForDirectory, isVSCode, maxParents, openTurnSessionIds, pinnedSessionIds, scopeProjectId, sessionOrderRanks, worktreeByPath]);
 
   return items;
 };

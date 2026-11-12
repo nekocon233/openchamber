@@ -10,7 +10,7 @@ const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
 describe('MobileSessionsSheet session structure', () => {
   test('partitions managed chats and derives the Pinned and In work zones', () => {
     expect(source).toContain('partitionSidebarSessions(sessions, false)');
-    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks)');
+    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks, undefined, { openTurnSessionIds })');
     expect(source).toContain('const pinnedZoneSessionIds = React.useMemo');
     expect(source).toContain('isSessionPinned(pinnedSessionIds, directory || null, session.id)');
     expect(source).toContain('const workSessionIds = React.useMemo');
@@ -22,11 +22,8 @@ describe('MobileSessionsSheet session structure', () => {
 
   test('sorts the Pinned zone with open turns before recent activity', () => {
     expect(source).toContain('comparePinnedZoneSessions');
-    expect(source).toContain('getOpenTurnSessionIds(activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession)');
-    expect(source).toContain('{ compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) }');
-    expect(source).toContain('heldActiveSessionIdsRef');
-    expect(source).toContain('heldBackgroundShellIdsRef');
-    expect(source).toContain('heldBackgroundTasksRef');
+    expect(source).toContain('useOpenTurnSessionIds(presented)');
+    expect(source).toContain('{ openTurnSessionIds, compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) }');
   });
 
   test('renders Chats, Pinned and In work, then the project tree with stable bucket identity', () => {

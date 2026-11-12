@@ -14,6 +14,7 @@ import { isChatDirectoryPath } from '@/lib/chatDirectories';
 import { isBtwSession } from '@/lib/sessionBtwMetadata';
 import type { GlobalSessionStructure } from '@/stores/globalSessionStructure';
 import { countSyncPerformance } from '@/sync/performance-diagnostics';
+import { useOpenTurnSessionIds } from '@/sync/use-open-turn-session-ids';
 import type { SessionNode } from '../types';
 
 type ProjectSidebarActiveSessionsArgs = {
@@ -166,6 +167,7 @@ export const buildZoneSessionNode = (
 type SidebarSessionProjectionArgs = ProjectSidebarActiveSessionsArgs & {
   pinnedSessionIds: Set<string>;
   sessionOrderRanks: ReadonlyMap<string, number>;
+  openTurnSessionIds?: ReadonlySet<string>;
 };
 
 type SidebarSessionStructureArgs = Omit<ProjectSidebarActiveSessionsArgs, 'globalActiveSessions'> & {
@@ -227,12 +229,14 @@ const orderSidebarSessionStructure = (
   structure: ReturnType<typeof buildSidebarSessionStructure>,
   pinnedSessionIds: Set<string>,
   sessionOrderRanks: ReadonlyMap<string, number>,
+  openTurnSessionIds?: ReadonlySet<string>,
 ) => {
   const orderedSessions = orderSessionsByLifecycleScopes(
     structure.sessions,
     pinnedSessionIds,
     sessionOrderRanks,
     structure.hierarchy,
+    { openTurnSessionIds },
   );
   const childrenMap = new Map<string, Session[]>();
   for (const session of orderedSessions) {
@@ -256,6 +260,7 @@ export const buildSidebarSessionProjection = ({
   isVSCode,
   pinnedSessionIds,
   sessionOrderRanks,
+  openTurnSessionIds,
 }: SidebarSessionProjectionArgs) => {
   const structure = buildSidebarSessionStructure({
     globalActiveSessions,
@@ -263,7 +268,7 @@ export const buildSidebarSessionProjection = ({
     knownDirectories,
     isVSCode,
   });
-  const ordering = orderSidebarSessionStructure(structure, pinnedSessionIds, sessionOrderRanks);
+  const ordering = orderSidebarSessionStructure(structure, pinnedSessionIds, sessionOrderRanks, openTurnSessionIds);
   return {
     ...ordering,
     projectSessions: structure.projectSessions,
@@ -295,6 +300,7 @@ export const useSessionProjectCollection = ({
     (state) => isVisible ? state.rankById : EMPTY_SESSION_ORDER_RANKS,
     [isVisible],
   ));
+  const openTurnSessionIds = useOpenTurnSessionIds(isVisible);
   const globalSessionIds = React.useMemo(
     () => new Set(globalActiveSessions.map((session) => session.id)),
     [globalActiveSessions],
@@ -311,8 +317,8 @@ export const useSessionProjectCollection = ({
     isVSCode,
   }), [globalActiveSessions, globalStructure, isVSCode, knownDirectories, liveGapSessions]);
   const ordering = React.useMemo(
-    () => orderSidebarSessionStructure(structure, pinnedSessionIds, sessionOrderRanks),
-    [pinnedSessionIds, sessionOrderRanks, structure],
+    () => orderSidebarSessionStructure(structure, pinnedSessionIds, sessionOrderRanks, openTurnSessionIds),
+    [openTurnSessionIds, pinnedSessionIds, sessionOrderRanks, structure],
   );
   const { chatSessions, orderedSessions } = ordering;
   const sessions = structure.projectSessions;
@@ -345,6 +351,7 @@ export const useSessionProjectCollection = ({
     getDescendantIds: getDescendantIdsForAction,
     hasAuthoritativeGlobalSessions,
     orderedSessions,
+    openTurnSessionIds,
     pinnedSessionIds,
     sessionOrderRanks,
     sessions,

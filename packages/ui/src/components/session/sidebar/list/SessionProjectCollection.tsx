@@ -56,9 +56,6 @@ import { countSessionTreeQueryMatches, deriveTimelineActivityItems, sessionTreeM
 import { resolveSidebarSessionLocations } from '../recent/sessionLocation';
 import { buildSessionSidebarRowModel, timelineProjectContainerKey } from '../sessionSidebarRowModel';
 import { comparePinnedZoneSessions } from '@/sync/session-ordering';
-import { getOpenTurnSessionIds, useGlobalSessionStatusStore } from '@/sync/global-session-status';
-import { useBackgroundShellsStore } from '@/sync/background-shells';
-import { useSessionBackgroundTasksStore } from '@/sync/session-background-tasks';
 import { useSidebarGroupStatus } from './useSidebarGroupStatus';
 import { getSessionFolderOwnerKey, getSessionFolderScopes } from '../sessions/sessionFolderIdentity';
 import { SessionRowOrderProvider } from '../sessions/sessionRowOrder';
@@ -403,7 +400,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     shownProjectOrderRef.current = orderedSectionsForRender.map((section) => section.project.id);
   }, [orderedSectionsForRender]);
   // Timeline lists the project sessions themselves, in the shared lifecycle
-  // order (pinned first), with no project, worktree, or folder structure.
+  // order, with no project, worktree, or folder structure.
   const timelineItems = React.useMemo(() => {
     if (!timelineMode) return EMPTY_TIMELINE_ITEMS;
     const rootIds = new Set(collection.rootSessions.map((session) => session.id));
@@ -444,13 +441,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const showWorkSection = useSessionDisplayStore((state) => state.showWorkSection);
   const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
   const detailedZoneRows = useSessionDisplayStore((state) => state.detailedZoneRows);
-  const activeSessionIds = useGlobalSessionStatusStore((state) => state.activeSessionIds);
-  const backgroundShellSessionIds = useBackgroundShellsStore((state) => state.sessionIds);
-  const backgroundTasksBySession = useSessionBackgroundTasksStore((state) => state.tasksBySession);
-  const openTurnSessionIds = React.useMemo(
-    () => getOpenTurnSessionIds(activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession),
-    [activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession],
-  );
+  const openTurnSessionIds = collection.openTurnSessionIds;
   const zoneSessions = React.useMemo((): ZoneSessions => {
     const showWork = sessionWorkEnabled && showWorkSection;
     if (!showWork && !showPinnedSection) return EMPTY_ZONE_SESSIONS;
