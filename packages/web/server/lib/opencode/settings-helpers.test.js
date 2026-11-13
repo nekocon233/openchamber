@@ -762,6 +762,24 @@ describe('settings helpers', () => {
   });
 
   describe('previously-dropped model selector persistence fields', () => {
+    it('preserves favorite effort snapshots without changing recent or hidden references', () => {
+      const helpers = createTestHelpersWithRealSanitizers();
+      const input = [
+        { providerID: 'codex-native', modelID: 'gpt', variant: ' max-fast ' },
+        { providerID: 'claude-native', modelID: 'opus', variant: null },
+        { providerID: 'claude-native', modelID: 'sonnet' },
+        { providerID: 'claude-native', modelID: 'haiku', variant: 42 },
+      ];
+      const sanitized = helpers.sanitizeSettingsUpdate({ favoriteModels: input, recentModels: input, hiddenModels: input });
+      const refs = input.map(({ providerID, modelID }) => ({ providerID, modelID }));
+      expect(sanitized.favoriteModels).toEqual([
+        { ...refs[0], variant: 'max-fast' }, { ...refs[1], variant: null }, refs[2], refs[3],
+      ]);
+      expect(sanitized.recentModels).toEqual(refs);
+      expect(sanitized.hiddenModels).toEqual(refs);
+      expect(helpers.sanitizeSettingsUpdate(JSON.parse(JSON.stringify(sanitized)))).toEqual(sanitized);
+    });
+
     it('round-trips hiddenModels through the sanitizer', () => {
       const helpers = createTestHelpersWithRealSanitizers();
       const input = [

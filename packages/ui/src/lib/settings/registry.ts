@@ -611,7 +611,7 @@ export const SETTINGS_REGISTRY = {
   accountSwitchProviders: field({ scope: 'profile', parse: parseStringSet }),
   zenModel: field({ scope: 'profile', parse: parseNonEmptyTrimmedString }),
   // The model-prefs auto-save owns these preferences and its lifecycle flush.
-  favoriteModels: field<ModelRef[]>({ scope: 'profile', parse: parseModelRefs(64), ui: uiStore('favoriteModels', setUi('favoriteModels'), { autoSave: false }) }),
+  favoriteModels: field<ModelRef[]>({ scope: 'profile', parse: parseModelRefs(64, true), ui: uiStore('favoriteModels', setUi('favoriteModels'), { autoSave: false }) }),
   favoriteAgentCombinations: field({ scope: 'profile', parse: fromSchema(favoriteAgentCombinationIdsSchema), ui: uiStore('favoriteAgentCombinations', setUi('favoriteAgentCombinations'), { autoSave: false }) }),
   favoritePickerOrder: field({ scope: 'profile', parse: parseStringSet, ui: uiStore('favoritePickerOrder', setUi('favoritePickerOrder'), { autoSave: false }) }),
   agentCombinationOrder: field({ scope: 'profile', parse: fromSchema(favoriteAgentCombinationIdsSchema), ui: uiStore('agentCombinationOrder', setUi('agentCombinationOrder'), { autoSave: false }) }),

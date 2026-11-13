@@ -1019,6 +1019,19 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         return liveConfigAgentName || currentAgentName;
     }, [currentAgentName, currentSessionId, selection]);
 
+    const resolvePickerVariant = (entry: ModelPickerEntry): string | null | undefined => {
+        const variantOptions = getModelVariantOptions(entry.providerID, entry.modelID);
+        if (variantOptions.length === 0) return undefined;
+        const key = buildModelRefKey(entry.providerID, entry.modelID);
+        if (pendingThinkingVariants.has(key)) return pendingThinkingVariants.get(key) ?? null;
+        if (entry.variant !== undefined) return entry.variant;
+        if (entry.providerID === currentProviderId && (entry.modelID === currentModelId || entry.modelID === currentCatalogModelId)) {
+            return currentVariant ?? null;
+        }
+        const recorded = resolveModelVariantSelection(entry.providerID, entry.modelID);
+        return recorded === undefined && !selection ? preferredModelVariant(variantOptions) ?? null : recorded ?? null;
+    };
+
     /**
      * Records `variant` as this session's effort for the model, in the same
      * three states the selection store defines: an effort name, `null` for an
@@ -2101,14 +2114,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 : mergeModelMetadataWithLiveModel(providerId, entry.model, getModelMetadata(providerId, modelId));
             const variantOptions = getModelVariantOptions(providerId, modelId);
             const hasVariants = variantOptions.length > 0;
-            const resolvedVariant = resolveModelVariantSelection(providerId, modelId);
-            // The row shows, and applies, the level the model runs at: the
-            // recorded choice, otherwise the main composer's preferred level.
-            // A controlled selection (BTW, pinned column, parallel lane) keeps
-            // its own semantics.
-            const rowVariant = !selection && resolvedVariant === undefined
-                ? preferredModelVariant(variantOptions)
-                : resolvedVariant;
+            const rowVariant = resolvePickerVariant(entry);
             // Both an explicit "Default" and no level at all read as "Default".
             const variantLabel = hasVariants ? formatEffortLabel(rowVariant ?? undefined) : null;
             const isExpanded = expandedMobileModelKey === rowKey;
@@ -2202,7 +2208,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 onClick={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    toggleFavoriteModel(providerId, modelId);
+                                    toggleFavoriteModel(providerId, modelId, rowVariant);
                                 }}
                                 className={cn(
                                     'model-favorite-button flex size-5 items-center justify-center hover:text-primary/80 flex-shrink-0',
@@ -2689,14 +2695,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             e.stopPropagation();
 
             const mapKey = buildModelRefKey(providerID, modelID);
-            const hasPendingVariant = pendingThinkingVariants.has(mapKey);
-            const currentPending = pendingThinkingVariants.get(mapKey);
-            // An unadjusted row starts its cycle at the level it would run at.
-            const activeModelVariant = hasPendingVariant
-                ? currentPending
-                : (currentProviderId === providerID && currentModelId === modelID
-                    ? currentVariant
-                    : (!selection ? preferredModelVariant(variantKeys) : undefined));
+            const activeModelVariant = resolvePickerVariant(selectedItem) ?? undefined;
 
             const variantsWithDefault: Array<string | undefined> = [undefined, ...variantKeys];
             const currentVariantIndex = variantsWithDefault.indexOf(activeModelVariant);
@@ -2738,8 +2737,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const wasAdjusted = adjustedThinkingModels.has(mapKey);
             const effectiveAgentName = resolveLiveAgentName();
 
-            handleProviderAndModelChange(entry.providerID, entry.modelID, wasAdjusted
-                ? { applyVariant: true, variant: pendingVariant, agentName: effectiveAgentName }
+            handleProviderAndModelChange(entry.providerID, entry.modelID, wasAdjusted || entry.variant !== undefined
+                ? { applyVariant: true, variant: wasAdjusted ? pendingVariant : entry.variant ?? undefined, agentName: effectiveAgentName }
                 : { agentName: effectiveAgentName });
         };
 
@@ -2782,14 +2781,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const wasAdjusted = adjustedThinkingModels.has(mapKey);
             if (!hasThinkingVariants || (!isHighlighted && !isSelected)) return null;
 
-            const hasPendingVariant = pendingThinkingVariants.has(mapKey);
-            const pendingVariant = pendingThinkingVariants.get(mapKey);
-            // A row previews the level the model would run at: the main
-            // composer's preferred level when nothing names one. A controlled
-            // selection keeps its own Default.
-            const effectiveVariant = hasPendingVariant
-                ? pendingVariant
-                : (isSelected ? currentVariant : (!selection ? preferredModelVariant(entryVariants) : undefined));
+            const effectiveVariant = resolvePickerVariant(entry);
             const displayLabel = effectiveVariant
                 ? effectiveVariant.charAt(0).toUpperCase() + effectiveVariant.slice(1)
                 : 'Default';
@@ -2916,7 +2908,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 onActiveEntryChange={(entry) => { activeModelPickerEntryRef.current = entry; }}
                                 onVariantKey={handleThinkingVariantKey}
                                 isFavorite={(entry) => isFavoriteModel(entry.providerID, entry.modelID)}
-                                onToggleFavorite={(entry) => toggleFavoriteModel(entry.providerID, entry.modelID)}
+                                onToggleFavorite={(entry) => toggleFavoriteModel(entry.providerID, entry.modelID, resolvePickerVariant(entry))}
                                 renderRowEnd={renderThinkingSlot}
                                 renderVersion={modelPickerRenderVersion}
                                 providerOrder={providerOrder}

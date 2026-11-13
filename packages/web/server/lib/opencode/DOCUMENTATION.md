@@ -577,7 +577,10 @@ ConPTY or Console Window Host behavior.
   - `isUnsafeSkillRelativePath(value)`
   - `sanitizeTypographySizesPartial(input)`
   - `normalizeStringArray(input)`
-  - `sanitizeModelRefs(input, limit)`
+  - `sanitizeModelRefs(input, limit, includeVariant = false)`: favorites opt in
+    to retaining the optional effort snapshot described in
+    `packages/ui/src/lib/settings/DOCUMENTATION.md`; recent and hidden model
+    references remain model-only.
   - `sanitizeSkillCatalogs(input)`
   - `sanitizeProjects(input)`
 

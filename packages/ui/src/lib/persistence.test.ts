@@ -1012,6 +1012,28 @@ describe('updateDesktopSettings', () => {
     expect(state.notifyOnError).toBe(false);
   });
 
+  test('autosaves an effort-only change to an existing favorite', async () => {
+    getWindow();
+    const saves: Array<Partial<SettingsPayload>> = [];
+    registerSettingsSave(async (changes) => {
+      saves.push(changes);
+      return changes;
+    });
+    const stop = startModelPrefsAutoSave();
+    try {
+      const ref = { providerID: 'claude-native', modelID: 'opus' };
+      useUIStore.setState({ favoriteModels: [{ ...ref, variant: 'low' }] });
+      await delay(300);
+      expect(saves.at(-1)?.favoriteModels).toEqual([{ ...ref, variant: 'low' }]);
+      useUIStore.setState({ favoriteModels: [{ ...ref, variant: null }] });
+      await delay(300);
+      expect(saves.at(-1)?.favoriteModels).toEqual([{ ...ref, variant: null }]);
+      expect(useUIStore.getState().favoriteModels).toEqual([{ ...ref, variant: null }]);
+    } finally {
+      stop();
+    }
+  });
+
   test('autosaves all model selector settings fields', async () => {
     getWindow();
     const saveCalls: Array<Partial<SettingsPayload>> = [];

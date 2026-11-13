@@ -23,6 +23,39 @@ import { renderSettingsRegistrySnapshot, SETTINGS_REGISTRY_SNAPSHOT_PATHS } from
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 
 describe('settings registry', () => {
+  test('round-trips favorite effort snapshots and keeps old model-only favorites', async () => {
+    const original = useUIStore.getState();
+    const options = useUIStore.persist.getOptions();
+    const favorites = [
+      { providerID: 'codex-native', modelID: 'gpt', variant: 'max-fast' },
+      { providerID: 'claude-native', modelID: 'opus', variant: null },
+      { providerID: 'claude-native', modelID: 'sonnet' },
+    ];
+    try {
+      const parsed = parseSettingsDocument(JSON.parse(JSON.stringify({ favoriteModels: favorites })));
+      expect(parsed).toEqual({ favoriteModels: favorites });
+      if (!parsed) throw new Error('Expected valid favorites');
+      applySettingsToStores(parsed);
+      let saved: Parameters<NonNullable<typeof options.storage>['setItem']>[1] = { state: original, version: options.version };
+      useUIStore.persist.setOptions({ storage: { getItem: () => saved, setItem: (_name, value) => { saved = value; }, removeItem: () => undefined } });
+      useUIStore.getState().toggleFavoriteModel('claude-native', 'fable', 'low');
+      expect(useUIStore.getState().favoriteModels[0]).toEqual({ providerID: 'claude-native', modelID: 'fable', variant: 'low' });
+      const persisted = saved;
+      useUIStore.setState({ favoriteModels: [] });
+      useUIStore.persist.setOptions({ storage: { getItem: () => persisted, setItem: () => undefined, removeItem: () => undefined } });
+      await useUIStore.persist.rehydrate();
+      expect(useUIStore.getState().favoriteModels).toEqual([{ providerID: 'claude-native', modelID: 'fable', variant: 'low' }, ...favorites]);
+      expect(parseSettingsDocument({ favoriteModels: [{ ...favorites[0], variant: 42 }] })?.favoriteModels?.[0]?.variant).toBeUndefined();
+      expect(parseSettingsDocument({ recentModels: favorites, hiddenModels: favorites })).toEqual({
+        recentModels: favorites.map(({ providerID, modelID }) => ({ providerID, modelID })),
+        hiddenModels: favorites.map(({ providerID, modelID }) => ({ providerID, modelID })),
+      });
+    } finally {
+      useUIStore.persist.setOptions(options);
+      useUIStore.setState(original, true);
+    }
+  });
+
   test('round-trips default combination references globally and on projects', () => {
     const id = '11111111-1111-4111-8111-111111111111';
     const parsed = parseSettingsDocument({ defaultAgentCombinationId: id, projects: [{ path: '/repo', defaultAgentCombinationId: id }] });

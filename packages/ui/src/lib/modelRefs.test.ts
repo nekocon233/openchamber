@@ -44,6 +44,27 @@ describe('resolveModelRefs', () => {
 });
 
 describe('getNextFavoriteModel', () => {
+  test('keeps supported favorite efforts and Default while ignoring obsolete efforts', () => {
+    const catalog = [{
+      ...provider('anthropic', ['opus', 'sonnet', 'haiku']),
+      models: ['opus', 'sonnet', 'haiku'].map((id) => ({
+        ...model('anthropic', id),
+        variants: [{ id: 'low', settings: {} }, { id: 'max-fast', settings: {} }],
+      })),
+    }];
+    const saved = [
+      { ...ref('anthropic', 'opus'), variant: 'max-fast' },
+      { ...ref('anthropic', 'sonnet'), variant: null },
+      { ...ref('anthropic', 'haiku'), variant: 'removed' },
+    ];
+    expect(getNextFavoriteModel(saved, catalog, [], ref('anthropic', 'haiku'), 1)).toEqual(saved[0]);
+    expect(getNextFavoriteModel(saved, catalog, [], ref('anthropic', 'opus'), 1)).toEqual(saved[1]);
+    expect(getNextFavoriteModel(saved, catalog, [], ref('anthropic', 'sonnet'), 1)).toEqual(ref('anthropic', 'haiku'));
+    expect(saved[2].variant).toBe('removed');
+    expect(resolveModelRefs(saved, [], [])).toEqual([]);
+    expect(resolveModelRefs(saved, catalog, [ref('anthropic', 'sonnet')]).map(({ variant }) => variant)).toEqual(['max-fast', undefined]);
+  });
+
   test('cycles forward and backward over resolvable favorites only', () => {
     expect(getNextFavoriteModel(favorites, providers, [], ref('anthropic', 'opus'), 1)).toEqual(ref('anthropic', 'sonnet'));
     expect(getNextFavoriteModel(favorites, providers, [], ref('anthropic', 'sonnet'), 1)).toEqual(ref('anthropic', 'opus'));

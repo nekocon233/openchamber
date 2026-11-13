@@ -40,6 +40,7 @@ export type ModelPickerProvider = {
 export type ModelPickerEntry = {
   providerID: string;
   modelID: string;
+  variant?: string | null;
 } & (
   | { kind?: 'model'; model: ProviderModel }
   | { kind: 'auto'; model: Pick<ProviderModel, 'id' | 'name'> }

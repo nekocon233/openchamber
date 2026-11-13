@@ -21,6 +21,10 @@ around it, the footer's text and what a pick does.
   Rows of one section sit in a `role="group"` named after it.
 - Recent leaves out models Favorites already lists. Provider sections always
   list every model of the provider.
+- Favorite rows carry their saved effort snapshot through `onSelect`. Model-only
+  rows carry no snapshot. The composer owns applying it and capturing the
+  displayed or keyboard-adjusted effort on star; the settings contract lives
+  in `lib/settings/DOCUMENTATION.md`.
 - At rest a row shows its logo where the section does not say the provider,
   its name, its context size and a set star. An empty star, the section
   chevron of an open section and the effort a row would run with appear on
