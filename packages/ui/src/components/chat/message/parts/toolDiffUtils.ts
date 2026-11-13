@@ -159,15 +159,9 @@ export const getApplyPatchFilePath = (file: unknown): string | null => {
 
     // v2 reports `file` (FileDiff.Info); the other keys keep MCP and plugin
     // tools that use the older naming working.
-    return typeof file.file === 'string'
-        ? file.file
-        : typeof file.movePath === 'string'
-            ? file.movePath
-            : typeof file.filePath === 'string'
-                ? file.filePath
-                : typeof file.relativePath === 'string'
-                    ? file.relativePath
-                    : null;
+    const path = [file.file, file.movePath, file.filePath, file.relativePath]
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    return path?.trim() ?? null;
 };
 
 /** v2 file tools report `path`; the other keys cover MCP and plugin tools. */

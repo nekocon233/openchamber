@@ -42,6 +42,21 @@ const files = [
 ];
 
 describe('ApplyPatchFileButtons', () => {
+    test('retains a visible path when absolute and relative records merge to one chip', () => {
+        const markup = renderToStaticMarkup(
+            <ApplyPatchFileButtons
+                currentDirectory="/workspace/project"
+                metadata={{ files: [files[0], { relativePath: 'src/first.ts', additions: 2, deletions: 1 }] }}
+                openDiffLabel="Open file diff"
+                onFileClick={() => undefined}
+            />,
+        );
+        expect(markup.match(/<button/g)).toHaveLength(1);
+        expect(markup).toContain('aria-label="Open file diff: src/first.ts"');
+        expect(markup).toContain('src/first.ts</bdi>');
+        expect(markup).toContain('+3');
+    });
+
     test('renders one labeled button per non-deleted file, paths relative to the project', () => {
         const markup = renderToStaticMarkup(
             <ApplyPatchFileButtons

@@ -72,7 +72,11 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?:
             {shown.map((file) => (
                 <div key={file.id}>
                     {namesFiles ? (
-                        <div className="truncate px-2 pt-1 typography-meta" style={{ color: 'var(--tools-description)' }}>{file.title}</div>
+                        <div className="px-2 pt-1 typography-meta" style={{ color: 'var(--tools-description)' }}>
+                            <div dir="rtl" className="truncate" style={{ unicodeBidi: 'isolate' }} title={file.title}>
+                                <bdi dir="ltr">{file.title}</bdi>
+                            </div>
+                        </div>
                     ) : null}
                     {file.rows.map((row, index) => <DiffRow key={index} row={row} showLineNumbers={showLineNumbers} />)}
                 </div>

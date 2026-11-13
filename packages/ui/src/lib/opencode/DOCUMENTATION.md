@@ -23,6 +23,11 @@ to the shared UI domain model. Sync owns transcript membership and store writes.
   and statuses. Invalid or incomplete input is unknown; an explicit empty list
   is a clear. This presentation contract does not add an OpenCode built-in or
   change the original tool record.
+- File identities accept v2 `file` and native `movePath`, `filePath` and
+  `relativePath` fields. Reported files take precedence over Patch input;
+  native Codex `input.files` and v2 patch headers keep paths visible before
+  results arrive or after failure. Duplicate identities name one file, and a
+  malformed sibling cannot erase valid paths. Source records stay unchanged.
 - A send that switches the session's agent first reads the folder's agent list.
   Sync also passes the agent when the session already sits on one the folder's
   loaded catalog lacks, so that session gets the same check.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ToolInput } from "./model"
+import type { Metadata, ToolInput } from "./model"
 
 import {
   patchInputFiles,
@@ -99,6 +99,23 @@ describe("tool input and metadata", () => {
     expect(files).toEqual([{ file: "a.ts", patch: "@@", additions: 2, deletions: 1, status: "modified" }])
   })
 
+  test("reads native and legacy file identities without losing valid siblings", () => {
+    const metadata: Metadata = { files: [
+      { filePath: "/work/a.ts", additions: 1, deletions: 2 },
+      { file: " ", filePath: "/work/old.ts", movePath: "/work/new.ts" },
+      { relativePath: "src/legacy.ts" },
+      { file: "src/v2.ts", movePath: "/ignored.ts" },
+      { file: 42 },
+      null,
+    ] }
+    const before = structuredClone(metadata)
+    expect(toolFileDiffs(metadata).map((file) => file.file))
+      .toEqual(["/work/a.ts", "/work/new.ts", "src/legacy.ts", "src/v2.ts"])
+    expect(toolFileDiffs(metadata)[0]?.additions).toBe(1)
+    expect(toolFileDiffs(metadata)[0]?.deletions).toBe(2)
+    expect(metadata).toEqual(before)
+  })
+
   test("reads the subagent child session from metadata", () => {
     expect(subagentSessionId({ sessionID: "ses_child", status: "running" })).toBe("ses_child")
     expect(subagentSessionId({})).toBe(undefined)
@@ -164,6 +181,21 @@ describe("tool row description", () => {
     // Reported diffs win over the text once the tool ran.
     expect(toolDescription("patch", { patchText }, { files: [{ file: "src/a.ts" }] }))
       .toEqual({ kind: "path", value: "src/a.ts" })
+  })
+
+  test("native file changes keep their paths while running and after the result", () => {
+    const input = { files: ["/work/a.ts", "", 42, null, "/work/a.ts", "/work/b.ts"] }
+    expect(patchInputFiles(input)).toEqual(["/work/a.ts", "/work/b.ts"])
+    expect(toolDescription("apply_patch", input, undefined))
+      .toEqual({ kind: "files", count: 2, files: ["/work/a.ts", "/work/b.ts"] })
+    expect(toolDescription("apply_patch", input, { files: [{ filePath: "/work/done.ts", type: "delete" }] }))
+      .toEqual({ kind: "path", value: "/work/done.ts" })
+    expect(toolDescription("apply_patch", {}, { files: [{ filePath: "/work/a.ts" }, { filePath: "/work/a.ts" }, null] }))
+      .toEqual({ kind: "path", value: "/work/a.ts" })
+    for (const tool of ["edit", "write"]) {
+      expect(toolDescription(tool, {}, { files: [{ filePath: "/work/from-result.ts" }] }))
+        .toEqual({ kind: "path", value: "/work/from-result.ts" })
+    }
   })
 
   test("the opencode namespace tools and skill describe their own input", () => {

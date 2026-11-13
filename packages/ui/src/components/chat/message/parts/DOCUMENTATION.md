@@ -120,8 +120,19 @@ Line alignment is bounded to 200 lines after trimming identical edges; larger
 replacement middles retain their literal removed/added display. Noncontiguous
 or unparseable patches keep the original preview. Missing final newlines stay
 part of the comparison, and patch normalization preserves trailing content
-spaces. Concise file-tool arguments preserve the basename and truncate the
-directory, with the untruncated display path in the tooltip.
+spaces. File-tool arguments preserve the basename and truncate the directory
+from its start, with the untruncated display path in the tooltip. Multi-file
+Patch arguments name the paths, and their preview headings and standard-row
+chips retain the path tail too. Files a command recorded without a diff follow
+the same truncation rule.
+
+### Why path clipping separates layout direction from text direction
+
+Path clipping uses an RTL box around LTR-isolated text, so ellipsis removes the
+path's beginning while the characters retain their recorded order. A
+`unicode-bidi: plaintext` clipping box chose the paragraph direction from the
+path's Latin text and kept the beginning instead. File basenames have priority
+over directory space; a basename wider than its row also retains its tail.
 
 ### Bidirectional prose
 

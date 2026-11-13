@@ -211,7 +211,7 @@ test('the concise transcript shows a call as Name(argument) over one result line
 
     await render(replacementEdit);
     expect(row()?.textContent).toBe(`Edit(${replacementPath})`);
-    expect([...container.querySelectorAll('span')].some((span) => span.children.length === 0 && span.textContent === 'example.ts')).toBe(true);
+    expect([...container.querySelectorAll(`[title="${replacementPath}"]`)].some((element) => element.textContent === replacementPath)).toBe(true);
     expect(container.textContent?.split('unchanged before')).toHaveLength(2);
     expect(container.querySelectorAll('[style*="--tools-edit-removed-bg"]')).toHaveLength(1);
     expect(container.querySelectorAll('[style*="--tools-edit-added-bg"]')).toHaveLength(1);
@@ -262,6 +262,46 @@ test('the concise transcript shows a call as Name(argument) over one result line
     await render(failedWrite, true);
     expect(container.textContent).toContain('exists.ts already exists.');
     expect(container.textContent).not.toContain('--- /dev/null');
+
+    const nativePatchPath = '/workspace/packages/ui/src/native.ts';
+    const nativePatchFiles = [
+      { filePath: nativePatchPath, type: 'update', diff: '--- a/native.ts\n+++ b/native.ts\n@@ -1 +1 @@\n-before\n+after\n', additions: 1, deletions: 1 },
+      { filePath: '/workspace/packages/ui/src/deleted.ts', type: 'delete', diff: '', additions: 0, deletions: 1 },
+    ];
+    const nativePatchState: Extract<ToolPartData['state'], { status: 'completed' }> = {
+      status: 'completed', input: { files: [nativePatchPath] }, output: '',
+      metadata: { files: nativePatchFiles.slice(0, 1) }, time: { start: 1, end: 2 },
+    };
+    await render(toolPart('prt_native_patch', 'apply_patch', nativePatchState));
+    expect(row()?.textContent).toBe(`Patch(${nativePatchPath})+1-1`);
+    await render(toolPart('prt_native_patch_running', 'apply_patch', {
+      status: 'running', input: { files: [nativePatchPath] }, time: { start: 1 },
+    }));
+    expect(row()?.textContent).toBe(`Patch(${nativePatchPath})`);
+    await render(toolPart('prt_native_patch_failed', 'apply_patch', {
+      status: 'error', input: { files: [nativePatchPath] }, error: 'Patch rejected.', time: { start: 1, end: 2 },
+    }));
+    expect(row()?.textContent).toBe(`Patch(${nativePatchPath})Patch rejected.`);
+    await render(toolPart('prt_native_patch_deleted', 'apply_patch', {
+      ...nativePatchState, metadata: { files: nativePatchFiles.slice(1) },
+    }));
+    expect(row()?.textContent).toContain('Patch(/workspace/packages/ui/src/deleted.ts)');
+    await render(toolPart('prt_native_patch_many', 'apply_patch', {
+      ...nativePatchState, metadata: { files: nativePatchFiles },
+    }));
+    expect(row()?.textContent).toContain(`Patch(${nativePatchPath}, /workspace/packages/ui/src/deleted.ts)`);
+
+    // Standard headers also keep native paths when records repeat a file or
+    // include a malformed sibling, rather than switching to an empty chip row.
+    await act(async () => { useUIStore.setState({ conciseTranscript: false }); });
+    for (const files of [nativePatchFiles, [nativePatchFiles[0], nativePatchFiles[0]], [nativePatchFiles[0], null],
+      [{ ...nativePatchFiles[0], file: '' }, nativePatchFiles[1]]]) {
+      await render(toolPart('prt_native_standard', 'apply_patch', {
+        ...nativePatchState, metadata: { files },
+      }));
+      expect(container.querySelector('[role="button"]')?.textContent).toContain(nativePatchPath);
+    }
+    await act(async () => { useUIStore.setState({ conciseTranscript: true }); });
 
     await render(failed);
     expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');

@@ -12,7 +12,6 @@ import { getApplyPatchFilePath } from './toolDiffUtils';
 type ApplyPatchFileEntry = {
     file: Record<string, unknown>;
     path: string;
-    name: string;
     added: number | null;
     removed: number | null;
 };
@@ -62,7 +61,6 @@ const getApplyPatchFileEntries = (metadata: Record<string, unknown> | undefined,
         entriesByPath.set(displayPath, {
             file: fileRecord,
             path: displayPath,
-            name: displayPath.split('/').pop() || displayPath,
             added,
             removed,
         });
@@ -90,7 +88,7 @@ export const ApplyPatchFileButtons = ({
     textClassName?: string;
 }): React.ReactNode => {
     const entries = getApplyPatchFileEntries(metadata, currentDirectory);
-    if (entries.length <= 1) return null;
+    if (entries.length === 0) return null;
 
     return (
         <>
@@ -102,10 +100,10 @@ export const ApplyPatchFileButtons = ({
                         <Text
                             variant={animate ? 'generate-effect' : 'static'}
                             className={cn('min-w-0 max-w-full truncate', textClassName)}
-                            style={{ color: 'var(--tools-description)' }}
+                            style={{ color: 'var(--tools-description)', direction: 'rtl', unicodeBidi: 'isolate' }}
                             title={entry.path}
                         >
-                            {entry.name}
+                            <bdi dir="ltr">{entry.path}</bdi>
                         </Text>
                         {hasPerFileDiff ? (
                             <span className="flex-shrink-0 inline-flex items-center gap-0 typography-meta" style={{ fontSize: '0.8rem', lineHeight: '1' }}>

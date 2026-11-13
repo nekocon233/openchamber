@@ -34,7 +34,9 @@ export const ChangedFilesWithoutDiff: React.FC<{
                 <>
                     <div>{heading}</div>
                     {shown.map((path) => (
-                        <div key={path} className="truncate ps-3" title={path}>{path}</div>
+                        <div key={path} className="ps-3">
+                            <div dir="rtl" className="truncate" style={{ unicodeBidi: 'isolate' }} title={path}><bdi dir="ltr">{path}</bdi></div>
+                        </div>
                     ))}
                     {counted > 0 ? (
                         <div className="ps-3">

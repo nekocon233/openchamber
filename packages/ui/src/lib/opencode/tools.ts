@@ -180,6 +180,8 @@ const inputSchema = z
     search: optionalText,
     provider: optionalText,
     patchText: optionalText,
+    // Native Codex file-change calls carry the paths before result metadata.
+    files: z.array(optionalText).optional().catch(undefined),
     pattern: optionalText,
     query: optionalText,
     url: optionalText,
@@ -207,11 +209,17 @@ const inputSchema = z
 
 const fileDiffSchema = z.object({
   file: optionalText,
+  filePath: optionalText,
+  relativePath: optionalText,
+  movePath: optionalText,
   patch: optionalText,
   additions: optionalCount,
   deletions: optionalCount,
   status: z.enum(["added", "deleted", "modified"]).optional().catch(undefined),
-})
+}).transform(({ file, filePath, relativePath, movePath, ...entry }) => ({
+  ...entry,
+  file: file ?? movePath ?? filePath ?? relativePath,
+}))
 
 /**
  * One entry of an `execute` call's `metadata.toolCalls`. `input` is the
@@ -274,7 +282,7 @@ const openChamberResultSchema = z
   })
   .catch({})
 
-/** One entry of a tool's `metadata.files` (`FileDiff.Info` on the wire). */
+/** One entry of `metadata.files`, with v2 and native paths normalized to `file`. */
 export type ToolFileDiff = z.infer<typeof fileDiffSchema> & { file: string }
 
 /**
@@ -287,9 +295,9 @@ export function toolInputPath(input: ToolInput | undefined): string | undefined 
 }
 
 /**
- * Per-file diffs a completed `edit` or `patch` call reported. Entries without
- * a file are dropped rather than failing the whole list, so one malformed file
- * cannot erase the other files of the same call.
+ * Per-file diffs an `edit` or `patch` call reported. Native file identities use
+ * the same precedence as the file-opening path. Entries without a file are
+ * dropped, so one malformed file cannot erase its valid siblings.
  */
 export function toolFileDiffs(metadata: Metadata | undefined): ToolFileDiff[] {
   const files = metadataSchema.parse(metadata ?? {}).files ?? []
@@ -780,12 +788,14 @@ const asPath = (value: string | undefined): ToolDescription | null => (value ? {
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/
 
 /**
- * The files a `patch` call names in its own text (`*** Add File: path` and
- * friends), so the row can describe the call before the tool reports its
- * diffs and when a run ends without them.
+ * The files a Patch call names in native `files` input or v2 patch headers,
+ * so the row can describe the call before its diffs arrive or after failure.
  */
 export function patchInputFiles(input: ToolInput | undefined): string[] {
-  const patchText = readInput(input).patchText
+  const parsed = readInput(input)
+  const named = parsed.files?.filter((file): file is string => file !== undefined) ?? []
+  if (named.length > 0) return [...new Set(named)]
+  const patchText = parsed.patchText
   if (!patchText) return []
   const files: string[] = []
   for (const line of patchText.split("\n")) {
@@ -879,7 +889,7 @@ export function toolDescription(
       return text(parsed.description) ?? text(parsed.agent)
 
     case OPENCODE_TOOLS.patch: {
-      const reported = toolFileDiffs(metadata).map((file) => file.file)
+      const reported = [...new Set(toolFileDiffs(metadata).map((file) => file.file))]
       const files = reported.length > 0 ? reported : patchInputFiles(input)
       if (files.length > 1) return { kind: "files", count: files.length, files }
       return asPath(files[0])
