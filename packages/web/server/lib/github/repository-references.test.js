@@ -56,7 +56,7 @@ describe('single-repository PR references', () => {
     const fetch = serve(({ query, variables }) => {
       expect(query).toContain('pullRequests(states:');
       expect(query).toContain('UPDATED_AT, direction: DESC');
-      expect(variables).toEqual({ owner: 'example', repo: 'project', states: null, first: 30, after: null });
+      expect(variables).toEqual({ owner: 'example', repo: 'project', states: null, first: 30, after: null, withReviewRequests: false });
       return connection([node(3), node(2, 'MERGED'), node(1, 'CLOSED')]);
     });
     const { body } = await get().expect(200);
@@ -128,9 +128,25 @@ describe('single-repository PR references', () => {
     expect(resolveNetwork).not.toHaveBeenCalled();
   });
 
+  it('removes completed review requests from stale search results with the bound account in one read', async () => {
+    const pending = (number, isViewer) => ({ ...node(number),
+      repository: { name: 'project', owner: { login: 'example', __typename: 'User' } },
+      reviewRequests: { nodes: isViewer ? [{ requestedReviewer: { __typename: 'User', isViewer } }] : [], pageInfo: { hasNextPage: false } },
+    });
+    const fetch = serve(({ query, variables }) => {
+      expect(query).toContain('reviewRequests(first: 100)');
+      expect(variables.withReviewRequests).toBe(true);
+      return { data: { search: { nodes: [pending(1, false), pending(2, true)], issueCount: 2, pageInfo: { endCursor: null, hasNextPage: false } } } };
+    });
+    const { body } = await get({ state: 'open', people: 'reviewRequested' }).expect(200);
+    expect(body.items.map(item => item.number)).toEqual([2]);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(resolveNetwork).not.toHaveBeenCalled();
+  });
+
   it('does not substitute an issue for a PR with the same number', async () => {
     serve(({ variables }) => {
-      expect(variables).toEqual({ number: 4, o0: 'example', n0: 'project' });
+      expect(variables).toEqual({ number: 4, o0: 'example', n0: 'project', withReviewRequests: false });
       return { data: { a0: { issueOrPullRequest: { ...node(4), __typename: 'Issue', stateReason: null } } } };
     });
     const { body } = await get({ query: '#4' }).expect(200);

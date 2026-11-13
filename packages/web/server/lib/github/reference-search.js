@@ -116,6 +116,27 @@ fragment PullReference on PullRequest {
   baseRefName
   headRefOid
   headRepository { name url sshUrl owner { login } }
+  reviewRequests(first: 100) @include(if: $withReviewRequests) {
+    pageInfo { hasNextPage }
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { isViewer }
+        ... on Team { id }
+      }
+    }
+  }
+  repository @include(if: $withReviewRequests) {
+    owner {
+      __typename
+      ... on Organization {
+        teams(first: 100, role: MEMBER) {
+          pageInfo { hasNextPage }
+          nodes { id }
+        }
+      }
+    }
+  }
 }
 `;
 
@@ -241,7 +262,7 @@ query DiscussionDetail($owner: String!, $repo: String!, $number: Int!) {
 `;
 
 const SEARCH_QUERY = `
-query ReferenceSearch($q: String!, $first: Int!, $after: String) {
+query ReferenceSearch($q: String!, $first: Int!, $after: String, $withReviewRequests: Boolean!) {
   search(type: ISSUE, query: $q, first: $first, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
@@ -270,7 +291,7 @@ ${DISCUSSION_FRAGMENT}
 `;
 
 const REPOSITORY_PULLS_QUERY = `
-query RepositoryPulls($owner: String!, $repo: String!, $states: [PullRequestState!], $first: Int!, $after: String) {
+query RepositoryPulls($owner: String!, $repo: String!, $states: [PullRequestState!], $first: Int!, $after: String, $withReviewRequests: Boolean!) {
   repository(owner: $owner, name: $repo) {
     pullRequests(states: $states, orderBy: {field: UPDATED_AT, direction: DESC}, first: $first, after: $after) {
       totalCount
@@ -826,6 +847,38 @@ const searchPageSchema = z.object({
 const searchResultSchema = z.object({ search: searchPageSchema.extend({ issueCount: z.number().int() }) });
 const discussionSearchResultSchema = z.object({ search: searchPageSchema.extend({ discussionCount: z.number().int() }) });
 
+const viewerReviewRequestsSchema = z.object({
+  reviewRequests: z.object({
+    pageInfo: z.object({ hasNextPage: z.boolean() }),
+    nodes: z.array(z.object({
+      requestedReviewer: z.discriminatedUnion('__typename', [
+        z.object({ __typename: z.literal('User'), isViewer: z.boolean() }),
+        z.object({ __typename: z.literal('Team'), id: z.string().min(1) }),
+        z.object({ __typename: z.literal('Mannequin') }),
+      ]).nullable(),
+    })),
+  }),
+  repository: z.object({
+    owner: z.discriminatedUnion('__typename', [
+      z.object({ __typename: z.literal('User') }),
+      z.object({ __typename: z.literal('Organization'), teams: z.object({
+        pageInfo: z.object({ hasNextPage: z.boolean() }),
+        nodes: z.array(z.object({ id: z.string().min(1) })),
+      }) }),
+    ]),
+  }),
+});
+
+const hasViewerReviewRequest = (value) => {
+  const { reviewRequests, repository: { owner } } = viewerReviewRequestsSchema.parse(value);
+  const teams = owner.__typename === 'Organization' ? owner.teams : null;
+  const teamIds = new Set(teams?.nodes.map(team => team.id));
+  // An incomplete connection cannot prove that this viewer has no request.
+  return reviewRequests.pageInfo.hasNextPage || reviewRequests.nodes.some(({ requestedReviewer }) =>
+    requestedReviewer?.__typename === 'User' ? requestedReviewer.isViewer
+      : requestedReviewer?.__typename === 'Team' && (teamIds.has(requestedReviewer.id) || teams?.pageInfo.hasNextPage));
+};
+
 const repositoryPullsSchema = z.object({
   repository: z.object({
     pullRequests: z.object({
@@ -845,6 +898,7 @@ export async function listRepositoryPullRequests({ octokit, repo, state, cursor 
     states: states[state],
     first: REFERENCE_PAGE_SIZE,
     after: cursor || null,
+    withReviewRequests: false,
   }));
   const page = data.repository.pullRequests;
   const items = page.nodes.map((node) => {
@@ -914,9 +968,13 @@ export function buildReferenceSearchQuery({ repos, kind, state, people, text }) 
   return parts.join(' ');
 }
 
-function buildLookupQuery(number, repos, family) {
+function buildLookupQuery(number, repos, family, withReviewRequests = false) {
   const variables = { number };
   const declarations = ['$number: Int!'];
+  if (family !== 'discussion') {
+    declarations.push('$withReviewRequests: Boolean!');
+    variables.withReviewRequests = withReviewRequests;
+  }
   const field = family === 'discussion'
     ? 'discussion(number: $number) { __typename ...DiscussionReference }'
     : 'issueOrPullRequest(number: $number) { __typename ...IssueReference ...PullReference }';
@@ -934,15 +992,15 @@ function buildLookupQuery(number, repos, family) {
 }
 
 // A number one repo does not have is a per-alias NOT_FOUND next to the other
-// aliases' data. Keep the data; rethrow only when there is none.
-async function runPartialQuery(octokit, query, variables) {
+// aliases' data. Membership checks must preserve every other lookup failure.
+async function runPartialQuery(octokit, query, variables, notFoundOnly = false) {
   try {
     return await octokit.graphql(query, variables);
   } catch (error) {
-    if (!isGraphqlRateLimitError(error) && error?.data) {
-      return error.data;
-    }
-    throw error;
+    if (isGraphqlRateLimitError(error) || !error?.data) throw error;
+    if (notFoundOnly && (!Array.isArray(error.errors) || error.errors.length === 0
+      || !error.errors.every(entry => entry?.type === 'NOT_FOUND'))) throw error;
+    return error.data;
   }
 }
 
@@ -953,16 +1011,23 @@ async function runPartialQuery(octokit, query, variables) {
  * one kind, newest activity first.
  */
 export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, cursor, scope = 'network' }) {
-  const lookup = parseReferenceLookup(text, repos);
+  const withReviewRequests = scope === 'repository' && kind === 'pull' && people === 'reviewRequested';
+  const toItem = (value) => {
+    const item = toReference(value, repos);
+    // Search membership can lag behind a submitted review; the live requests
+    // determine whether the viewer still has work in the repository PR list.
+    return item?.kind === 'pull' && withReviewRequests && !hasViewerReviewRequest(value) ? null : item;
+  };
+  const lookup = parseReferenceLookup(text, repos, kind);
   if (lookup) {
     if (lookup.repos.length === 0) {
       return { items: [], cursor: null, hasMore: false, total: 0 };
     }
-    const { query, variables } = buildLookupQuery(lookup.number, lookup.repos, lookup.family);
-    const data = await runPartialQuery(octokit, query, variables);
+    const { query, variables } = buildLookupQuery(lookup.number, lookup.repos, lookup.family, withReviewRequests);
+    const data = await runPartialQuery(octokit, query, variables, withReviewRequests);
     const field = lookup.family === 'discussion' ? 'discussion' : 'issueOrPullRequest';
     const items = lookup.repos
-      .map((_entry, index) => toReference(data?.[`a${index}`]?.issueOrPullRequest, repos))
+      .map((_entry, index) => toItem(data?.[`a${index}`]?.[field]))
       .filter((item) => item !== null && (scope !== 'repository' || item.kind === kind));
     return { items, cursor: null, hasMore: false, total: items.length };
   }
@@ -972,11 +1037,12 @@ export async function searchGitHubReferences({ octokit, repos, kind, state, peop
     first: REFERENCE_PAGE_SIZE,
     after: cursor || null,
   };
+  if (kind !== 'discussion') variables.withReviewRequests = withReviewRequests;
   const search = kind === 'discussion'
     ? discussionSearchResultSchema.parse(await octokit.graphql(DISCUSSION_SEARCH_QUERY, variables)).search
     : searchResultSchema.parse(await octokit.graphql(SEARCH_QUERY, variables)).search;
   const items = search.nodes
-    .map((node) => toReference(node, repos))
+    .map(toItem)
     .filter((item) => item !== null && item.kind === kind);
   return {
     items,
