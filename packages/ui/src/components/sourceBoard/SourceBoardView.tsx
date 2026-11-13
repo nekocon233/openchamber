@@ -307,6 +307,11 @@ const SourceBoardBody: React.FC<{
         pinnedItem,
     });
     const { previewItem, setQuery, selectGitHubKind, showItem } = browser;
+    const closeMobilePreview = () => {
+        setPinnedLink(null);
+        setPinnedLinearRequest(null);
+        browser.closeMobilePreview();
+    };
     const shownPinRequestRef = React.useRef(0);
     const linearFocus = useSourceBoardStore((state) => (tab === 'linear' ? state.linearFocus : null));
     React.useEffect(() => {
@@ -396,6 +401,7 @@ const SourceBoardBody: React.FC<{
             context={context}
             onStartWorktree={(target, selection) => setWorktreeRequest({ project: target, selection })}
             onChanged={browser.list.retry}
+            onMergeSubmitted={isMobile ? closeMobilePreview : undefined}
             startIn={startIn}
             onLeave={onLeave}
         />
@@ -655,11 +661,7 @@ const SourceBoardBody: React.FC<{
         return (
             <>
                 {inPreview ? (
-                    <MobileBoardHeader onBack={() => {
-                        setPinnedLink(null);
-                        setPinnedLinearRequest(null);
-                        browser.closeMobilePreview();
-                    }}>
+                    <MobileBoardHeader onBack={closeMobilePreview}>
                         <h2 className="truncate px-1 typography-ui-label tabular-nums text-foreground">{itemLabel}</h2>
                     </MobileBoardHeader>
                 ) : (
