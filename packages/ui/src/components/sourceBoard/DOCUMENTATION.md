@@ -8,9 +8,11 @@ result feedback. Runtime APIs retain transport and provider authorization.
 
 ## Invariants
 
-- PR-pane merges, approvals and requests for changes return after invoking the
-  provider request. Merge confirmation still precedes dispatch. Comments keep
-  their existing navigation.
+- Merges in PR panes and the mobile board return after invoking the provider
+  request. PR-pane approvals and requests for changes do the same. Merge
+  confirmation still precedes dispatch. Comments keep their existing navigation.
+- The mobile board reuses its Back action, clearing the pinned lookup and
+  preview while retaining the list's search and filters.
 - An in-flight merge, review or review-draft change locks its runtime, provider
   instance, credential account and target PR across detail unmounts, worktrees
   and binding revisions. Settling

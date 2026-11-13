@@ -92,8 +92,8 @@ failures and queued merges never navigate again. Unposted text remains saved.
 Successful review verdicts invalidate the provider's list reads and revalidate
 the affected repository's project lists after the receipt, including lists
 hidden while the request completes. Failed refreshes keep the displayed list
-and report the error. Comments, board and current-branch navigation keep their
-existing behavior. The [shared action owner](../sourceBoard/DOCUMENTATION.md)
+and report the error. Comments, the desktop board and current-branch navigation
+keep their existing behavior. The [shared action owner](../sourceBoard/DOCUMENTATION.md)
 retains pending locks and runtime-scoped feedback across detail unmounts.
 
 Selecting a PR replaces the list with its preview in the same panel. Back
