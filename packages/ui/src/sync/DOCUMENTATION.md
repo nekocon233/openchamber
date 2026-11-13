@@ -1266,8 +1266,14 @@ with a native branch (`sync/native-send.ts`):
   prompt that arrives mid-turn. Unified conversations retain this path when fresh
   server metadata confirms the same executing backend and no handoff is preparing;
   cross-backend and explicitly queued follow-ups still wait for whole-execution
-  readiness. Antigravity has no mid-turn steering, so its
-  busy follow-ups stay in the host queue until the session is idle.
+  readiness. Antigravity's stream-json channel processes one turn at a time,
+  so its busy follow-ups stay in the host queue. Manual queue sends first try
+  ordinary admission. Only a definite `NATIVE_SESSION_BUSY` refusal can trigger
+  interruption, after a fresh session read confirms an executing AGY source.
+  The source-bound native Stop API must succeed and authoritative activity must confirm idle
+  or whole-conversation readiness before the same captured request is sent again.
+  Stop/read/send failure releases the queue claim back to staged. Runtime changes
+  reject subsequent writes. Automatic delivery never interrupts.
   Its idle prompts use the live phase directly when no separate status probe ran.
 - The agent is `build` or `plan`; the picker offers only those two for a
   native session or a draft with a CLI's model picked, including Antigravity.
@@ -1434,6 +1440,12 @@ no native sessions. A mobile app connected to an older server without
 `/api/native/*` gets failed native reads, which keep the empty held state, so
 no native session appears. Native reads have a 30 s deadline; status reads
 share the 4 s status budget.
+
+### Why manual AGY sends try ordinary admission first
+
+A repeated unified send ID can already belong to the accepted turn. Confirming
+that identity preserves the running turn. A busy refusal proves this request was
+not accepted; uncertain outcomes retain the existing history-confirmation path.
 
 ## Failed-turn diagnostics
 

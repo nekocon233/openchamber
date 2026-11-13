@@ -542,6 +542,24 @@ describe('unified native backend contract', () => {
     expect(h.operations).toContain(`stop:${h.requests[0].id}`);
   });
 
+  it('binds a guarded stop to its source and leaves a replacement backend running', async () => {
+    const h = await setup();
+    const session = await h.conversation('antigravity');
+    h.hold();
+    await h.send(session.id, 'antigravity');
+    const source = h.requests[0].id;
+    const abort = vi.spyOn(h.native, 'abort');
+    expect(await h.api.abort(session.id, { expectedSourceSessionId: source })).toBe(true);
+    expect(abort).toHaveBeenCalledWith(source);
+    await h.send(session.id, 'codex');
+    abort.mockClear();
+    await expect(h.api.abort(session.id, { expectedSourceSessionId: source })).rejects.toMatchObject({
+      status: 409, code: 'NATIVE_CONVERSATION_SOURCE_CHANGED',
+    });
+    expect(abort).not.toHaveBeenCalled();
+    expect(await h.api.statuses(h.directory)).toMatchObject({ [session.id]: { type: 'busy' } });
+  });
+
   it('blocks backend changes while live work runs and ignores late events from retired sources', async () => {
     const h = await setup();
     const session = await h.conversation('antigravity');

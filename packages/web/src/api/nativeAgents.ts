@@ -1,5 +1,5 @@
 import { claudeConnectionListSchema, claudeConnectionSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
-import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch, NativeSessionCreate, NativeSessionSelection, NativePlanExecutionChoice } from '@openchamber/ui/lib/api/types';
+import type { NativeAbortOptions, NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch, NativeSessionCreate, NativeSessionSelection, NativePlanExecutionChoice } from '@openchamber/ui/lib/api/types';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
   nativeAbortResultSchema,
@@ -44,6 +44,7 @@ const NATIVE_STATS_TIMEOUT_MS = 75_000;
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
 type NativeWriteBody =
+  | NativeAbortOptions
   | { directory: string; configuration: NativeAgentConfigurationWrite; expectedRevision: number; main?: NativeSessionSelection; expectedSelectionRevision?: number }
   | { sourceId: string; directory: string }
   | ClaudeConnectionWrite
@@ -250,7 +251,7 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   prompt: async (sessionId, request) => {
     await writeParsed(`${sessionPath(sessionId)}/prompt`, nativePromptAcceptedSchema, request);
   },
-  abort: async (sessionId) => (await writeParsed(`${sessionPath(sessionId)}/abort`, nativeAbortResultSchema)).aborted,
+  abort: async (sessionId, options) => (await writeParsed(`${sessionPath(sessionId)}/${options ? 'abort-source' : 'abort'}`, nativeAbortResultSchema, options)).aborted,
   compact: async (sessionId, request) => {
     await writeParsed(`${sessionPath(sessionId)}/compact`, nativePromptAcceptedSchema, request);
   },

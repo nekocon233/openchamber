@@ -128,6 +128,18 @@ confirmation after an ambiguous result and never blindly resends. Definite
 refusals restore the previous segment binding and pending rewind. Failed
 cleanup retains registry ownership so conversation deletion can retry.
 
+Source-bound stops check `expectedSourceSessionId` under the conversation's
+mutation lock before interrupting anything. A changed source rejects with
+`NATIVE_CONVERSATION_SOURCE_CHANGED`, preserving the replacement execution.
+Manual AGY queue sends use this guard after a definite busy refusal and confirm
+whole-conversation readiness before sending their captured request again.
+
+### Why source-bound stops have a separate route
+
+`POST /api/native/sessions/:id/abort-source` requires the expected source.
+Older servers reject this route instead of silently ignoring a new field on the
+ordinary abort route. Clients preserve the queued message after that refusal.
+
 ## Context and operations
 
 Antigravity checklist reads use the executing segment's retained history,

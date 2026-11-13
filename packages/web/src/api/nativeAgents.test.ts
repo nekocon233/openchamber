@@ -36,6 +36,28 @@ afterEach(() => {
 });
 
 describe('web native agents API', () => {
+  it('uses a separate source-bound stop route and never falls back to an unguarded stop', async () => {
+    const bodies: unknown[] = [];
+    let supported = true;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      bodies.push(JSON.parse(String(init?.body)));
+      return supported ? Response.json({ aborted: true }) : Response.json({ error: 'Unsupported route' }, { status: 404 });
+    });
+    const api = createWebNativeAgentsAPI();
+    const options = { expectedSourceSessionId: 'nag_source' };
+    expect(await api.abort('ncv_conversation', options)).toBe(true);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncv_conversation/abort-source');
+    expect(bodies[0]).toEqual(options);
+    supported = false;
+    await expect(api.abort('ncv_conversation', options)).rejects.toMatchObject({ status: 404 });
+    expect(requests).toHaveLength(2);
+    supported = true;
+    await api.abort('ncv_conversation');
+    expect(requests[2]?.pathname).toBe('/api/native/sessions/ncv_conversation/abort');
+    expect(bodies[2]).toEqual({});
+  });
+
   it('writes a native combination atomically with both expected revisions', async () => {
     const bodies: string[] = [];
     const sessionId = 'ncv_11111111-1111-4111-8111-111111111111';

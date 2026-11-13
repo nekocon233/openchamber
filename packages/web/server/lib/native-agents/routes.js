@@ -280,6 +280,12 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
 
   app.post('/api/native/sessions/:sessionId/abort', handle(async (req) => ({ aborted: await runtime.abort(req.params.sessionId) })));
 
+  // A separate route prevents older servers from silently ignoring the guard.
+  app.post('/api/native/sessions/:sessionId/abort-source', handle(async (req) => {
+    const options = z.object({ expectedSourceSessionId: z.string().min(1) }).strict().parse(req.body);
+    return { aborted: await runtime.abort(req.params.sessionId, options) };
+  }));
+
   // Returns once the CLI took the compaction; it streams in as a turn.
   app.post('/api/native/sessions/:sessionId/compact', handle(async (req) => {
     const body = compactBody.parse(req.body);

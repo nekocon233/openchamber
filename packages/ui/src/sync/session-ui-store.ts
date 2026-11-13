@@ -88,7 +88,7 @@ import {
   type UnarchiveSessionsOptions,
 } from "./session-actions"
 import { useInputStore, type SyntheticContextPart } from "./input-store"
-import { nativePromptRequest, nativeSendMessageId } from "./native-send"
+import { nativePromptRequest, nativeSendMessageId, sendNativePrompt } from "./native-send"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import { NativeAgentsRequestError, NativeAgentsUnsupportedError, nativeSessionActionErrorKey } from "@/lib/native-agents/errors"
 import { isNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, type NativeBackend } from "@/lib/native-agents/ids"
@@ -297,6 +297,7 @@ export async function routeMessage(params: {
   appendSubmissions?: () => void
   delivery?: 'steer' | 'queue'
   preserveModelSelection?: boolean
+  interruptAntigravity?: boolean
   subagentModel?: NativeAgentModel | null
   messageId?: string
   expectedRuntime?: ExpectedRuntimeContext
@@ -477,7 +478,7 @@ async function routeNativeMessage(params: Parameters<typeof routeMessage>[0]): P
     appendSubmissions: params.appendSubmissions,
     messageId: nativeSendMessageId(params.sessionId, params.messageId),
     expectedRuntime: params.expectedRuntime,
-    send: (messageID) => nativeAgents.prompt(params.sessionId, nativePromptRequest({
+    send: (messageID) => sendNativePrompt(nativeAgents, params.sessionId, nativePromptRequest({
       directory,
       messageID,
       content: params.content,
@@ -490,7 +491,7 @@ async function routeNativeMessage(params: Parameters<typeof routeMessage>[0]): P
       agent: params.agent,
       preserveSelection: params.preserveModelSelection,
       subagentModel: params.subagentModel,
-    })),
+    }), params.interruptAntigravity),
   })
   return 'prompt'
 }
@@ -505,6 +506,7 @@ type SendMessageOptions = {
   queuedGoal?: unknown
   subagentModel?: NativeAgentModel | null
   preserveModelSelection?: boolean
+  interruptAntigravity?: boolean
   /** Explicit composer intent; automated continuations must not restore archives. */
   userInitiated?: boolean
   target?: CapturedSendTarget
@@ -2333,6 +2335,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           appendSubmissions,
           delivery: options?.delivery,
           preserveModelSelection: options?.preserveModelSelection,
+          interruptAntigravity: options?.interruptAntigravity,
           subagentModel: options?.subagentModel,
           messageId: options?.messageId,
           expectedRuntime: options?.expectedRuntime,
@@ -2451,6 +2454,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         appendSubmissions,
         delivery: options?.delivery,
         preserveModelSelection: options?.preserveModelSelection,
+        interruptAntigravity: options?.interruptAntigravity,
         subagentModel: options?.subagentModel,
         messageId: options?.messageId,
         expectedRuntime: options?.expectedRuntime,

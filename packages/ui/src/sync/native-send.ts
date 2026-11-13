@@ -1,9 +1,49 @@
-import type { NativePromptPart, NativePromptRequest } from "@/lib/api/types"
+import type { NativeAgentsAPI, NativePromptPart, NativePromptRequest } from "@/lib/api/types"
 import type { NativeAgentModel } from '@/lib/native-agents/combinations'
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
-import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
+import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSession, nativeBackendOfSessionId, unifiedNativeSessionState } from "@/lib/native-agents/ids"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { formatMessage, useI18nStore } from "@/lib/i18n"
+import { getRuntimeEndpointGeneration, getRuntimeKey, RuntimeContextChangedError } from "@/lib/runtime-switch"
+
+/** A manual queued send can replace an AGY turn after a definite busy refusal. */
+export const sendNativePrompt = async (
+  api: NativeAgentsAPI,
+  sessionId: string,
+  request: NativePromptRequest,
+  interruptAntigravity = false,
+): Promise<void> => {
+  const runtimeKey = getRuntimeKey()
+  const generation = getRuntimeEndpointGeneration()
+  const assertRuntime = () => {
+    if (runtimeKey !== getRuntimeKey() || generation !== getRuntimeEndpointGeneration()) throw new RuntimeContextChangedError()
+  }
+  try {
+    await api.prompt(sessionId, request)
+  } catch (error) {
+    assertRuntime()
+    if (!interruptAntigravity || !(error instanceof NativeAgentsRequestError) || error.code !== 'NATIVE_SESSION_BUSY') throw error
+    const session = await api.getSession(sessionId, request.directory)
+    assertRuntime()
+    const execution = unifiedNativeSessionState(session.metadata)
+    if (nativeBackendOfSession(session) !== 'antigravity'
+      || isUnifiedNativeSessionId(sessionId) && (!execution?.sourceSessionID || execution.preparing)) throw error
+
+    await api.abort(sessionId, execution?.sourceSessionID ? { expectedSourceSessionId: execution.sourceSessionID } : undefined)
+    assertRuntime()
+    if (isUnifiedNativeSessionId(sessionId)) {
+      const stopped = unifiedNativeSessionState((await api.getSession(sessionId, request.directory)).metadata)
+      assertRuntime()
+      if (!stopped?.switchReady || stopped.preparing || stopped.sourceSessionID !== execution?.sourceSessionID) throw error
+    } else {
+      const statuses = await api.statuses(request.directory)
+      assertRuntime()
+      if (statuses[sessionId] && statuses[sessionId].type !== 'idle') throw error
+    }
+    // Reuse the captured client identity and the complete payload.
+    await api.prompt(sessionId, request)
+  }
+}
 
 // A native session receives what the user wrote and attached. OpenChamber's
 // own context (pinned knowledge, goal and response-style reminders, skill

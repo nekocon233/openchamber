@@ -102,6 +102,7 @@ describe('ChatInput follow-up queue integration', () => {
     expect(drainSource).toContain('queuedItem.additionalParts');
     expect(drainSource).toContain('expectedRuntime.runtimeKey !== messageQueueTarget.runtimeKey');
     expect(drainSource).toContain('expectedRuntime,');
+    expect(drainSource).toContain("interruptAntigravity: mode === 'manual'");
     expect(drainSource).toContain("releaseQueuedMessage(messageQueueTarget, messageId, claim.claimId, 'staged', claim.context)");
   });
 
