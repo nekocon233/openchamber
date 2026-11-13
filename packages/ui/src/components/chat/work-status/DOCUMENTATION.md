@@ -68,8 +68,17 @@ Sheet presentation changes only the host:
   overlay-style outside-click dismissal;
 - the equalizer and `WorkStatusSectionsDialog` stay, with the dialog raised to
   `z-70` so it sits above the sheet's `z-60`;
+- the equalizer is portalled into the sheet's header before Close through
+  `sectionControlsHost`; its dialog state stays with the panel and the body
+  heading needs no reserved action slot;
 - managed Chats pass `directory=null` and `repositoryEnabled=false`, exactly as
   the desktop panel does.
+
+### Why the sheet header hosts the selector
+
+The sheet owns the header while the panel owns section availability and dialog
+state. A portal places the button in that header without duplicating the
+desktop and mobile dialog controllers.
 
 Rows navigate to the mobile host through `useWorkStatusNavigation`: the
 context readout opens the Notes workspace tab, branch and changed files open

@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
@@ -53,6 +54,8 @@ type Props = {
    * Overlay floats over the transcript. The mobile sheet owns its width and scroll.
    */
   presentation?: WorkStatusPresentation;
+  /** The mobile sheet owns the header; this panel keeps the dialog's state. */
+  sectionControlsHost?: HTMLElement | null;
   /** Mobile sheet only: warm the branch's change-request summary on open. */
   prewarmPrStatus?: boolean;
 };
@@ -74,7 +77,7 @@ const WORK_STATUS_PANEL_WIDTH = 300;
  * eat a visible slice of every row's trailing value, and the shadows already
  * say there is more to see.
  */
-export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, presentation = 'overlay', prewarmPrStatus = false }) => {
+export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, presentation = 'overlay', sectionControlsHost = null, prewarmPrStatus = false }) => {
   const { t, direction } = useI18n();
   const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
   const nativeBackend = useNativeSessionBackend(sessionId, directory);
@@ -302,20 +305,30 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
           transitionTimingFunction: PANEL_TRANSITION_EASING,
         } : undefined}
       >
-      {/* Overlaid rather than placed in flow: the panel has no header of its
-          own, and giving it one would cost a row of height on every session. */}
-      <button
+      {sectionControlsHost ? createPortal(
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={t('chat.workStatus.sections.open')}
+          onClick={() => setSectionsDialogOpen(true)}
+          className="size-10 shrink-0 rounded-lg text-muted-foreground"
+        >
+          <Icon name="equalizer-2" className="size-4" />
+        </Button>,
+        sectionControlsHost,
+      ) : <button
         type="button"
         aria-label={t('chat.workStatus.sections.open')}
         onClick={() => setSectionsDialogOpen(true)}
         className="absolute inset-e-2 top-1.5 z-10 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
       >
         <Icon name="equalizer-2" className="size-4" />
-      </button>
+      </button>}
 
       {contentMounted ? (
         isSheet ? (
-          <div className="p-2 [&>section:first-child>[data-work-status-heading]]:pe-7">{sections}</div>
+          <div className={cn('p-2', !sectionControlsHost && '[&>section:first-child>[data-work-status-heading]]:pe-7')}>{sections}</div>
         ) : (
           <ScrollShadow
             ref={restore}

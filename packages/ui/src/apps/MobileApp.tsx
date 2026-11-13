@@ -56,7 +56,6 @@ import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useGitStore } from '@/stores/useGitStore';
-import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import {
@@ -140,7 +139,7 @@ const NATIVE_RESUME_SYNC_EVENT_THROTTLE_MS = 1_000;
 /** The fullscreen app-level surfaces, reachable from the sessions drawer
     footer. Exactly one can be open at a time — opening another replaces it,
     closing returns to the chat. The sessions drawer and the workspace drawer
-    (Changes / Files / Terminal / Notes / MCP) are separate layers. */
+    (Changes / PR / Files / Terminal / Notes) are separate layers. */
 type MobileSurface = 'archive' | 'board' | 'instances' | 'scheduled' | 'settings' | 'update' | 'usage';
 
 const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onActiveConnectionDeleted }) => {
@@ -179,9 +178,6 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   const updateAvailable = useUpdateStore((state) => state.available);
   const updateRuntimeType = useUpdateStore((state) => state.runtimeType);
   const showCapacitorOnlyFeatures = React.useMemo(() => isCapacitorMobileApp(), []);
-  const mcpServers = useMcpConfigStore((state) => state.mcpServers);
-  const setMcpDraft = useMcpConfigStore((state) => state.setMcpDraft);
-  const setSelectedMcp = useMcpConfigStore((state) => state.setSelectedMcp);
 
   // NOTE: pendingChangesDiff is intentionally NOT cleared on close — it keys
   // the persistent Changes pane in the workspace drawer, and clearing it would
@@ -376,8 +372,8 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
           return;
         }
         if (target === 'mcp') {
-          setWorkspaceTab('mcp');
-          setWorkspaceOpen(true);
+          setSettingsPage('mcp');
+          openSettingsSurface('page-content');
           return;
         }
         openSurface(target);
@@ -497,44 +493,6 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
     setSessionsSheetOpen(false);
     if (isTabletLayout && !roomyForPanels) setSidebarOpen(false);
   }, [closeSurface, isTabletLayout, roomyForPanels]);
-
-  const openMcpCreateSettings = React.useCallback(() => {
-    const baseName = 'new-mcp-server';
-    let newName = baseName;
-    let counter = 1;
-    while (mcpServers.some((server) => server.name === newName)) {
-      newName = `${baseName}-${counter}`;
-      counter += 1;
-    }
-
-    const draft: McpDraft = {
-      name: newName,
-      scope: 'user',
-      type: 'local',
-      command: [],
-      url: '',
-      environment: [],
-      headers: [],
-      oauthEnabled: true,
-      oauthClientId: '',
-      oauthClientSecret: '',
-      oauthScope: '',
-      oauthRedirectUri: '',
-      oauthCallbackPort: '',
-      oauthAuthServerMetadataUrl: '',
-      protocol: 'legacy',
-      timeoutStartup: '',
-      timeoutCatalog: '',
-      timeoutExecution: '',
-      codemode: 'default',
-      disabled: false,
-    };
-
-    setMcpDraft(draft);
-    setSelectedMcp(newName);
-    setSettingsPage('mcp');
-    openSettingsSurface('page-content');
-  }, [mcpServers, openSettingsSurface, setMcpDraft, setSelectedMcp, setSettingsPage]);
 
   return (
     <DedicatedMobileAppProvider actions={mobileActions}>
@@ -678,7 +636,6 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
                 onTabChange={setWorkspaceTab}
                 pendingChangesDiff={pendingChangesDiff}
                 onOpenPlan={setOpenPlan}
-                onOpenMcpSettings={openMcpCreateSettings}
                 variant={workspaceAsPanel ? 'panel' : 'drawer'}
               />
             </ErrorBoundary>

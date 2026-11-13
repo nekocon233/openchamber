@@ -10,6 +10,9 @@ The workspace drawer and tablet panel share a scrollable tab strip. Its PR tab
 loads the shared `PullRequestView` on first use, keyed by runtime and effective
 workspace directory. The same draft-space directory rules as Changes apply. Native task information
 lives in Work Status; the workspace drawer has no standalone Tasks tab.
+The workspace also has no MCP tab; MCP deep links open the existing Settings
+page. Work status hosts its section selector in the sheet header immediately
+before Close, while the shared panel retains its dialog state.
 
 `mobileConnections` owns saved mobile instances and their connect, password and reconnect flows. The welcome screen and Instances form share its controller. Runtime HTTP authentication remains in `lib/runtime-auth` and `lib/runtime-fetch`.
 

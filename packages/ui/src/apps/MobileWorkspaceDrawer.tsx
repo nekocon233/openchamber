@@ -3,8 +3,6 @@ import { createPortal } from 'react-dom';
 import { isIMECompositionEvent } from '@/lib/ime';
 
 import { Icon } from '@/components/icon/Icon';
-import { McpIcon } from '@/components/icons/McpIcon';
-import { McpDropdownContent } from '@/components/mcp/McpDropdown';
 import { ProjectContextPanel } from '@/components/layout/RightSidebarTabs';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { PauseClock } from '@/components/ui/pause-clock';
@@ -13,9 +11,6 @@ import { TerminalView } from '@/components/views/TerminalView';
 import { useI18n } from '@/lib/i18n';
 import type { ProjectRef } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
-import { useDirectoryStore } from '@/stores/useDirectoryStore';
-import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
-import { useMcpStore } from '@/stores/useMcpStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useOnDemandComponent } from '@/hooks/useOnDemandComponent';
@@ -36,7 +31,7 @@ const ENTER_DELAY_MS = 16;
 const ENTER_DURATION_MS = 320;
 const DRAWER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'mcp';
+export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes';
 
 const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
 
@@ -53,66 +48,7 @@ const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void 
   );
 };
 
-/** Quick MCP enable/disable toggles as a workspace pane, with its own slim
-    action row (add server → settings, refresh) replacing the old fullscreen
-    surface's header actions. */
-const McpWorkspacePane: React.FC<{ onOpenMcpSettings: () => void; active: boolean }> = ({ onOpenMcpSettings, active }) => {
-  const { t } = useI18n();
-  const [isRefreshing, setIsRefreshing] = React.useState(false);
-  const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
-  const refreshMcpStatus = useMcpStore((state) => state.refresh);
-  const loadMcpConfigs = useMcpConfigStore((state) => state.loadMcpConfigs);
-
-  const refresh = () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    const minSpinPromise = new Promise((resolve) => window.setTimeout(resolve, 500));
-    void Promise.all([
-      refreshMcpStatus({ directory: currentDirectory || null, silent: true }),
-      loadMcpConfigs({ force: true }),
-      minSpinPromise,
-    ]).finally(() => setIsRefreshing(false));
-  };
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-end gap-1 px-2 pt-1">
-        <button
-          type="button"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onOpenMcpSettings}
-          aria-label={t('settings.mcp.sidebar.actions.addServerTitle')}
-          title={t('settings.mcp.sidebar.actions.addServerTitle')}
-          style={{ touchAction: 'manipulation' }}
-        >
-          <Icon name="add" className="size-5" />
-        </button>
-        <button
-          type="button"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={refresh}
-          disabled={isRefreshing}
-          aria-label={t('mcpDropdown.actions.refreshAria')}
-          title={t('mcpDropdown.actions.refreshAria')}
-          style={{ touchAction: 'manipulation' }}
-        >
-          <Icon name="refresh" className={cn('size-5', isRefreshing && 'animate-spin')} />
-        </button>
-      </div>
-      <div className="min-h-0 flex-1">
-        <McpDropdownContent
-          active={active}
-          className="h-full"
-          listClassName="max-h-none"
-          hideHeader
-          mobileListDensity
-        />
-      </div>
-    </div>
-  );
-};
-
-/** The workspace surfaces as tabs (Changes / PR / Files / Terminal / Notes / Tasks / MCP).
+/** The workspace surfaces as tabs (Changes / PR / Files / Terminal / Notes).
 
     Two hosts, same content and same state:
      - `drawer` (default) covers the app and slides in from the right edge —
@@ -134,10 +70,8 @@ export const MobileWorkspaceDrawer: React.FC<{
   pendingChangesDiff: { path: string; staged: boolean } | null;
   /** Notes tab: opens a plan fullscreen (layered above the drawer). */
   onOpenPlan: (plan: { id: string; title: string; projectRef: ProjectRef }) => void;
-  /** MCP tab: jump to the MCP settings page pre-seeded with a new server draft. */
-  onOpenMcpSettings: () => void;
   variant?: 'drawer' | 'panel';
-}> = ({ open, onClose, tab, onTabChange, pendingChangesDiff, onOpenPlan, onOpenMcpSettings, variant = 'drawer' }) => {
+}> = ({ open, onClose, tab, onTabChange, pendingChangesDiff, onOpenPlan, variant = 'drawer' }) => {
   const { t, direction } = useI18n();
   const rootRef = React.useRef<HTMLElement | null>(null);
   const drawerRef = React.useRef<HTMLElement>(null);
@@ -227,7 +161,6 @@ export const MobileWorkspaceDrawer: React.FC<{
     { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
     { id: 'notes', label: t('contextRail.surface.notes'), icon: <Icon name="sticky-note" className="h-3.5 w-3.5" /> },
-    { id: 'mcp', label: t('mobile.menu.mcp'), icon: <McpIcon className="h-3.5 w-3.5" /> },
   ];
 
   const body = (
@@ -307,12 +240,6 @@ export const MobileWorkspaceDrawer: React.FC<{
           <div className={cn('h-full', tab !== 'notes' && 'hidden')}>
             <ErrorBoundary>
               <ProjectContextPanel visible={open && tab === 'notes'} onActionComplete={onClose} onOpenPlan={onOpenPlan} />
-            </ErrorBoundary>
-          </div>
-        ) : null}
-        {visitedTabs.has('mcp') ? (          <div className={cn('h-full', tab !== 'mcp' && 'hidden')}>
-            <ErrorBoundary>
-              <McpWorkspacePane active={open && tab === 'mcp'} onOpenMcpSettings={onOpenMcpSettings} />
             </ErrorBoundary>
           </div>
         ) : null}

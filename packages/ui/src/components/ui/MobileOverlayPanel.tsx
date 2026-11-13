@@ -17,6 +17,7 @@ interface MobileOverlayPanelProps {
   footer?: React.ReactNode;
   className?: string;
   contentMaxHeightClassName?: string;
+  headerActions?: React.ReactNode;
   renderHeader?: (closeButton: React.ReactNode) => React.ReactNode;
   /**
    * False for content that scrolls on its own (a virtual list): the panel only
@@ -49,6 +50,7 @@ export const MobileOverlayPanel: React.FC<MobileOverlayPanelProps> = ({
   footer,
   className,
   contentMaxHeightClassName,
+  headerActions,
   renderHeader,
   scrollContent = true,
 }) => {
@@ -228,7 +230,10 @@ export const MobileOverlayPanel: React.FC<MobileOverlayPanelProps> = ({
           return (
             <div className="flex items-center justify-between px-3 py-2 border-b border-edge-muted">
               <h2 className="typography-ui-label font-semibold text-foreground">{title}</h2>
-              {closeButton}
+              <div className="flex shrink-0 items-center gap-1">
+                {headerActions}
+                {closeButton}
+              </div>
             </div>
           );
         })()}
