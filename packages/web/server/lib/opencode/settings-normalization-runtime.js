@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const favoriteModelVariantSchema = z.string().trim().min(1).nullable();
+
 export const createSettingsNormalizationRuntime = (dependencies) => {
   const {
     os,
@@ -468,7 +470,7 @@ export const createSettingsNormalizationRuntime = (dependencies) => {
     return populated ? result : undefined;
   };
 
-  const sanitizeModelRefs = (input, limit) => {
+  const sanitizeModelRefs = (input, limit, includeVariant = false) => {
     if (!Array.isArray(input)) {
       return undefined;
     }
@@ -484,7 +486,12 @@ export const createSettingsNormalizationRuntime = (dependencies) => {
       const key = `${providerID}/${modelID}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      result.push({ providerID, modelID });
+      const ref = { providerID, modelID };
+      if (includeVariant) {
+        const variant = favoriteModelVariantSchema.safeParse(entry.variant);
+        if (variant.success) ref.variant = variant.data;
+      }
+      result.push(ref);
       if (result.length >= limit) break;
     }
 

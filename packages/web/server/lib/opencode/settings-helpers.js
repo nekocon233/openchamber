@@ -1158,7 +1158,7 @@ export const createSettingsHelpers = (dependencies) => {
       result.shortcutOverrides = shortcutOverrides;
     }
 
-    const favoriteModels = sanitizeModelRefs(candidate.favoriteModels, 64);
+    const favoriteModels = sanitizeModelRefs(candidate.favoriteModels, 64, true);
     if (favoriteModels) {
       result.favoriteModels = favoriteModels;
     }

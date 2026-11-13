@@ -2,8 +2,8 @@ import { useUIStore } from '@/stores/useUIStore';
 import { isApplyingServerSettings, updateDesktopSettings } from '@/lib/persistence';
 import { subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
 import type { CustomProviderIcon } from '@/lib/customProviderIcons';
+import type { ModelRef } from '@/lib/settings/parsers';
 
-type ModelRef = { providerID: string; modelID: string };
 type ModelPrefsPayload = {
   favoriteModels: ModelRef[];
   favoriteAgentCombinations: string[];
@@ -25,6 +25,7 @@ const refsEqual = (a: ModelRef[], b: ModelRef[]): boolean => {
   for (let i = 0; i < a.length; i += 1) {
     if (a[i]?.providerID !== b[i]?.providerID) return false;
     if (a[i]?.modelID !== b[i]?.modelID) return false;
+    if (a[i]?.variant !== b[i]?.variant) return false;
   }
   return true;
 };

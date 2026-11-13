@@ -28,6 +28,14 @@ outside enterprise mode. Server authorization still owns tunnel operations.
 
 ## Invariants
 
+Model favorites retain an optional `variant` snapshot. A string records the
+effort at starring, including Fast variants; `null` records explicit Default.
+An absent variant is a legacy model-only favorite and keeps existing selection
+rules. Membership and ordering remain keyed by provider and model. The
+composer restores the snapshot only when choosing its favorite row or cycling
+favorites; later effort edits do not rewrite it. An unavailable effort is
+ignored for selection without removing the stored favorite or its snapshot.
+
 `favoriteAgentCombinations` is a profile list of at most 100 unique combination
 UUIDs. The UI store persists it locally, and `modelPrefsAutoSave` owns its
 server writes alongside model favorites. It is separate from `favoriteModels`,
@@ -66,6 +74,13 @@ their saved position, and searching disables reordering of partial lists.
 `DesktopSettings`, `SettingsPayload`, the client sanitizer, the mirror, the apply step and the auto-save all follow from step 1; no second list has to stay in step for persistence.
 
 ## Decisions
+
+### Why the favorite carries an effort snapshot
+
+The last-used effort changes whenever a session picks another level, so it
+cannot restore the configuration the user starred. Keeping an optional effort
+on the favorite preserves that choice and lets old model-only favorites keep
+their existing behavior without a migration.
 
 ### Why the Settings view passes its voice availability snapshot
 

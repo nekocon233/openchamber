@@ -12,6 +12,7 @@ import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey 
 import type { ShortcutCombo } from '@/lib/shortcuts';
 import type { DraftStarterRef } from '@/lib/draftStarters';
 import type { CustomProviderIcon } from '@/lib/customProviderIcons';
+import type { ModelRef } from '@/lib/settings/parsers';
 import { DEFAULT_MONO_FONT, DEFAULT_UI_FONT, DEFAULT_UI_FONT_WEIGHT, type MonoFontOption, type UiFontOption, type UiFontWeight } from '@/lib/fontOptions';
 import { getStoredMobileKeyboardMode, type MobileKeyboardMode } from '@/lib/mobileKeyboardMode';
 import type { TerminalShell } from '@/lib/api/types';
@@ -1128,7 +1129,7 @@ interface UIStore {
   mobileKeyboardMode: MobileKeyboardMode;
   persistChatDraft: boolean;
 
-  favoriteModels: Array<{ providerID: string; modelID: string }>;
+  favoriteModels: ModelRef[];
   favoriteAgentCombinations: string[];
   favoritePickerOrder: string[];
   agentCombinationOrder: string[];
@@ -1456,7 +1457,7 @@ interface UIStore {
   setMobileKeyboardMode: (mode: MobileKeyboardMode) => void;
   applyTypography: () => void;
   applyPadding: () => void;
-  toggleFavoriteModel: (providerID: string, modelID: string) => void;
+  toggleFavoriteModel: (providerID: string, modelID: string, variant?: string | null) => void;
   toggleFavoriteAgentCombination: (id: string) => void;
   reorderFavoritePickerItem: (active: string, over: string) => void;
   setAgentCombinationOrder: (ids: string[]) => void;
@@ -3199,7 +3200,7 @@ export const useUIStore = create<UIStore>()(
           if (parsed.success) set({ agentCombinationOrder: parsed.data });
         },
 
-        toggleFavoriteModel: (providerID, modelID) => {
+        toggleFavoriteModel: (providerID, modelID, variant) => {
           set((state) => {
             const exists = state.favoriteModels.some(
               (fav) => fav.providerID === providerID && fav.modelID === modelID
@@ -3215,8 +3216,10 @@ export const useUIStore = create<UIStore>()(
               };
             } else {
               // Add to favorites (newest first)
+              const favorite: ModelRef = { providerID, modelID };
+              if (variant !== undefined) favorite.variant = variant;
               return {
-                favoriteModels: [{ providerID, modelID }, ...state.favoriteModels],
+                favoriteModels: [favorite, ...state.favoriteModels],
                 favoritePickerOrder: [modelPickerModelKey({ providerID, modelID }), ...state.favoritePickerOrder.filter((key) => key !== modelPickerModelKey({ providerID, modelID }))],
               };
             }

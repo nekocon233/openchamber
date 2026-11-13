@@ -25,7 +25,7 @@ export type SettingsParser<T> = (value: unknown, raw: SettingsRawDocument) => T 
 /** The untrusted document as received; only ever read through a parser. */
 export type SettingsRawDocument = Readonly<Record<string, unknown>>;
 
-export type ModelRef = { providerID: string; modelID: string };
+export type ModelRef = { providerID: string; modelID: string; variant?: string | null };
 
 export type NotificationTemplates = {
   completion: { title: string; message: string };
@@ -143,12 +143,16 @@ const modelRefSchema = z.object({
   modelID: nonEmptyTrimmed,
 });
 
-export const parseModelRefs = (limit: number): SettingsParser<ModelRef[]> => fromSchema(
+const favoriteModelRefSchema = modelRefSchema.extend({
+  variant: nonEmptyTrimmed.nullable().optional().catch(undefined),
+});
+
+export const parseModelRefs = (limit: number, includeVariant = false): SettingsParser<ModelRef[]> => fromSchema(
   z.array(z.unknown()).transform((entries) => {
     const result: ModelRef[] = [];
     const seen = new Set<string>();
     for (const entry of entries) {
-      const parsed = modelRefSchema.safeParse(entry);
+      const parsed = (includeVariant ? favoriteModelRefSchema : modelRefSchema).safeParse(entry);
       if (!parsed.success) continue;
       const key = `${parsed.data.providerID}/${parsed.data.modelID}`;
       if (seen.has(key)) continue;
