@@ -1617,9 +1617,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 
     React.useEffect(() => {
         if (!active || !currentSessionId) return;
-        if (hasRenderableSessionSnapshot || spaceStopped) return;
+        // Live fragments can have parts before history reaches their user prompt.
+        if ((hasRenderableSessionSnapshot && sessionMessageLoadState.resolved) || spaceStopped) return;
         void ensureSessionRenderable(currentSessionId);
-    }, [currentSessionId, ensureSessionRenderable, hasRenderableSessionSnapshot, active, spaceStopped]);
+    }, [currentSessionId, ensureSessionRenderable, hasRenderableSessionSnapshot, sessionMessageLoadState.resolved, active, spaceStopped]);
 
     // A space that runs again answers the load the chat held, or the one that failed while it
     // was going down: the user waiting on its start sees the chat without a retry.
