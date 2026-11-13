@@ -69,6 +69,10 @@ describe('toolDiffUtils', () => {
             movePath: '/workspace/project/src/second.ts',
             relativePath: 'src/second.ts',
         })).toBe('/workspace/project/src/second.ts');
+        expect(getApplyPatchFilePath({ file: '', filePath: ' /workspace/project/src/valid.ts ' }))
+            .toBe('/workspace/project/src/valid.ts');
+        expect(getApplyPatchFilePath({ file: ' ', movePath: '\t', relativePath: 'src/fallback.ts' }))
+            .toBe('src/fallback.ts');
     });
 
     test('selects the move patch and line from the same non-deleted file', () => {

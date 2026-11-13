@@ -467,17 +467,8 @@ const parseQuestionOutput = (output: string): Array<{ question: string; answer: 
     return pairs.length > 0 ? pairs : null;
 };
 
-const getToolDescriptionPath = (part: ToolPartType, state: ToolStateUnion, currentDirectory: string): string | null => {
-    const stateWithData = state as ToolStateWithMetadata;
-    const described = toolDescription(part.tool, stateWithData.input, stateWithData.metadata);
-    if (described?.kind !== 'path') {
-        return null;
-    }
-    return getRelativePath(described.value, currentDirectory);
-};
-
 type DescriptionTranslate = (
-    key: 'chat.toolPart.questionsAsked' | 'chat.toolPart.filesCount' | 'chat.toolPart.moreToolCalls',
+    key: 'chat.toolPart.questionsAsked' | 'chat.toolPart.moreToolCalls',
     params: { count: number },
 ) => string;
 
@@ -492,7 +483,7 @@ const describeTool = (described: ToolDescription | null, currentDirectory: strin
         case 'questions':
             return t('chat.toolPart.questionsAsked', { count: described.count });
         case 'files':
-            return t('chat.toolPart.filesCount', { count: described.count });
+            return [...new Set(described.files.map((path) => getRelativePath(path, currentDirectory)))].join(', ');
         case 'tools': {
             const named = described.calls
                 .map(({ name, count }) => (count > 1 ? `${name} \u00d7${count}` : name))
@@ -502,11 +493,6 @@ const describeTool = (described: ToolDescription | null, currentDirectory: strin
                 : named;
         }
     }
-};
-
-const getToolDescription = (part: ToolPartType, state: ToolStateUnion, currentDirectory: string, t: DescriptionTranslate): string => {
-    const stateWithData = state as ToolStateWithMetadata;
-    return describeTool(toolDescription(part.tool, stateWithData.input, stateWithData.metadata), currentDirectory, t);
 };
 
 interface ToolScrollableSectionProps {
@@ -1307,28 +1293,24 @@ const renderPathLikeGitChanges = (path: string, grow = true) => {
         return (
             <span
                 className={cn('oc-ui-start-align min-w-0 truncate typography-ui-label text-foreground', grow && 'flex-1')}
-                style={{ direction: 'rtl', unicodeBidi: 'plaintext' }}
+                style={{ direction: 'rtl', unicodeBidi: 'isolate' }}
                 title={path}
             >
-                {path}
+                <bdi dir="ltr">{path}</bdi>
             </span>
         );
     }
 
-    const dir = path.slice(0, lastSlash);
+    const dir = path.slice(0, lastSlash + 1);
     const name = path.slice(lastSlash + 1);
-    const hasAbsoluteRoot = dir.startsWith('/');
-    const displayDir = hasAbsoluteRoot ? dir.slice(1) : dir;
 
     return (
         <span dir="ltr" className={cn('min-w-0 flex items-baseline overflow-hidden typography-ui-label', grow && 'flex-1')} title={path}>
-            {hasAbsoluteRoot ? <span className="flex-shrink-0 text-muted-foreground">/</span> : null}
-            <span className="oc-ui-start-align min-w-0 truncate text-muted-foreground" style={{ direction: 'rtl', unicodeBidi: 'plaintext' }}>
-                {displayDir}
+            <span className="min-w-0 truncate text-muted-foreground" style={{ direction: 'rtl', unicodeBidi: 'isolate' }}>
+                <bdi dir="ltr">{dir}</bdi>
             </span>
-            <span className="flex-shrink-0">
-                <span className="text-muted-foreground">/</span>
-                <span className="text-foreground">{name}</span>
+            <span className="min-w-0 max-w-full shrink-0 truncate text-foreground" style={{ direction: 'rtl', unicodeBidi: 'isolate' }}>
+                <bdi dir="ltr">{name}</bdi>
             </span>
         </span>
     );
@@ -1344,41 +1326,37 @@ const renderAnimatedPathWithIcon = (path: string, animate = true, grow = true, s
                 <Text
                     variant={animate ? 'generate-effect' : 'static'}
                     className={cn('min-w-0 truncate whitespace-nowrap', textClassName, grow && 'flex-1')}
-                    style={{ color: 'var(--tools-title)' }}
+                    style={{ color: 'var(--tools-title)', direction: 'rtl', unicodeBidi: 'isolate' }}
                 >
-                    {path}
+                    <bdi dir="ltr">{path}</bdi>
                 </Text>
             </span>
         );
     }
 
-    const dir = path.slice(0, lastSlash);
+    const dir = path.slice(0, lastSlash + 1);
     const name = path.slice(lastSlash + 1);
-    const hasAbsoluteRoot = dir.startsWith('/');
-    const displayDir = hasAbsoluteRoot ? dir.slice(1) : dir;
 
     return (
         <span className={cn('min-w-0 inline-flex items-center gap-1 overflow-hidden', grow && 'flex-1')} title={path}>
             {showFileIcons ? <FileTypeIcon filePath={path} className="h-3.5 w-3.5 flex-shrink-0" /> : null}
             <span dir="ltr" className={cn('min-w-0 inline-flex max-w-full items-baseline overflow-hidden', textClassName, grow && 'flex-1')}>
-                {hasAbsoluteRoot ? <span className="flex-shrink-0" style={{ color: 'var(--tools-description)' }}>/</span> : null}
                 <span
-                    className="oc-ui-start-align min-w-0 shrink truncate whitespace-nowrap"
+                    className="min-w-0 shrink truncate whitespace-nowrap"
                     style={{
                         color: 'var(--tools-description)',
                         direction: 'rtl',
-                        unicodeBidi: 'plaintext',
+                        unicodeBidi: 'isolate',
                     }}
                 >
-                    {displayDir}
+                    <bdi dir="ltr">{dir}</bdi>
                 </span>
-                <span className="flex-shrink-0" style={{ color: 'var(--tools-description)' }}>/</span>
                 <Text
                     variant={animate ? 'generate-effect' : 'static'}
-                    className="flex-shrink-0"
-                    style={{ color: 'var(--tools-title)' }}
+                    className="min-w-0 max-w-full shrink-0 truncate"
+                    style={{ color: 'var(--tools-title)', direction: 'rtl', unicodeBidi: 'isolate' }}
                 >
-                    {name}
+                    <bdi dir="ltr">{name}</bdi>
                 </Text>
             </span>
         </span>
@@ -2232,10 +2210,10 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
             ? [{ id: 'write', title: writtenInput.filePath ?? '', patch: addedFilePatch(writtenInput.content) }]
             : [];
     }, [conciseTranscript, currentDirectory, metadata, normalizedPartTool, recordedChanges, status, writtenInput]);
-    const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && Array.isArray(metadata?.files) && metadata.files.length > 1;
-    const normalizedPart = normalizedPartTool !== part.tool ? ({ ...part, tool: normalizedPartTool } as ToolPartType) : part;
-    const descriptionPath = getToolDescriptionPath(normalizedPart, state, currentDirectory);
-    const builtInDescription = getToolDescription(normalizedPart, state, currentDirectory, t);
+    const described = toolDescription(normalizedPartTool, input, metadata);
+    const builtInDescription = describeTool(described, currentDirectory, t);
+    const descriptionPath = described?.kind === 'path' || described?.kind === 'files' ? builtInDescription : null;
+    const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && described?.kind === 'files' && toolFileDiffs(metadata).length > 1;
     const stateOutput = typeof stateWithData.output === 'string' ? stateWithData.output : undefined;
     const guestHeader = React.useMemo(
         () => (presentation ? renderGuestToolHeader(presentation, { input, output: stateOutput, metadata }) : null),
