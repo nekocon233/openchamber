@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { desktopFailureSchema, desktopSessionSchema, desktopStatusSchema } from '../contract.ts';
-export type { DesktopStatus, DesktopMode as Mode } from '../contract.ts';
+export type { DesktopStatus } from '../contract.ts';
 
 export const readDesktopStatus = (body: string) => desktopStatusSchema.parse(JSON.parse(body));
 export const readSession = (body: string) => desktopSessionSchema.parse(JSON.parse(body));

@@ -1,9 +1,12 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Header } from './Header';
 import { EditorWorkspaceFit } from './EditorWorkspaceFit';
 import { useWorkspaceOverlay } from './editorWorkspaceSizing';
 import { EditorWorkspaceColumns } from './EditorWorkspaceColumns';
-import { setChatHeaderHost } from './workspaceHosts';
+import { setChatHeaderHost, useWorkspaceHosts } from './workspaceHosts';
+import { StatusHeaderControls } from '@/components/chat/work-status/StatusHeaderControls';
+import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { Sidebar } from './Sidebar';
 import { SidebarTopBar } from './SidebarTopBar';
 import { useSidebarPeek } from './useSidebarPeek';
@@ -43,6 +46,31 @@ import { ChatView } from '@/components/views/ChatView';
 import { DiagnosticDialogAvailableContext } from '@/lib/diagnostics/dialog-availability';
 
 const loadSettingsWindow = () => import('@/components/views/SettingsWindow').then(m => m.SettingsWindow);
+
+const GuestPagePane: React.FC<{ guestId: string }> = ({ guestId }) => {
+    const headerHost = useWorkspaceHosts((state) => state.guestPageHeader);
+    const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
+    return (
+        <>
+            {headerHost && controls ? createPortal(
+                <StatusHeaderControls
+                    controls={controls.controls}
+                    layout="inline"
+                    appearance="toolbar"
+                    onActivate={(id, value) => controls.dispatch(value === undefined ? { id } : { id, value })}
+                />,
+                headerHost,
+            ) : null}
+            <PluginPane
+                mode={`plugin:${guestId}`}
+                surface="page"
+                item={null}
+                onStatusControls={setControls}
+                onDismiss={() => useUIStore.getState().setOpenGuestPage(null)}
+            />
+        </>
+    );
+};
 
 // Live motion knobs, development builds only: the import is dropped from
 // production bundles.
@@ -254,8 +282,7 @@ export const MainLayout: React.FC = () => {
                                             <ErrorBoundary><OnDemand needed={Boolean(worktreesPageProjectId)} load={loadWorktreesView} onFailure={closeMainSurfaces} /></ErrorBoundary>
                                             {isSpacesPageOpen ? <ErrorBoundary><OnDemand needed load={loadSpacesView} onFailure={closeMainSurfaces} /></ErrorBoundary> : null}
                                             {guestPage && <div className="absolute inset-0 z-10 bg-background">
-                                                <ErrorBoundary><PluginPane mode={`plugin:${guestPage.id}`} surface="page" item={null}
-                                                    onDismiss={() => useUIStore.getState().setOpenGuestPage(null)} /></ErrorBoundary>
+                                                <ErrorBoundary><GuestPagePane key={guestPage.id} guestId={guestPage.id} /></ErrorBoundary>
                                             </div>}
                                         </main>
                                         </div>

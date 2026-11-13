@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useWorkspaceHosts } from './workspaceHosts';
+import { setGuestPageHeaderHost, useWorkspaceHosts } from './workspaceHosts';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
 import { describeSessionActionError } from '@/components/session/sidebar/sessions/sessionActionError';
 import React, { useEffect } from 'react';
@@ -1060,6 +1060,9 @@ export const Header: React.FC = () => {
               </span>
             ) : null}
           </div>
+          {guestPage ? (
+            <div ref={setGuestPageHeaderHost} className="app-region-no-drag flex shrink-0 items-center empty:hidden" />
+          ) : null}
           </>
         ) : (isVSCode || !sessionTabsEnabled) ? (
           <div className="app-region-no-drag me-3 flex min-w-0 max-w-full items-center gap-0.5 py-0.5 -my-0.5 text-start">

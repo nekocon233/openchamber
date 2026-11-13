@@ -65,6 +65,21 @@ test('renders independent controls with full accessible labels and refuses disab
     await act(async () => refresh.click());
     await act(async () => disabled.click());
     expect(events).toEqual([{ id: 'refresh' }]);
+
+    await act(async () => root.render(
+      <StatusHeaderControls
+        layout="inline"
+        appearance="toolbar"
+        controls={[{ kind: 'button', id: 'connect', label: 'Connect' }]}
+        onActivate={(id, value) => events.push(value === undefined ? { id } : { id, value })}
+      />,
+    ));
+    const toolbarButton = container.querySelector<HTMLButtonElement>('[data-work-status-control="connect"] button');
+    if (!toolbarButton) throw new Error('Toolbar control did not render');
+    expect(toolbarButton.className).toContain('app-region-no-drag');
+    expect(toolbarButton.className).toContain('h-7');
+    await act(async () => toolbarButton.click());
+    expect(events).toEqual([{ id: 'refresh' }, { id: 'connect' }]);
   } finally {
     await act(async () => root.unmount());
     await dom.happyDOM.close();
