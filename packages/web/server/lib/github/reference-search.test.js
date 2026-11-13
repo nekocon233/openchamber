@@ -70,6 +70,67 @@ describe('buildReferenceSearchQuery', () => {
   });
 });
 
+describe('repository review-requested membership', () => {
+  const requestedUser = { __typename: 'User', isViewer: true };
+  const pull = (number, reviewers = [], hasNextPage = false) => ({
+    __typename: 'PullRequest', ...common(number), state: 'OPEN', isDraft: false,
+    headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc', headRepository: null,
+    reviewRequests: { nodes: reviewers.map(requestedReviewer => ({ requestedReviewer })), pageInfo: { hasNextPage } },
+    repository: { name: 'app', owner: { login: 'acme', __typename: 'Organization', teams: {
+      nodes: [{ id: 'viewer-team' }], pageInfo: { hasNextPage: false },
+    } } },
+  });
+  const options = { repos: [origin], kind: 'pull', state: 'open', people: 'reviewRequested', text: '', scope: 'repository' };
+  const pageOf = nodes => ({ search: { issueCount: 40, pageInfo: { hasNextPage: true, endCursor: 'next' }, nodes } });
+
+  it('rejects stale search membership after review and retains current user and team requests', async () => {
+    const calls = [];
+    let nodes = [pull(1), pull(2, [requestedUser]), pull(3, [{ __typename: 'Team', id: 'viewer-team' }]),
+      pull(4, [{ __typename: 'User', isViewer: false }, { __typename: 'Team', id: 'other-team' }, null]), pull(5, [], true)];
+    const octokit = { graphql: async (query, variables) => { calls.push({ query, variables }); return pageOf(nodes); } };
+    const page = await searchGitHubReferences({ ...options, octokit });
+    expect(page.items.map(item => item.number)).toEqual([2, 3, 5]);
+    expect(page).toMatchObject({ hasMore: true, cursor: 'next', total: 40 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].variables.withReviewRequests).toBe(true);
+    expect(calls[0].query).toContain('reviewRequests(first: 100)');
+
+    // A new request is authoritative even when this viewer approved before it.
+    nodes = [pull(1, [requestedUser])];
+    expect((await searchGitHubReferences({ ...options, octokit })).items.map(item => item.number)).toEqual([1]);
+  });
+
+  it('keeps team requests when the viewer membership connection is incomplete', async () => {
+    const node = pull(1, [{ __typename: 'Team', id: 'unread-team' }]);
+    node.repository.owner.teams.pageInfo.hasNextPage = true;
+    const octokit = { graphql: async () => pageOf([node]) };
+    expect((await searchGitHubReferences({ ...options, octokit })).items).toHaveLength(1);
+  });
+
+  it('applies the category to repository number lookups while leaving linked previews and network lookups available', async () => {
+    const octokit = { graphql: async () => ({ a0: { issueOrPullRequest: pull(1) } }) };
+    expect((await searchGitHubReferences({ ...options, octokit, text: '#1' })).items).toEqual([]);
+    expect((await searchGitHubReferences({ ...options, octokit, text: '#1', people: 'any' })).items).toHaveLength(1);
+    expect((await searchGitHubReferences({ ...options, octokit, text: '#1', scope: 'network' })).items).toHaveLength(1);
+  });
+
+  it('fails unreadable review membership without turning it into an authoritative empty result', async () => {
+    const node = pull(1);
+    delete node.reviewRequests;
+    const octokit = { graphql: async () => pageOf([node]) };
+    await expect(searchGitHubReferences({ ...options, octokit })).rejects.toThrow();
+    expect((await searchGitHubReferences({ ...options, octokit, people: 'any' })).items).toHaveLength(1);
+  });
+
+  it('preserves lookup failures that null a review target while accepting an absent number', async () => {
+    const failure = { data: { a0: { issueOrPullRequest: null } }, errors: [{ type: 'FORBIDDEN' }] };
+    const octokit = { graphql: async () => { throw failure; } };
+    await expect(searchGitHubReferences({ ...options, octokit, text: '#1' })).rejects.toBe(failure);
+    failure.errors = [{ type: 'NOT_FOUND' }];
+    expect((await searchGitHubReferences({ ...options, octokit, text: '#1' })).items).toEqual([]);
+  });
+});
+
 describe('readPullStatusRefs', () => {
   it('reads `owner/repo#number` refs without a host as github.com', () => {
     expect(readPullStatusRefs('acme/app#1,  Upstream/App#42 ,acme/app#1')).toEqual([

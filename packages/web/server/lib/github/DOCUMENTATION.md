@@ -266,6 +266,16 @@ that page, so callers cannot mistake a partial page for a complete one.
 
 - `GET /api/source-control/github/references?<read context>&kind=issue|pull&state=&people=&query=&cursor=` takes the same bound read context as every canonical read and answers one page (30) of the project's issues or PRs across its repo network, read with that context's account (origin plus fork parent/source): `{ connected, repo, items, cursor, hasMore, total }`. `repo: null` means the project has no GitHub remote.
 - One GraphQL `search` document per page, newest activity first. `state` (`open`, the default, `closed`, `merged`, `all`) and `people` (`any`, the default, `assigned` → `assignee:@me`, `created` → `author:@me`, `reviewRequested` → `review-requested:@me`) combine; an issue list reads `merged` as closed and ignores review requests. User text is appended as is, so GitHub qualifiers work; state and sort are added only when the text sets none.
+- Repository-scoped PR lists with `people=reviewRequested` verify current user
+  and team review requests in the same document, including number and URL
+  lookups. A result whose complete request connection no longer names the viewer
+  or a team they belong to is omitted. Connections stop at 100 requests; an
+  incomplete connection stays visible. Viewer team memberships are also bounded
+  at 100, and an incomplete membership read retains unresolved team requests.
+  An unreadable connection fails the page, including GraphQL errors that null
+  a direct lookup. Search cursors, ordering and the indexed total remain unchanged, so a
+  page can be shorter while GitHub updates its search index. Other filters and
+  network lookups do not request these fields.
 - A review thread's comments carry `excerpt` (`{ startLine, lines }`): the new-side lines the comment sits on, cut from the end of its `diffHunk` (`reviewCommentExcerpt`; an outdated comment reads its original range). The UI draws a ```` ```suggestion ```` in the comment against them. A hunk that does not cover the range, or a range over 200 lines, leaves it out.
 - A pasted `#123`, `123` or github.com issue/PR link skips search and reads that number with `issueOrPullRequest` in every network repo (a link: only its own repo), whichever of the two the tab lists. The discussions list reads a number or a discussion link with `discussion(number:)` instead, and a link of the other family is searched as text on both, so a discussion never lands in an issues answer an older client would fail to parse.
 - Each item carries what a row and the preview show: state (issues `open` / `completed` / `not_planned`, PRs `open` / `closed` / `merged`), author, labels, comment count, the body cut at 20 000 characters (`bodyTruncated`), and for a PR draft, head/base and head repo (with `cloneUrl` for fork worktrees).
@@ -341,6 +351,14 @@ The client's branch PR state is `useGitHubPrStatusStore`, a provider-neutral sto
 - Repo parser supports scp, `ssh://`, and `https://` remotes for any host, including GitHub Enterprise; `getOctokitOrNull(host)` pairs each Enterprise host with that host's gh token. Remotes on hosts the server never authenticated with are refused before any token is looked up ("Host trust" above), so a gitlab.com (or arbitrary) remote resolves to `repo: null` instead of receiving an enterprise token.
 
 ## Decisions
+
+### Why awaiting-review lists verify current requests
+
+A successful review can clear the viewer's request before GitHub's search index
+stops returning the PR. Refreshing that search alone leaves a completed review
+in the project queue. Reading current requests with each matching page removes
+that stale membership and still admits a later request, without a local list of
+completed PRs or extra per-item requests.
 
 ### Why versioned pending reviews keep their own route
 

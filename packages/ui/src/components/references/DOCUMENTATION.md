@@ -93,6 +93,9 @@ and file-type exclusions. Picker and board rows do not mount this reader.
 - A list is cached per key `[runtime, account or Linear workspace, project, kind, filter, search text]`. Switching tabs or filters, or reopening the picker, shows the cached list at once; one older than 60 s refreshes in the background and is replaced when the answer lands. `revalidateReferences` makes every mounted list, preview and PR status check its age again.
 - A failed first load is an `error` state with Retry. A failed refresh keeps the shown items and shows the error above them. Failure never becomes an empty list.
 - Every first-page request bumps the key's generation; an answer or a later page from an older generation is dropped.
+- The paging sentinel resumes after each successful page, including a page with
+  no visible items after membership filtering. A failed page stops automatic
+  paging until Retry, preserving the items already read.
 - A forced refresh that arrives during a first-page read waits for that read,
   then performs a fresh one. Clearing the cache retires queued refreshes and
   old responses. Deferred page readers check their runtime before dispatch.
@@ -232,7 +235,10 @@ preview's footer holds actions instead of what the agent gets.
 - The project PR list refresh button uses the same provider-cache invalidation
   before its forced list read. It stays busy through both operations and keeps
   the displayed list on failure. Review-requested membership comes from the
-  provider's fresh result; approval alone does not close a PR in the All list.
+  provider's current pending user or team requests, checked in the repository
+  page query even when search membership lags behind a completed review. A
+  number or URL search in this category obeys the same check. Approval alone
+  does not close a PR in the All list.
 - The side panel and its rail stay beside the board. A board under 960 px
   wide shows the kinds by icon and drops the list column: a trigger left of the search names the previewed
   item (`#12`, `!12`, `ENG-7`) and opens the list as a dropdown over the

@@ -210,16 +210,16 @@ export const ReferenceBrowserList: React.FC<{
 
     // Load the next page when the end of the list scrolls into view.
     const sentinelRef = React.useRef<HTMLDivElement>(null);
-    const { hasMore, loadMore } = list;
+    const { hasMore, loadMore, loadingMore, refreshing, error } = list;
     React.useEffect(() => {
         const sentinel = sentinelRef.current;
-        if (!sentinel || !hasMore) return;
+        if (!sentinel || !hasMore || loadingMore || refreshing || error) return;
         const observer = new IntersectionObserver((entries) => {
             if (entries.some((entry) => entry.isIntersecting)) loadMore();
         }, { rootMargin: '200px' });
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [hasMore, loadMore, items.length]);
+    }, [hasMore, loadMore, items.length, loadingMore, refreshing, error]);
 
     const centered = (children: React.ReactNode) => (
         <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 px-6 py-10 text-center typography-meta text-muted-foreground">
