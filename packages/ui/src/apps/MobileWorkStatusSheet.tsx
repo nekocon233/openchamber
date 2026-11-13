@@ -14,6 +14,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
  */
 export const MobileWorkStatusSheet: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const { t } = useI18n();
+  const [sectionControlsHost, setSectionControlsHost] = React.useState<HTMLDivElement | null>(null);
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
   const effectiveDirectory = useEffectiveDirectory() ?? null;
   const draft = useSessionUIStore((state) => state.newSessionDraft);
@@ -25,6 +26,7 @@ export const MobileWorkStatusSheet: React.FC<{ open: boolean; onClose: () => voi
       title={t('mobile.header.metadata.workStatus')}
       onClose={onClose}
       contentMaxHeightClassName="max-h-none"
+      headerActions={<div ref={setSectionControlsHost} className="flex items-center" />}
     >
       <ErrorBoundary>
         <WorkStatusPanel
@@ -33,6 +35,7 @@ export const MobileWorkStatusSheet: React.FC<{ open: boolean; onClose: () => voi
           repositoryEnabled={!isManagedChat}
           visible={open}
           presentation="sheet"
+          sectionControlsHost={sectionControlsHost}
           prewarmPrStatus
         />
       </ErrorBoundary>
