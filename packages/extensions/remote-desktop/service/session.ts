@@ -8,17 +8,16 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { currentUser, inspectEnvironment, type DesktopEnvironment, type DesktopUser } from './environment.ts';
 import { reserveDisplay, type SessionSpec } from './supervisor.ts';
+import type { DesktopFailure } from '../contract.ts';
 
-import type { DesktopMode, DesktopFailure } from '../contract.ts';
 export class DesktopError extends Error {
   constructor(readonly code: DesktopFailure) { super(code); }
 }
-type SessionKey = 'virtual' | `physical:${string}`;
 type DesktopSession = {
-  key: SessionKey; id: string; mode: DesktopMode; display: string; password: string; port: number; state: 'starting' | 'ready'; displayLock: string | null;
+  id: string; display: string; password: string; port: number; state: 'starting' | 'ready'; displayLock: string | null;
   child: ChildProcess | null; directory: string | null; abort: AbortController;
   releaseDisplay: (() => Promise<void>) | null; viewers: Set<() => void>;
-  ready: Promise<DesktopSession>; idleTimer: ReturnType<typeof setTimeout> | null;
+  ready: Promise<DesktopSession>;
 };
 
 const addressSchema = z.object({ port: z.number().int().positive() });
@@ -73,52 +72,39 @@ const stopChild = async (child: ChildProcess): Promise<void> => {
 };
 
 export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), createDirectory = () => fs.mkdtemp(path.join(os.tmpdir(), 'openchamber-desktop-'))) => {
-  const sessions = new Map<SessionKey, DesktopSession>();
+  let activeSession: DesktopSession | null = null;
   const cleaning = new WeakMap<DesktopSession, Promise<void>>();
   let shuttingDown = false;
   const cleanup = (session: DesktopSession): Promise<void> => {
     const current = cleaning.get(session);
     if (current) return current;
     const pending = (async () => {
-    session.abort.abort();
-    if (session.idleTimer) clearTimeout(session.idleTimer);
-    for (const close of [...session.viewers]) close();
-    session.viewers.clear();
-    if (session.child) await stopChild(session.child);
-    if (session.directory) await fs.rm(session.directory, { recursive: true, force: true });
-    await session.releaseDisplay?.();
-    if (sessions.get(session.key) === session) sessions.delete(session.key);
+      session.abort.abort();
+      for (const close of [...session.viewers]) close();
+      session.viewers.clear();
+      if (session.child) await stopChild(session.child);
+      if (session.directory) await fs.rm(session.directory, { recursive: true, force: true });
+      await session.releaseDisplay?.();
+      if (activeSession === session) activeSession = null;
     })();
     cleaning.set(session, pending);
     return pending;
   };
-  const prepare = async (session: DesktopSession, options: { display?: string; width?: number; height?: number }) => {
+  const prepare = async (session: DesktopSession, options: { width?: number; height?: number }) => {
     const assertActive = () => { if (session.abort.signal.aborted || shuttingDown) throw new DesktopError('STOPPED'); };
     try {
       const environment = await inspectEnvironment();
       assertActive();
       if (environment.platform !== 'linux') throw new DesktopError('UNSUPPORTED');
       if (!environment.binaries.password) throw new DesktopError('NO_PASSWORD_TOOL');
-      environment.displays = environment.displays.filter((item) => item.display !== sessions.get('virtual')?.display);
-      const display = environment.displays.find((item) => item.display === options.display) ?? (!options.display ? environment.displays.find((item) => item.authority) ?? environment.displays[0] : undefined);
-      let user = session.mode === 'virtual' ? currentUser() : display ?? currentUser();
-      let authority = '';
-      if (session.mode === 'physical') {
-        if (!display) throw new DesktopError('NO_X11');
-        if (!environment.binaries.physical) throw new DesktopError('NO_PHYSICAL_SERVER');
-        if (!display.authority) throw new DesktopError('NO_XAUTHORITY');
-        user = display;
-        authority = display.authority;
-        session.display = display.display;
-      } else {
-        if (!environment.binaries.virtual) throw new DesktopError('NO_VIRTUAL_SERVER');
-        if (!environment.binaries.desktop) throw new DesktopError('NO_DESKTOP');
-        const reserved = await reserveDisplay();
-        session.display = reserved.display;
-        session.releaseDisplay = reserved.release;
-        session.displayLock = reserved.lock;
-        if (process.getuid?.() === 0) await fs.chown(reserved.lock, user.uid, user.gid);
-      }
+      if (!environment.binaries.virtual) throw new DesktopError('NO_VIRTUAL_SERVER');
+      if (!environment.binaries.desktop) throw new DesktopError('NO_DESKTOP');
+      const user = currentUser();
+      const reserved = await reserveDisplay();
+      session.display = reserved.display;
+      session.releaseDisplay = reserved.release;
+      session.displayLock = reserved.lock;
+      if (process.getuid?.() === 0) await fs.chown(reserved.lock, user.uid, user.gid);
       assertActive();
       session.directory = await createDirectory();
       await fs.chmod(session.directory, 0o700);
@@ -128,11 +114,9 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       const password = await passwordBytes(environment.binaries.password, session.password, session.abort.signal);
       await fs.writeFile(passwordFile, password, { mode: 0o600 });
       if (process.getuid?.() === 0) await fs.chown(passwordFile, user.uid, user.gid);
-      if (session.mode === 'virtual') {
-        authority = path.join(session.directory, 'Xauthority');
-        await fs.writeFile(authority, xAuthority(session.display), { mode: 0o600 });
-        if (process.getuid?.() === 0) await fs.chown(authority, user.uid, user.gid);
-      }
+      const authority = path.join(session.directory, 'Xauthority');
+      await fs.writeFile(authority, xAuthority(session.display), { mode: 0o600 });
+      if (process.getuid?.() === 0) await fs.chown(authority, user.uid, user.gid);
       assertActive();
       session.port = await reservePort();
       assertActive();
@@ -161,57 +145,47 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       assertActive();
       child.once('exit', () => { void cleanup(session); });
       session.state = 'ready';
-      if (session.mode === 'physical') scheduleIdle(session);
       return session;
     } catch (error) { await cleanup(session); throw error instanceof DesktopError ? error : new DesktopError('START_FAILED'); }
   };
-  const scheduleIdle = (session: DesktopSession) => {
-    if (session.idleTimer) clearTimeout(session.idleTimer);
-    if (session.mode !== 'physical' || session.viewers.size > 0 || session.abort.signal.aborted) return;
-    session.idleTimer = setTimeout(() => { session.idleTimer = null; void cleanup(session); }, 15_000);
-    session.idleTimer.unref?.();
-  };
   return {
-    start(mode: DesktopMode, options: { display?: string; width?: number; height?: number } = {}): Promise<DesktopSession> {
+    start(options: { width?: number; height?: number } = {}): Promise<DesktopSession> {
       if (shuttingDown) return Promise.reject(new DesktopError('STOPPED'));
-      const key: SessionKey = mode === 'virtual' ? 'virtual' : `physical:${options.display ?? 'default'}`;
-      const current = sessions.get(key);
+      const current = activeSession;
       if (current) return current.abort.signal.aborted
-        ? current.ready.catch(() => undefined).then(() => cleanup(current)).then(() => this.start(mode, options))
+        ? current.ready.catch(() => undefined).then(() => cleanup(current)).then(() => this.start(options))
         : current.ready;
-      const session: DesktopSession = { key, id: randomUUID(), mode, display: '', state: 'starting', displayLock: null, password: randomBytes(6).toString('base64'), port: 0,
-        child: null, directory: null, releaseDisplay: null, viewers: new Set(), abort: new AbortController(), ready: Promise.resolve().then(() => prepare(session, options)), idleTimer: null };
-      sessions.set(key, session);
+      const session: DesktopSession = {
+        id: randomUUID(), display: '', state: 'starting', displayLock: null, password: randomBytes(6).toString('base64'), port: 0,
+        child: null, directory: null, releaseDisplay: null, viewers: new Set(), abort: new AbortController(),
+        ready: Promise.resolve().then(() => prepare(session, options)),
+      };
+      activeSession = session;
       return session.ready;
     },
-    get(id: string) { return [...sessions.values()].find((item) => item.id === id && item.state === 'ready' && !item.abort.signal.aborted) ?? null; },
-    list() { return [...sessions.values()].filter((item) => !item.abort.signal.aborted).map(({ id, mode, display, state }) => ({ id, mode, display, ready: state === 'ready' })); },
+    get(id: string) { return activeSession && activeSession.id === id && activeSession.state === 'ready' && !activeSession.abort.signal.aborted ? activeSession : null; },
+    status() {
+      return activeSession && !activeSession.abort.signal.aborted
+        ? { id: activeSession.id, display: activeSession.display, ready: activeSession.state === 'ready' }
+        : null;
+    },
     watch(session: DesktopSession, close: () => void) {
-      if (session.idleTimer) clearTimeout(session.idleTimer);
       session.viewers.add(close);
-      return () => { session.viewers.delete(close); scheduleIdle(session); };
+      return () => { session.viewers.delete(close); };
     },
-    async stop(mode: DesktopMode) {
-      const selected = [...sessions.values()].filter((session) => session.mode === mode);
-      for (const session of selected) session.abort.abort();
-      await Promise.all(selected.map(async (session) => {
-        await session.ready.catch(() => undefined);
-        await cleanup(session);
-      }));
+    async stop() {
+      const current = activeSession;
+      if (!current) return;
+      current.abort.abort();
+      await current.ready.catch(() => undefined);
+      await cleanup(current);
     },
-    async stopAll() { shuttingDown = true; await Promise.all([this.stop('physical'), this.stop('virtual')]); },
+    async stopAll() { shuttingDown = true; await this.stop(); },
   };
 };
 
 const sessionCommand = (session: DesktopSession, environment: DesktopEnvironment, options: { width?: number; height?: number }, passwordFile: string, env: Record<string, string>): SessionSpec => {
   const cleanup = { directory: session.directory!, ownerPid: process.pid, displayLock: session.displayLock ?? undefined };
-  if (session.mode === 'physical') {
-    const file = environment.binaries.physical!;
-    const args = path.basename(file) === 'x11vnc'
-      ? ['-display', session.display, '-auth', env.XAUTHORITY!, '-localhost', '-listen', '127.0.0.1', '-rfbport', String(session.port), '-rfbauth', passwordFile, '-forever', '-shared', '-quiet']
-      : ['-display', session.display, '-interface', '127.0.0.1', '-localhost', '-rfbport', String(session.port), '-PasswordFile', passwordFile, '-SecurityTypes', 'VncAuth', '-AlwaysShared'];
-    return { vnc: { file, args }, port: session.port, env, cleanup };
-  }
   const file = environment.binaries.virtual!;
   const desktop = { file: environment.binaries.dbus ?? environment.binaries.desktop!, args: environment.binaries.dbus ? ['--', environment.binaries.desktop!] : [] };
   return { vnc: { file, args: [session.display, '-interface', '127.0.0.1', '-localhost', '-rfbport', String(session.port), '-PasswordFile', passwordFile, '-SecurityTypes', 'VncAuth', '-AlwaysShared', '-geometry', `${options.width ?? 1280}x${options.height ?? 800}`, '-depth', '24', '-nolisten', 'tcp', '-auth', env.XAUTHORITY!, '-desktop', 'OpenChamber'] }, desktop, port: session.port, env, cleanup };

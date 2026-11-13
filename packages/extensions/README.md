@@ -14,6 +14,6 @@ Output goes to `packages/web/server/built-in-extensions/`. It is generated, igno
 
 Packaged Electron unpacks these resources from ASAR so future service entries can run as ordinary files. The backend selects its app-owned registry; user extensions and user data are stored separately.
 
-The Remote Desktop extension shares an existing Linux X11 desktop or starts a separate TigerVNC desktop. It is available in the sidebar page menu and context panel. Settings → Extensions controls Enable and Disable. Install TigerVNC and a window manager on the connected server; the extension reports missing tools.
+The Remote Desktop extension starts a separate TigerVNC desktop on Linux. It is available in the sidebar page menu and context panel. Settings → Extensions controls Enable and Disable. Install TigerVNC and a window manager on the connected server; the extension reports missing tools.
 
 Implementation and trust rules: [DOCUMENTATION.md](./DOCUMENTATION.md).

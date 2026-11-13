@@ -8,5 +8,5 @@ The panel also includes noVNC's vendored pako decoder under its license
 in LICENSE.pako.txt. The panel and service bundle Zod under the MIT license
 in LICENSE.zod.txt.
 
-TigerVNC and the optional x11vnc fallback are installed separately on the server.
-Their binaries are not included in the OpenChamber package.
+TigerVNC is installed separately on the server.
+Its binaries are not included in the OpenChamber package.

@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { ZodError } from 'zod';
-import { desktopStartSchema, type DesktopServiceReply, type DesktopFailure, type DesktopStatus } from '../contract.ts';
+import { desktopStartSchema, type DesktopServiceReply, type DesktopFailure } from '../contract.ts';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { inspectEnvironment, INSTALL_COMMANDS } from './environment.ts';
@@ -12,7 +12,7 @@ const json = (res: http.ServerResponse, status: number, value: DesktopServiceRep
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
 };
-const readBody = async (req: http.IncomingMessage) => {
+const readRawBody = async (req: http.IncomingMessage): Promise<string> => {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -20,7 +20,11 @@ const readBody = async (req: http.IncomingMessage) => {
     if (size > 4096) throw new Error('BODY_TOO_LARGE');
     chunks.push(chunk);
   }
-  return desktopStartSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  return Buffer.concat(chunks).toString('utf8');
+};
+const readStartBody = async (req: http.IncomingMessage) => {
+  const raw = (await readRawBody(req)).trim();
+  return desktopStartSchema.parse(raw ? JSON.parse(raw) : {});
 };
 
 export const startDesktopService = (port: number, token: string) => {
@@ -34,30 +38,29 @@ export const startDesktopService = (port: number, token: string) => {
         if (url.pathname === '/health' && req.method === 'GET') { json(res, 200, { ok: true }); return; }
         if (url.pathname === '/status' && req.method === 'GET') {
           const environment = await inspectEnvironment();
-          const active = sessions.list();
-          const displays = environment.displays.filter((display) => !active.some((session) => session.mode === 'virtual' && session.display === display.display));
-          const common: DesktopFailure[] = environment.platform !== 'linux' ? ['UNSUPPORTED'] : !environment.binaries.password ? ['NO_PASSWORD_TOOL'] : [];
-          const missing: DesktopStatus['missing'] = { physical: [...common], virtual: [...common] };
+          const missing: DesktopFailure[] = environment.platform !== 'linux' ? ['UNSUPPORTED'] : [];
           if (environment.platform === 'linux') {
-            if (!environment.binaries.physical) missing.physical.push('NO_PHYSICAL_SERVER');
-            if (!environment.binaries.virtual) missing.virtual.push('NO_VIRTUAL_SERVER');
-            if (!environment.binaries.desktop) missing.virtual.push('NO_DESKTOP');
-            if (displays.length === 0) missing.physical.push('NO_X11');
-            else if (displays.every((item) => !item.authority)) missing.physical.push('NO_XAUTHORITY');
+            if (!environment.binaries.password) missing.push('NO_PASSWORD_TOOL');
+            if (!environment.binaries.virtual) missing.push('NO_VIRTUAL_SERVER');
+            if (!environment.binaries.desktop) missing.push('NO_DESKTOP');
           }
           json(res, 200, {
             platform: environment.platform,
-            displays: displays.map(({ display, name, authority }) => ({ display, user: name, authorized: Boolean(authority) })),
             missing,
-            sessions: active, install: INSTALL_COMMANDS,
+            session: sessions.status(),
+            install: INSTALL_COMMANDS,
           });
           return;
         }
-        if (req.method === 'POST' && (url.pathname === '/session/start' || url.pathname === '/session/stop')) {
-          const body = await readBody(req);
-          const { mode, display, width, height } = body;
-          if (url.pathname === '/session/stop') { await sessions.stop(mode); json(res, 200, { stopped: true }); return; }
-          const session = await sessions.start(mode, { display, width, height });
+        if (req.method === 'POST' && url.pathname === '/session/stop') {
+          await readRawBody(req);
+          await sessions.stop();
+          json(res, 200, { stopped: true });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/session/start') {
+          const { width, height } = await readStartBody(req);
+          const session = await sessions.start({ width, height });
           // This short-lived VNC credential authenticates only this loopback
           // desktop. The host service bearer and TCP port never reach the frame.
           json(res, 200, { id: session.id, display: session.display, password: session.password });
@@ -65,8 +68,8 @@ export const startDesktopService = (port: number, token: string) => {
         }
         json(res, 404, { error: 'NOT_FOUND' });
       } catch (error) {
-      if (!res.headersSent) json(res, error instanceof DesktopError ? 409 : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500, { error: error instanceof DesktopError ? error.code : error instanceof ZodError || error instanceof SyntaxError ? 'BAD_REQUEST' : 'REQUEST_FAILED' });
-      else res.end();
+        if (!res.headersSent) json(res, error instanceof DesktopError ? 409 : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500, { error: error instanceof DesktopError ? error.code : error instanceof ZodError || error instanceof SyntaxError ? 'BAD_REQUEST' : 'REQUEST_FAILED' });
+        else res.end();
       }
     })();
   });

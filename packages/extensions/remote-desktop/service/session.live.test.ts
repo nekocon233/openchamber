@@ -25,45 +25,40 @@ describe.skipIf(process.env.OPENCHAMBER_DESKTOP_LIVE !== '1')('local TigerVNC li
   };
   test('keeps a virtual desktop through viewer changes, then removes ports and private files', async () => {
     const sessions = await setup();
-    const session = await sessions.start('virtual');
-    const second = await sessions.start('virtual'); expect(second.id).toBe(session.id);
+    const session = await sessions.start();
+    const second = await sessions.start(); expect(second.id).toBe(session.id);
     expect(await canConnect(session.port)).toBe(true);
     expect((await fs.stat(`/proc/${session.child!.pid}`)).uid).toBe(process.getuid?.());
     expect((await fs.stat(path.join(session.directory!, 'vnc-password'))).mode & 0o777).toBe(0o600);
     const release = sessions.watch(session, () => {}); release();
     expect(sessions.get(session.id)?.id).toBe(session.id);
-    await sessions.stop('virtual');
+    await sessions.stop();
     expect(await canConnect(session.port)).toBe(false);
     expect(await fs.stat(session.directory!).catch(() => null)).toBeNull();
     expect(await fs.stat(session.displayLock!).catch(() => null)).toBeNull();
   }, 20_000);
   test('an abruptly lost parent pipe terminates the VNC group and removes authentication files', async () => {
-    const sessions = await setup(); const session = await sessions.start('virtual');
+    const sessions = await setup(); const session = await sessions.start();
     session.child!.stdin!.destroy();
     await waitUntil(async () => !await canConnect(session.port));
     await waitUntil(async () => await fs.stat(session.directory!).catch(() => null) === null);
     await waitUntil(async () => await fs.stat(session.displayLock!).catch(() => null) === null);
   }, 20_000);
-  test('captures two existing displays independently and preserves the virtual session on physical stop', async () => {
-    const virtualOwner = await setup();
-    const virtual = await virtualOwner.start('virtual');
-    const secondVirtualOwner = await setup();
-    const secondVirtual = await secondVirtualOwner.start('virtual');
-    const physicalOwner = await setup();
-    const first = await physicalOwner.start('physical', { display: secondVirtual.display });
-    const second = await physicalOwner.start('physical', { display: virtual.display });
-    expect(second.display).toBe(virtual.display);
-    expect(second.id).not.toBe(first.id);
+  test('runs two virtual desktop owners on distinct displays and cleans up only the stopped owner', async () => {
+    const firstOwner = await setup();
+    const first = await firstOwner.start();
+    const secondOwner = await setup();
+    const second = await secondOwner.start();
+    expect(second.display).not.toBe(first.display);
     expect(second.port).not.toBe(first.port);
     expect(await canConnect(first.port)).toBe(true);
     expect(await canConnect(second.port)).toBe(true);
-    await physicalOwner.stop('physical');
+    await firstOwner.stop();
     expect(await canConnect(first.port)).toBe(false);
-    expect(await canConnect(second.port)).toBe(false);
-    expect(await canConnect(virtual.port)).toBe(true);
+    expect(await canConnect(second.port)).toBe(true);
   }, 20_000);
 
-  test('an immediate retry waits for cancelled startup allocations before reusing the mode', async () => {
+  test('an immediate retry waits for cancelled startup allocations before reusing the session slot', async () => {
     let notify!: () => void; let release!: () => void;
     const reached = new Promise<void>((resolve) => { notify = resolve; });
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -74,11 +69,11 @@ describe.skipIf(process.env.OPENCHAMBER_DESKTOP_LIVE !== '1')('local TigerVNC li
       return created;
     });
     try {
-      const starting = sessions.start('virtual');
+      const starting = sessions.start();
       void starting.catch(() => undefined);
       await reached;
-      const stopping = sessions.stop('virtual');
-      const restarted = sessions.start('virtual');
+      const stopping = sessions.stop();
+      const restarted = sessions.start();
       release();
       await expect(starting).rejects.toMatchObject({ code: 'STOPPED' }); await stopping;
       const next = await restarted;
@@ -87,5 +82,4 @@ describe.skipIf(process.env.OPENCHAMBER_DESKTOP_LIVE !== '1')('local TigerVNC li
       expect(await canConnect(next.port)).toBe(true);
     } finally { release(); }
   }, 20_000);
-
 });

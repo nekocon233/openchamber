@@ -30,7 +30,9 @@ import { getEditorDiffTabState } from '@/lib/workspace/editorTabs';
 import { clampContextEditorTreeWidth, normalizeContextPanelDirectoryKey, useUIStore, type PendingDiffScope } from '@/stores/useUIStore';
 import { markSessionViewed } from '@/sync/notification-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
-import { ContextPanelHeaderSlotProvider } from './contextPanelHeaderSlot';
+import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from './contextPanelHeaderSlot';
+import { StatusHeaderControls } from '@/components/chat/work-status/StatusHeaderControls';
+import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { getSessionIDFromDedupeKey } from './contextPanelSessionTitles';
 import { MovablePane } from './MovablePane';
 import { SidebarFilesTree } from './SidebarFilesTree';
@@ -81,6 +83,29 @@ const DockedGuestPage: React.FC<{ mode: PluginContextPanelMode; docking: GuestSu
     >
       <PluginPane mode={mode} onResize={setRequested} />
     </div>
+  );
+};
+
+const GuestPanelPane: React.FC<{ mode: PluginContextPanelMode; headerSlot: HTMLElement | null }> = ({ mode, headerSlot }) => {
+  const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
+  return (
+    <>
+      {headerSlot && controls ? (
+        <ContextPanelHeaderSlotProvider value={headerSlot}>
+          <ContextPanelHeaderToolbar preserveTitle>
+            <div className="flex items-center gap-1 py-1 pe-1">
+              <StatusHeaderControls
+                controls={controls.controls}
+                layout="inline"
+                appearance="toolbar"
+                onActivate={(id, value) => controls.dispatch(value === undefined ? { id } : { id, value })}
+              />
+            </div>
+          </ContextPanelHeaderToolbar>
+        </ContextPanelHeaderSlotProvider>
+      ) : null}
+      <PluginPane mode={mode} onStatusControls={setControls} />
+    </>
   );
 };
 
@@ -718,7 +743,7 @@ export const ContextSurfacePanes: React.FC = () => {
           >
             <React.Suspense fallback={null}>
               {!sharedSurface ? (
-                <PluginPane mode={tab.mode} />
+                <GuestPanelPane mode={tab.mode} headerSlot={headerSlotFor(pluginZone.zone, shown && pluginZone.isOpen)} />
               ) : !docking ? (
                 <GuestSurfacePane mode={tab.mode} />
               ) : (

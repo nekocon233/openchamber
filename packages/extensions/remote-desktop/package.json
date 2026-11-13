@@ -12,7 +12,7 @@
       "service": {
         "entry": "service/main.js",
         "runtime": "host",
-        "permissions": { "exec": ["X0tigervnc", "x0vncserver", "x0tigervncserver", "x11vnc", "Xtigervnc", "Xvnc", "tigervncpasswd", "vncpasswd", "xfce4-session", "startlxqt", "openbox-session", "openbox", "fluxbox", "icewm-session", "dbus-run-session"] }
+        "permissions": { "exec": ["Xtigervnc", "Xvnc", "tigervncpasswd", "vncpasswd", "xfce4-session", "startlxqt", "openbox-session", "openbox", "fluxbox", "icewm-session", "dbus-run-session"] }
       }
     }
   }

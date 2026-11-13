@@ -337,6 +337,9 @@ controls instead of replacing the title with a full-width toolbar. Comparison
 controls stay above the diff content. In editor layout the file list receives
 its zone's header slot explicitly. Hidden or inactive lists release
 their titlebar actions, and a host without a slot keeps its inline toolbar.
+Extension panels (`GuestPanelPane`) use the same `preserveTitle` slot for any
+controls published through `setStatusControls`, and full-screen extension pages
+(`GuestPagePane`) portal theirs beside the page title in `Header`.
 
 No new header buttons: the rail, `openContextSurface`, the composer +
 menu (`contributes.attach`), and New Worktree's guest icons are the entry

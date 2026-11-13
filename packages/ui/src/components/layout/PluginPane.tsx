@@ -240,7 +240,8 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.serviceSockets = true;
     if (guest?.pageEntry && !isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.pages = true;
     if (guest?.storageId && globalThis.indexedDB) features.deviceStorage = true;
-    if (surface === 'status' && onStatusControls) features.statusControls = true;
+    const supportsHeaderControls = !headless && (surface === 'status' || surface === 'panel' || surface === 'page');
+    if (supportsHeaderControls && onStatusControls) features.statusControls = true;
     if (!popoverHost && !popover && !headless && !isVSCodeRuntime() && !isMobileSurfaceRuntime()
       && (surface === 'panel' || surface === 'page' || surface === 'status')) features.popovers = true;
     return {
@@ -525,9 +526,10 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
         && (!isActiveRef.current || isActiveRef.current())
         && (!backgroundAction || backgroundAction.isActive());
     };
+    const supportsHeaderControls = !headless && (surface === 'status' || surface === 'panel' || surface === 'page');
     const statusControls = createGuestStatusControls({
-      isActive: () => ownsFrame() && surface === 'status',
-      getContext: () => directoryRef.current || null,
+      isActive: () => ownsFrame() && supportsHeaderControls && Boolean(onStatusControlsRef.current),
+      getContext: () => (surface === 'status' ? directoryRef.current || null : null),
       onChange: (binding) => onStatusControlsRef.current?.(binding),
       post: (payload) => postToGuest({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: 'status-control-event', payload }),
     });
@@ -634,7 +636,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
         storage: (request) => guestStorageOperation(requestingGuestId, request,
           installation?.storageId ? { runtimeKey, storageId: installation.storageId, authorize: ownsFrame } : undefined),
         setStatusControls: (controls) => {
-          if (surface !== 'status' || !onStatusControlsRef.current) throw new HostRequestError('UNSUPPORTED', 'This frame has no status header.');
+          if (!supportsHeaderControls || !onStatusControlsRef.current) throw new HostRequestError('UNSUPPORTED', 'This frame has no status header.');
           statusControls.set(controls);
         },
         openSession: (id) => { requireSessions(); openGuestSession(id); },

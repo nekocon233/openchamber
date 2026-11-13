@@ -3,34 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenChamber</title>
+  <title>Remote Desktop</title>
   <style>
     * { box-sizing: border-box; }
     html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
     body { background: var(--oc-background); color: var(--oc-foreground); font: 13px var(--oc-font); }
-    button, input, textarea { font: inherit; }
     #root { display: flex; flex-direction: column; position: relative; }
-    .toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; flex: none; min-width: 0; }
-    .toolbar .oc-sdk-field-label { display: none; }
-    .mode { min-width: 0; max-width: 18rem; }
-    .mode .oc-sdk-trigger { max-width: 100%; }
-    .mode .oc-sdk-trigger-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .display { width: 4.5rem; min-width: 0; }
-    .spacer { flex: 1; }
-    .status { height: 24px; padding: 0 10px 6px; flex: none; color: var(--oc-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .status[data-error="true"] { color: var(--oc-error-text); }
     .viewport { flex: 1; min-height: 0; min-width: 0; overflow: hidden; direction: ltr; }
     .viewport:focus-visible { outline: none; }
-    .empty { position: absolute; inset: 72px 0 0; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
-    .empty-content { max-width: 36rem; text-align: start; line-height: 1.6; }
+    .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
+    .empty-content { max-width: 36rem; text-align: start; line-height: 1.6; color: var(--oc-muted); }
+    .empty-content[data-error="true"] p:first-child { color: var(--oc-error-text); }
     .empty-content p { margin: 0 0 12px; }
-    pre { max-width: 100%; overflow: auto; font: 12px/1.6 var(--oc-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-    .clipboard { position: absolute; inset-inline-end: 8px; inset-block-start: 42px; width: min(30rem, calc(100% - 16px)); padding: 12px; background: var(--oc-elevated); color: var(--oc-elevated-foreground); border-radius: var(--oc-radius); box-shadow: var(--oc-sdk-popup-shadow); z-index: 5; }
-    .clipboard .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .clipboard .oc-sdk-field { margin-block: 10px; }
-    .clipboard textarea { min-height: 110px; max-height: 40vh; resize: vertical; }
+    .empty-content p:last-child { margin-bottom: 0; }
+    pre { margin: 0; max-width: 100%; overflow: auto; color: var(--oc-foreground); font: 12px/1.6 var(--oc-mono); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto; }
     [hidden] { display: none !important; }
-    @media (max-width: 400px) { .toolbar { gap: 4px; } .mode { max-width: 10rem; } .display { display: none; } }
   </style>
 </head>
 <body>
