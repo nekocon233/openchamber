@@ -1435,6 +1435,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     directory: messageQueueTarget.directory,
                     messageId: queuedItem.messageId,
                     preserveModelSelection: true,
+                    interruptAntigravity: mode === 'manual',
                     subagentModel: sendConfig.subagentModel,
                     expectedRuntime,
                 },

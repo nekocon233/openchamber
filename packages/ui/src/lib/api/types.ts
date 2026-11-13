@@ -2414,6 +2414,9 @@ export type NativeCompactRequest = {
  */
 export type NativeSessionPatch = { title?: string; archived?: boolean; metadata?: SessionMetadataRecord };
 
+/** Refuses a stop if a unified conversation has switched its executing source. */
+export type NativeAbortOptions = { expectedSourceSessionId: string };
+
 /** Native prompts retain client identity; unified conversations map it to their source CLI. */
 export type NativePromptRequest = {
   subagentModel?: NativeAgentModel | null;
@@ -2490,7 +2493,7 @@ export interface NativeAgentsAPI {
   /** Resolves once the CLI accepted the prompt; the turn streams as events. */
   prompt(sessionId: string, request: NativePromptRequest): Promise<void>;
   /** Stops the running turn; false when none was running. */
-  abort(sessionId: string): Promise<boolean>;
+  abort(sessionId: string, options?: NativeAbortOptions): Promise<boolean>;
   /** Resolves once the CLI took the compaction; it streams in as a turn. */
   compact(sessionId: string, request: NativeCompactRequest): Promise<void>;
   /** One list of chosen labels per question. */

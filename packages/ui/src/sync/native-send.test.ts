@@ -9,13 +9,14 @@ import type { NativePromptRequest, NativePlanExecutionChoice } from "@/lib/api/t
 import { useSelectionStore } from './selection-store';
 import { CONTEXT_METADATA_KEY, type ContextPartMetadata } from "@/lib/messages/contextParts"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
-import { nativeMessagePageSchema } from "@/lib/native-agents/schemas"
+import { nativeMessagePageSchema, nativeSessionSchema, nativeStatusSnapshotSchema } from "@/lib/native-agents/schemas"
+import { getRuntimeApiBaseUrl, getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch'
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-agents/test-utils/runtime"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useSessionGoalArmStore } from "@/stores/useSessionGoalArmStore"
 import type { QuestionRequest } from "@/types/question"
 import { ChildStoreManager } from "./child-store"
-import { isNativeLocalCommand, nativeCompactCommand, nativePromptParts, nativeSendMessageId } from "./native-send"
+import { isNativeLocalCommand, nativeCompactCommand, nativePromptParts, nativeSendMessageId, sendNativePrompt } from "./native-send"
 import {
   abortCurrentOperation,
   cancelForm,
@@ -153,7 +154,157 @@ describe("native prompt parts", () => {
   })
 })
 
+describe('manual Antigravity queued sends', () => {
+  const sessionId = 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188'
+  const sourceSessionID = 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188'
+  const busy = new NativeAgentsRequestError('The native session is still running a turn', 409, 'NATIVE_SESSION_BUSY')
+  const request: NativePromptRequest = {
+    directory: DIRECTORY, messageID: 'msg_captured_queue_identity', agent: 'plan', variant: 'high', preserveSelection: true,
+    model: { providerID: 'antigravity-native', modelID: 'gemini-test' },
+    parts: [{ type: 'text', text: 'Captured follow-up' }, { type: 'file', mime: 'text/plain', url: 'data:text/plain;base64,YQ==', filename: 'context.txt' }],
+    subagentModel: null,
+  }
+  const session = (switchReady: boolean, backend = 'antigravity', preparing = false) => nativeSessionSchema.parse({
+    id: sessionId, projectID: '', directory: DIRECTORY, title: 'Force send', time: { created: 1, updated: 2 },
+    metadata: { openchamber: { native: { kind: 'unified', backend, sourceSessionID, preparing, switchReady,
+      revision: 1, recordRevision: 1, historyRevision: 0 } } },
+  })
+
+  test('waits for confirmed interruption before sending the same captured payload and identity', async () => {
+    const calls: string[] = []
+    const sent: NativePromptRequest[] = []
+    let markEntered!: () => void
+    let releaseStop!: () => void
+    const entered = new Promise<void>((resolve) => { markEntered = resolve })
+    const stopped = new Promise<void>((resolve) => { releaseStop = resolve })
+    let reads = 0
+    const api = createTestNativeAgentsAPI({
+      prompt: async (_id, payload) => { calls.push('prompt'); sent.push(payload); if (sent.length === 1) throw busy },
+      getSession: async () => { calls.push('read'); return session(++reads > 1) },
+      abort: async (_id, options) => {
+        expect(options).toEqual({ expectedSourceSessionId: sourceSessionID })
+        calls.push('abort'); markEntered(); await stopped; return true
+      },
+    })
+    const sending = sendNativePrompt(api, sessionId, request, true)
+    await entered
+    expect(calls).toEqual(['prompt', 'read', 'abort'])
+    releaseStop()
+    await sending
+    expect(calls).toEqual(['prompt', 'read', 'abort', 'read', 'prompt'])
+    expect(sent).toEqual([request, request])
+    expect(sent[1]).toBe(sent[0])
+  })
+
+  test('keeps an already accepted send and ordinary queue delivery free of interruptions', async () => {
+    const accepted = createTestNativeAgentsAPI({ prompt: async () => {} })
+    await sendNativePrompt(accepted, sessionId, request, true)
+    const automatic = createTestNativeAgentsAPI({ prompt: async () => { throw busy } })
+    await expect(sendNativePrompt(automatic, sessionId, request)).rejects.toThrow(busy.message)
+  })
+
+  test('never interrupts after an ambiguous delivery failure', async () => {
+    const unknown = new NativeAgentsRequestError('Delivery is unconfirmed', 502, 'NATIVE_PROMPT_OUTCOME_UNKNOWN')
+    const api = createTestNativeAgentsAPI({ prompt: async () => { throw unknown } })
+    await expect(sendNativePrompt(api, sessionId, request, true)).rejects.toThrow(unknown.message)
+  })
+
+  test('uses the executing backend and refuses an unknown or preparing source', async () => {
+    for (const current of [session(false, 'codex'), session(false, 'antigravity', true),
+      { ...session(false), metadata: {} }]) {
+      const api = createTestNativeAgentsAPI({ prompt: async () => { throw busy }, getSession: async () => current })
+      await expect(sendNativePrompt(api, sessionId, request, true)).rejects.toThrow(busy.message)
+    }
+  })
+
+  test('a failed read or stop never dispatches the replacement', async () => {
+    for (const failureAt of ['read', 'abort', 'settlement']) {
+      const failure = new Error(`Failed ${failureAt}`)
+      let promptCount = 0
+      let reads = 0
+      const api = createTestNativeAgentsAPI({
+        prompt: async () => { promptCount++; throw busy },
+        getSession: async () => {
+          if (failureAt === 'read' || ++reads > 1 && failureAt === 'settlement') throw failure
+          return session(false)
+        },
+        abort: async () => { if (failureAt === 'abort') throw failure; return true },
+      })
+      await expect(sendNativePrompt(api, sessionId, request, true)).rejects.toThrow(failure.message)
+      expect(promptCount).toBe(1)
+    }
+  })
+
+  test('a source that remains busy or changes ownership blocks replacement delivery', async () => {
+    for (const after of [session(false), { ...session(true), metadata: { openchamber: { native: {
+      kind: 'unified', backend: 'antigravity', sourceSessionID: 'nag_other', preparing: false, switchReady: true,
+      revision: 2, recordRevision: 2, historyRevision: 0,
+    } } } }]) {
+      let reads = 0
+      const api = createTestNativeAgentsAPI({ prompt: async () => { throw busy },
+        getSession: async () => ++reads === 1 ? session(false) : after, abort: async () => true })
+      await expect(sendNativePrompt(api, sessionId, request, true)).rejects.toThrow(busy.message)
+    }
+  })
+
+  test('standalone AGY sends also require authoritative idle after interruption', async () => {
+    for (const remainsBusy of [false, true]) {
+      let promptCount = 0
+      const api = createTestNativeAgentsAPI({
+        prompt: async () => { if (++promptCount === 1) throw busy },
+        getSession: async () => ({ ...session(false), id: sourceSessionID, metadata: {} }),
+        abort: async () => false,
+        statuses: async () => nativeStatusSnapshotSchema.parse(remainsBusy ? { [sourceSessionID]: { type: 'busy' } } : {}),
+      })
+      const sending = sendNativePrompt(api, sourceSessionID, request, true)
+      if (remainsBusy) await expect(sending).rejects.toThrow(busy.message)
+      else await sending
+      expect(promptCount).toBe(remainsBusy ? 1 : 2)
+    }
+  })
+
+  test('a runtime switch during a read or stop prevents further writes', async () => {
+    const previousFetch = globalThis.fetch
+    const apiBaseUrl = getRuntimeApiBaseUrl()
+    const runtimeKey = getRuntimeKey()
+    globalThis.fetch = Object.assign(async () => new Response(null, { status: 404 }), { preconnect: () => {} })
+    try {
+      for (const switchAt of ['read', 'abort', 'settlement']) {
+        let promptCount = 0
+        let abortCount = 0
+        let reads = 0
+        const changeRuntime = () => switchRuntimeEndpoint({ apiBaseUrl: 'http://force-send.invalid', runtimeKey: `switched-${switchAt}` })
+        const api = createTestNativeAgentsAPI({
+          prompt: async () => { promptCount++; throw busy },
+          getSession: async () => { reads++; if (switchAt === 'read' || reads > 1 && switchAt === 'settlement') changeRuntime(); return session(reads > 1) },
+          abort: async () => { abortCount++; if (switchAt === 'abort') changeRuntime(); return true },
+        })
+        await expect(sendNativePrompt(api, sessionId, request, true)).rejects.toThrow('Runtime changed')
+        expect(promptCount).toBe(1)
+        expect(abortCount).toBe(switchAt === 'read' ? 0 : 1)
+        switchRuntimeEndpoint({ apiBaseUrl, runtimeKey })
+      }
+    } finally {
+      switchRuntimeEndpoint({ apiBaseUrl, runtimeKey })
+      globalThis.fetch = previousFetch
+    }
+  })
+})
+
 describe("routeMessage for native sessions", () => {
+  test('only explicit manual delivery enables the AGY interruption flow', async () => {
+    const calls: string[] = []
+    let sends = 0
+    registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
+      prompt: async () => { calls.push('prompt'); if (++sends === 1) throw new NativeAgentsRequestError('Busy', 409, 'NATIVE_SESSION_BUSY') },
+      getSession: async (id) => nativeSessionSchema.parse({ id, projectID: '', directory: DIRECTORY, title: 'AGY', time: { created: 1, updated: 2 } }),
+      abort: async () => { calls.push('abort'); return true }, statuses: async () => ({}),
+    })))
+    await routeMessage({ sessionId: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', directory: DIRECTORY,
+      content: 'Force this follow-up', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'build', interruptAntigravity: true })
+    expect(calls).toEqual(['prompt', 'abort', 'prompt'])
+    expect(optimisticAdds).toHaveLength(1)
+  })
   test('forwards a queued native subagent snapshot without replacing an explicit CLI default', async () => {
     const subagentModel: NonNullable<NativePromptRequest['subagentModel']> = { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' };
     await routeMessage({ sessionId: SESSION, directory: DIRECTORY, content: 'Queued task', providerID: 'claude-native', modelID: 'opus', agent: 'build', subagentModel });

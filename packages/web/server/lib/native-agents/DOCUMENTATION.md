@@ -1444,6 +1444,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 | `PATCH /sessions/:id` | `{ directory, title?, archived?, metadata? }`: the updated session, announced with `session.updated`; `metadata` replaces OpenChamber's session metadata |
 | `DELETE /sessions/:id?directory=` | `{ deleted: true }`, announced with `session.deleted` |
 | `POST /sessions/:id/abort` | Stops the running turn; `{ aborted: false }` when none runs |
+| `POST /sessions/:id/abort-source` | Unified-only `{ expectedSourceSessionId }`: stops only that current source under the conversation lock; source changes reject before stopping. See `conversations/DOCUMENTATION.md`. |
 | `POST /sessions/:id/compact` | `{ directory, model, variant?, agent, instructions? }`; answers once the CLI took it |
 | `POST /sessions/:id/revert` | `{ directory, messageID }`: `{ session, filesRestored, conversationOnly }`, announced with `session.updated` |
 | `POST /sessions/:id/unrevert` | `{ directory }`: the session record; a revert the next prompt committed stays |

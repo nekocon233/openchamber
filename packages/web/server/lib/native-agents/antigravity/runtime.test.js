@@ -62,6 +62,25 @@ const prompt = async (runtime, session, directory, text = 'runtime') => {
 };
 
 describe('Antigravity native runtime', () => {
+  it('validates source-bound stops through HTTP and rejects a stale source before interrupting', async () => {
+    const { runtime, directory } = await setup();
+    const conversation = await runtime.createSession({ backend: 'antigravity', kind: 'unified', directory,
+      selection: { model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build' } });
+    await runtime.prompt(conversation.id, { directory, messageID: `ncv_u_${randomUUID()}`, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text: 'stop-me' }] });
+    const source = (await runtime.getSession(conversation.id, directory)).metadata.openchamber.native.sourceSessionID;
+    const app = express();
+    app.use(express.json());
+    registerNativeAgentRoutes(app, { runtime });
+    const route = `/api/native/sessions/${conversation.id}/abort-source`;
+    await request(app).post(route).send({}).expect(400);
+    await request(app).post(route).send({ expectedSourceSessionId: 'nag_changed' }).expect(409)
+      .expect((response) => expect(response.body.code).toBe('NATIVE_CONVERSATION_SOURCE_CHANGED'));
+    expect((await runtime.statuses(directory))[conversation.id]).toEqual({ type: 'busy' });
+    await request(app).post(route).send({ expectedSourceSessionId: source }).expect(200, { aborted: true });
+    expect(await runtime.statuses(directory)).toEqual({});
+  });
+
   it('cancels a standalone prompt stopped while skill discovery is still pending', async () => {
     const { runtime, session, directory, requestsFile, skillProbesFile, skillGateFile } = await setup({ skillGate: true });
     const sending = runtime.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',

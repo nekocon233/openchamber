@@ -625,9 +625,20 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       }
       return result;
     },
-    async abort(id) {
+    async abort(id, { expectedSourceSessionId } = {}) {
       await load();
-      if (!isConversationId(id)) { assertStandalone(id); return native.abort(id); }
+      if (!isConversationId(id)) {
+        if (expectedSourceSessionId !== undefined) throw invalidRequestError('A source-bound stop requires a unified conversation');
+        assertStandalone(id);
+        return native.abort(id);
+      }
+      if (expectedSourceSessionId !== undefined) return locked(id, async () => {
+        const source = activeOf(get(id))?.sessionId;
+        if (source !== expectedSourceSessionId) throw new NativeAgentError('The executing source changed before it could be stopped.', {
+          status: 409, code: 'NATIVE_CONVERSATION_SOURCE_CHANGED',
+        });
+        return native.abort(source);
+      });
       const controller = preparing.get(id);
       controller?.abort(new Error('Conversation preparation stopped'));
       const source = activeOf(get(id))?.sessionId;
