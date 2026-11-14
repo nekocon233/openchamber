@@ -2148,6 +2148,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             draftSnapshot?: NonNullable<typeof capturedDraftSnapshot>;
             historySubmissions?: InputHistorySubmission[];
             delivery?: 'steer';
+            interruptAntigravity?: true;
             skills?: SkillMentions;
             expectedRuntime: typeof expectedRuntime;
         } = isBtwActive && btwSessionId && btwDirectory
@@ -2217,8 +2218,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             providerID: providerIdToSend,
             sessionPhase: authoritativeSessionPhase ?? currentSessionPhase,
             forceQueue: options?.forceQueue,
+            forceSend: options?.delivery === 'steer',
             unifiedState: authoritativeUnifiedState,
         });
+        if (!isBtwActive && options?.delivery === 'steer' && delivery === 'steer') {
+            sendMessageOptions.interruptAntigravity = true;
+        }
 
         const historySubmissions = buildChatInputHistorySubmissions({
             inputMode,

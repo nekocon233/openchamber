@@ -8,17 +8,20 @@ type FollowUpDeliveryDecision = 'direct' | 'follow-up' | 'unavailable';
 
 /** Keep native steering on the current source; a different CLI must wait for handoff. */
 export const resolveNativeFollowUpDelivery = ({
-    delivery, sessionId, providerID, sessionPhase, forceQueue, unifiedState,
+    delivery, sessionId, providerID, sessionPhase, forceQueue, forceSend, unifiedState,
 }: {
     delivery: 'steer' | 'queue' | undefined;
     sessionId: string | null;
     providerID: string;
     sessionPhase: SessionPhase;
     forceQueue?: boolean;
+    forceSend?: boolean;
     unifiedState?: ReturnType<typeof unifiedNativeSessionState>;
 }): 'steer' | 'queue' | undefined => {
     if (!sessionId || !isNativeSessionId(sessionId)) return delivery;
     if (isUnifiedNativeSessionId(sessionId)) {
+        if (forceSend && !forceQueue && unifiedState?.sourceSessionID
+            && !unifiedState.preparing && unifiedState.backend === 'antigravity') return 'steer';
         const sameSource = unifiedState?.sourceSessionID
             && !unifiedState.preparing
             && unifiedState.backend === nativeBackendOfProviderId(providerID);
@@ -26,6 +29,7 @@ export const resolveNativeFollowUpDelivery = ({
         return sessionPhase !== 'idle' || forceQueue ? 'queue' : delivery;
     }
     if (nativeBackendOfSessionId(sessionId) === 'antigravity') {
+        if (forceSend && !forceQueue) return 'steer';
         return sessionPhase !== 'idle' || forceQueue ? 'queue' : delivery;
     }
     return delivery === 'queue' ? 'steer' : delivery;

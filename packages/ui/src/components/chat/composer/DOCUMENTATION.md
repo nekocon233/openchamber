@@ -1111,7 +1111,11 @@ its captured model runs after the current source settles. Its prompt carries
 `preserveSelection`, keeping any later composer choice intact. Claude, Codex
 and DeepSeek single-CLI sessions retain their native immediate follow-up path.
 Antigravity accepts one turn at a time in both standalone and unified sessions,
-so busy follow-ups use this queue until idle; idle prompts send normally. It uses the live session phase when no separate
+so ordinary busy follow-ups use this queue until idle; idle prompts send normally.
+Ctrl/Cmd+Enter explicitly force-sends the typed prompt through the same guarded
+AGY stop, readiness confirmation and resend flow as a manual queued send.
+The fresh executing source must be known and not preparing a handoff; explicit
+queue actions retain queueing. It uses the live session phase when no separate
 status probe ran, never treating an absent probe as busy. `lib/followUpDrafts.ts`
 owns native delivery decisions. Server behavior is owned by
 `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.

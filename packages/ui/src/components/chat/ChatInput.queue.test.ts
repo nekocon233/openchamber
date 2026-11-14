@@ -114,6 +114,9 @@ describe('ChatInput follow-up queue integration', () => {
     expect(branch).toContain('unifiedState: authoritativeUnifiedState');
     expect(branch).toContain('sessionPhase: authoritativeSessionPhase ?? currentSessionPhase');
     expect(branch).toContain('providerID: providerIdToSend');
+    expect(branch).toContain("forceSend: options?.delivery === 'steer'");
+    expect(branch).toContain("!isBtwActive && options?.delivery === 'steer' && delivery === 'steer'");
+    expect(branch).toContain('sendMessageOptions.interruptAntigravity = true');
   });
 
   test('restores extended queue payload when editing an item back into the composer', () => {

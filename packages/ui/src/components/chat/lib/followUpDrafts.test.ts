@@ -84,6 +84,31 @@ describe('native follow-up delivery', () => {
         expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: 'ses_opencode' })).toBe('queue');
         expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: null, delivery: undefined })).toBeUndefined();
     });
+
+    test('honors explicit force-send for AGY while ordinary follow-ups still stage', () => {
+        const source = 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e';
+        const unified = { ...busy, providerID: 'antigravity-native', unifiedState: {
+            ...state, backend: 'antigravity' as const, sourceSessionID: source,
+        } };
+        for (const sessionPhase of ['busy', 'retry', 'idle'] as const) {
+            expect(resolveNativeFollowUpDelivery({ ...unified, sessionPhase, forceSend: true })).toBe('steer');
+            expect(resolveNativeFollowUpDelivery({ ...unified, sessionId: source, sessionPhase, forceSend: true })).toBe('steer');
+        }
+        expect(resolveNativeFollowUpDelivery(unified)).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...unified, forceSend: true, providerID: 'codex-native' })).toBe('steer');
+    });
+
+    test('force-send still respects explicit queueing and requires a known, unprepared AGY source', () => {
+        const agy = { ...busy, providerID: 'antigravity-native', forceSend: true, unifiedState: {
+            ...state, backend: 'antigravity' as const, sourceSessionID: 'nag_source',
+        } };
+        expect(resolveNativeFollowUpDelivery({ ...agy, forceQueue: true })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionId: 'nag_source', forceQueue: true })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, unifiedState: undefined })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, unifiedState: { ...agy.unifiedState, sourceSessionID: null } })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, unifiedState: { ...agy.unifiedState, preparing: true } })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...busy, forceSend: true, providerID: 'claude-native' })).toBe('queue');
+    });
 });
 
 describe('shouldStageFollowUpAsDraft', () => {
