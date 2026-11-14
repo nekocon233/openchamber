@@ -56,20 +56,23 @@ describe('native follow-up delivery', () => {
         expect(resolveNativeFollowUpDelivery({ ...busy, providerID: 'claude-native', sessionPhase: 'idle', delivery: undefined })).toBeUndefined();
     });
 
-    test('sends idle Antigravity prompts directly and queues only busy or explicitly queued prompts', () => {
+    test('sends idle AGY prompts normally and interrupts busy sends unless explicitly queued', () => {
         const agy = { sessionId: 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e', providerID: 'antigravity-native' };
         expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined })).toBeUndefined();
-        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'busy', delivery: 'steer' })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'busy', delivery: 'steer' })).toBe('steer');
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'retry', delivery: 'queue' })).toBe('steer');
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'busy', delivery: undefined, forceQueue: true })).toBe('queue');
         expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined, forceQueue: true })).toBe('queue');
     });
 
-    test('queues running unified Antigravity follow-ups even when the native source matches', () => {
+    test('interrupts ordinary running unified AGY sends and preserves explicit queue actions', () => {
         const agy = { ...busy, providerID: 'antigravity-native', unifiedState: {
             ...state, backend: 'antigravity' as const, sourceSessionID: 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e',
         } };
         for (const sessionPhase of ['busy', 'retry'] as const) {
             for (const delivery of [undefined, 'queue', 'steer'] as const) {
-                expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase, delivery })).toBe('queue');
+                expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase, delivery })).toBe('steer');
+                expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase, delivery, forceQueue: true })).toBe('queue');
             }
         }
         expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined,
@@ -85,7 +88,7 @@ describe('native follow-up delivery', () => {
         expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: null, delivery: undefined })).toBeUndefined();
     });
 
-    test('honors explicit force-send for AGY while ordinary follow-ups still stage', () => {
+    test('keeps explicit AGY force-send available for a backend handoff', () => {
         const source = 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e';
         const unified = { ...busy, providerID: 'antigravity-native', unifiedState: {
             ...state, backend: 'antigravity' as const, sourceSessionID: source,
@@ -94,7 +97,8 @@ describe('native follow-up delivery', () => {
             expect(resolveNativeFollowUpDelivery({ ...unified, sessionPhase, forceSend: true })).toBe('steer');
             expect(resolveNativeFollowUpDelivery({ ...unified, sessionId: source, sessionPhase, forceSend: true })).toBe('steer');
         }
-        expect(resolveNativeFollowUpDelivery(unified)).toBe('queue');
+        expect(resolveNativeFollowUpDelivery(unified)).toBe('steer');
+        expect(resolveNativeFollowUpDelivery({ ...unified, providerID: 'codex-native' })).toBe('queue');
         expect(resolveNativeFollowUpDelivery({ ...unified, forceSend: true, providerID: 'codex-native' })).toBe('steer');
     });
 

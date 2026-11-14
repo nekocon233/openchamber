@@ -25,12 +25,15 @@ export const resolveNativeFollowUpDelivery = ({
         const sameSource = unifiedState?.sourceSessionID
             && !unifiedState.preparing
             && unifiedState.backend === nativeBackendOfProviderId(providerID);
-        if (sameSource && unifiedState.backend !== 'antigravity' && !forceQueue) return delivery === 'queue' ? 'steer' : delivery;
+        if (sameSource && !forceQueue) {
+            if (unifiedState.backend === 'antigravity' && sessionPhase !== 'idle') return 'steer';
+            return delivery === 'queue' ? 'steer' : delivery;
+        }
         return sessionPhase !== 'idle' || forceQueue ? 'queue' : delivery;
     }
     if (nativeBackendOfSessionId(sessionId) === 'antigravity') {
-        if (forceSend && !forceQueue) return 'steer';
-        return sessionPhase !== 'idle' || forceQueue ? 'queue' : delivery;
+        if (forceQueue) return 'queue';
+        return forceSend || sessionPhase !== 'idle' || delivery === 'queue' ? 'steer' : delivery;
     }
     return delivery === 'queue' ? 'steer' : delivery;
 };

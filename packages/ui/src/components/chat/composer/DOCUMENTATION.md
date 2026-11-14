@@ -1114,9 +1114,9 @@ its captured model runs after the current source settles. Its prompt carries
 `preserveSelection`, keeping any later composer choice intact. Claude, Codex
 and DeepSeek single-CLI sessions retain their native immediate follow-up path.
 Antigravity accepts one turn at a time in both standalone and unified sessions,
-so ordinary busy follow-ups use this queue until idle; idle prompts send normally.
-Ctrl/Cmd+Enter explicitly force-sends the typed prompt through the same guarded
-AGY stop, readiness confirmation and resend flow as a manual queued send.
+so ordinary busy sends use the guarded AGY stop, readiness confirmation and
+resend flow. Enter, the send button and Ctrl/Cmd+Enter share this behavior;
+an explicit queue action still stages the prompt. Idle prompts send normally.
 The fresh executing source must be known and not preparing a handoff; explicit
 queue actions retain queueing. It uses the live session phase when no separate
 status probe ran, never treating an absent probe as busy. `lib/followUpDrafts.ts`
@@ -1125,8 +1125,9 @@ owns native delivery decisions. Server behavior is owned by
 
 The busy follow-up button in both the expanded footer and collapsed mobile pill
 uses that same native decision. A steerable source shows Send and invokes the
-ordinary submission path; a blocked handoff or Antigravity turn shows the queue
-action. The fresh pre-send check still wins if execution changed after render.
+ordinary submission path, including an AGY source that can be interrupted;
+a blocked handoff shows the queue action. The fresh pre-send check still wins
+if execution changed after render.
 The stop control remains independent. OpenCode's existing queue button is
 unchanged, and queued messages retain their own explicit actions.
 

@@ -1267,9 +1267,10 @@ with a native branch (`sync/native-send.ts`):
   server metadata confirms the same executing backend and no handoff is preparing;
   cross-backend and explicitly queued follow-ups still wait for whole-execution
   readiness. Antigravity's stream-json channel processes one turn at a time,
-  so its ordinary busy follow-ups stay in the host queue. Manual queue sends and
-  explicit Ctrl/Cmd+Enter composer sends first try
-  ordinary admission. Only a definite `NATIVE_SESSION_BUSY` refusal can trigger
+  so ordinary composer sends, the send button and Ctrl/Cmd+Enter use the same
+  guarded interruption flow as manual queue sends. Explicit queue actions still
+  stage and automatic delivery waits for idle. These sends first try ordinary
+  admission. Only a definite `NATIVE_SESSION_BUSY` refusal can trigger
   interruption, after a fresh session read confirms an executing AGY source.
   The source-bound native Stop API must succeed and authoritative activity must confirm idle
   or whole-conversation readiness before the same captured request is sent again.
