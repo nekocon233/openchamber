@@ -62,7 +62,10 @@ stays in place. The parent then moves the editor to its final session position
 with a 180ms transform-only FLIP animation. Reduced-motion mode skips these
 transitions. `session-ui-store.ts` marks sessions materialized from a submitted
 draft, so selecting an existing session while a draft is open switches without
-animation. Do not restore separate draft and session composer branches:
+animation, and notifies the submitting `ChatInput` with the created session ID
+and directory so a failed first prompt restores its text, mentions, attachments,
+and inline comment drafts onto that materialized session and shows the error
+toast. Do not restore separate draft and session composer branches:
 remounting the editor loses focus and interrupts the transition. Keep the
 existing mobile fixed-position rules unchanged.
 
