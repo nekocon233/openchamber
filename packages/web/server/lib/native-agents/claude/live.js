@@ -584,7 +584,11 @@ export const createClaudeLiveSessions = ({
         live.stderrTail = (live.stderrTail + data).slice(-STDERR_TAIL_CHARS);
       },
     };
-    if (connection.settings) options.settings = connection.settings;
+    // With Tool Search on, the checklist tools are deferred behind ToolSearch and
+    // the model rarely loads them, so no checklist gets recorded. Flag settings
+    // outrank the user's settings.json env; a connection's own file already
+    // turns Tool Search off.
+    options.settings = connection.settings ?? { env: { ENABLE_TOOL_SEARCH: 'false' } };
     const tools = toolConfiguration(sessionId);
     if (tools) {
       options.disallowedTools = ['Agent', 'Task'];

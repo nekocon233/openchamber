@@ -986,6 +986,25 @@ in with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` (`claude/live.js`). Without it the
 model has no checklist tool at all and records nothing here. Those tools write
 each task as `<config dir>/tasks/<list id>/<task id>.json`.
 
+Every session query also turns Tool Search off. The built-in login passes the
+flag settings `{ env: { ENABLE_TOOL_SEARCH: 'false' } }`, which outrank the
+env in the user's own `settings.json`; a connection's settings file already
+sets it. The `claude` the user runs in a terminal keeps its own setting.
+
+### Why Tool Search is off for Claude session queries
+
+With Tool Search on, `TaskCreate` and `TaskUpdate` are deferred: the model
+sees only their names and has to load them through ToolSearch first. Across
+about 75 OpenChamber Claude sessions between 2026-11-01 and 2026-11-14, none
+loaded them, so none had a checklist, while connection sessions with the tools
+offered directly used them routinely. Asking the model in the appended
+instructions to load the tools was the alternative; it saves about 18 tool
+definitions per request but leaves the checklist to the model remembering an
+extra step. A transcript that already holds `tool_reference` blocks resumes
+normally on the built-in login with Tool Search off (checked on CLI 2.1.325).
+The slash-command listing query and utility generation run no model turn that
+needs a checklist and keep their own settings.
+
 `claude/tasks.js` owns checklist reads and publications. The query captures
 `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TASK_LIST_ID` from its actual connection
 environment. Without an explicit list ID, it uses the session UUID. Only the
@@ -1272,12 +1291,12 @@ the Kimi Coding endpoint reports its own usage quota.
 Connection launches set `ENABLE_TOOL_SEARCH=false`: Tool Search writes
 `tool_reference` blocks into tool results, and Anthropic-compatible
 third-party endpoints reject that block type with HTTP 400 on every send that
-replays it. Blocks already in a transcript — produced under the Anthropic
-login, where Tool Search stays on — poison a resume onto a connection the
-same way. Before a managed launch resumes a transcript, `store.js` scans the
-chain the CLI would replay (entries after the
-last compaction, block-level, sidechains excluded) and the send fails with
-`NATIVE_HISTORY_NOT_PORTABLE` naming the referenced tools instead of spawning
+replays it. Blocks already in a transcript, written before OpenChamber turned
+Tool Search off for the Anthropic login or by the user's own terminal `claude`,
+poison a resume onto a connection the same way. Before a managed launch
+resumes a transcript, `store.js` scans the chain the CLI would replay (entries
+after the last compaction, block-level, sidechains excluded) and the send
+fails with `NATIVE_HISTORY_NOT_PORTABLE` naming the referenced tools instead of spawning
 a query that must fail. The default Anthropic login resumes unchecked. The
 guard scans the active replay chain, excluding sidechains and text mentions.
 It also detects replay carriers written by the removed ChatGPT plan bridge.
