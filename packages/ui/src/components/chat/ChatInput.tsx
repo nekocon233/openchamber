@@ -2242,7 +2242,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             forceSend: options?.delivery === 'steer',
             unifiedState: authoritativeUnifiedState,
         });
-        if (!isBtwActive && options?.delivery === 'steer' && delivery === 'steer') {
+        if (!isBtwActive && delivery === 'steer') {
             sendMessageOptions.interruptAntigravity = true;
         }
 
