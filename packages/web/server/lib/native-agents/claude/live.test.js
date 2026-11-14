@@ -280,6 +280,13 @@ describe('Claude live sessions', () => {
     });
   });
 
+  it('turns Tool Search off for the built-in login so the checklist tools are offered directly', async () => {
+    const harness = createHarness();
+    await sendPrompt(harness.live);
+
+    expect(harness.calls.queries[0].options.settings).toEqual({ env: { ENABLE_TOOL_SEARCH: 'false' } });
+  });
+
   it('names every message and part the way a later history read does', async () => {
     const harness = createHarness();
     await sendPrompt(harness.live);
