@@ -617,7 +617,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         void prepareChatDraftDirectory();
     }, [message, newSessionDraft.target, newSessionDraftOpen, prepareChatDraftDirectory]);
     const consumePendingSyntheticParts = useInputStore((s) => s.consumePendingSyntheticParts);
-    const setPendingSyntheticParts = useInputStore((s) => s.setPendingSyntheticParts);
     const acknowledgeSessionAbort = useSessionUIStore((s) => s.acknowledgeSessionAbort);
     const abortCurrentOperation = React.useCallback(
         (sessionIdOverride?: string) => sessionActions.abortCurrentOperation(sessionIdOverride ?? currentSessionId ?? ''),
@@ -1655,9 +1654,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         setReferencePicker({ source: 'linear' });
     }, []);
 
-    const getSubmitErrorMessage = (error: unknown, fallback: string) => {
+    const getSubmitErrorMessage = (error: unknown, fallback: string, sessionIdOverride?: string | null) => {
         if (error instanceof NativeAgentsRequestError) {
-            const key = nativeSessionActionErrorKey(error, currentSessionId);
+            const key = nativeSessionActionErrorKey(error, sessionIdOverride !== undefined ? sessionIdOverride : currentSessionId);
             if (key) return t(key);
         }
         if (error instanceof NativeAgentsRequestError && error.code === 'NATIVE_CODEX_COMMAND_UNSUPPORTED') {
@@ -1690,14 +1689,30 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // async gap so a later sidebar selection cannot reroute the send.
         const capturedDraftSnapshot = submissionDraftState?.open ? { ...submissionDraftState } : null;
         const capturedTarget = messageQueueTarget;
+        let materializedSession: { sessionId: string; directory: string | null } | null = null;
+        const effectiveSubmissionSessionId = () => materializedSession?.sessionId ?? submissionSessionId;
+        const submissionDraftIdentity = () => materializedSession
+            ? createChatDraftIdentity(
+                submissionRuntimeKey,
+                materializedSession.directory ?? currentSessionDirectoryForSync ?? currentDirectory,
+                materializedSession.sessionId,
+            )
+            : chatDraftIdentity;
         const isSubmissionContextCurrent = () => {
             if (
                 getRuntimeKey() !== submissionRuntimeKey
                 || getRuntimeEndpointGeneration() !== submissionRuntimeGeneration
             ) return false;
             const sessionState = useSessionUIStore.getState();
-            if (sessionState.currentSessionId !== submissionSessionId) return false;
-            return submissionSessionId !== null || sessionState.newSessionDraft === submissionDraftState;
+            const expectedSessionId = effectiveSubmissionSessionId();
+            if (sessionState.currentSessionId !== expectedSessionId) return false;
+            if (expectedSessionId !== null) return true;
+            return Boolean(
+                submissionDraftState?.open
+                && sessionState.newSessionDraft.open
+                && sessionState.newSessionDraft.draftId === submissionDraftState.draftId
+                && sessionState.newSessionDraft.target === submissionDraftState.target
+            );
         };
         if (!isSubmissionContextCurrent()) return;
 
@@ -1890,7 +1905,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const confirmedMentionsSnapshot = new Set(confirmedMentionsRef.current);
         const restoreComposerText = () => {
             if (!inputSnapshot.message) return;
-            restoreDraft(chatDraftIdentity, inputSnapshot.message, confirmedMentionsSnapshot);
+            restoreDraft(submissionDraftIdentity(), inputSnapshot.message, confirmedMentionsSnapshot);
         };
 
         // An extension command never reaches the model: the extension turns
@@ -2150,12 +2165,18 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             delivery?: 'steer';
             interruptAntigravity?: true;
             skills?: SkillMentions;
+            onSessionMaterialized?: (sessionId: string, directory: string | null) => void;
             expectedRuntime: typeof expectedRuntime;
         } = isBtwActive && btwSessionId && btwDirectory
             ? { sessionId: btwSessionId, directory: btwDirectory, expectedRuntime }
             : {
                 ...(capturedTarget ? { target: capturedTarget } : {}),
-                ...(capturedDraftSnapshot ? { draftSnapshot: capturedDraftSnapshot } : {}),
+                ...(capturedDraftSnapshot ? {
+                    draftSnapshot: capturedDraftSnapshot,
+                    onSessionMaterialized: (sessionId, directory) => {
+                        materializedSession = { sessionId, directory };
+                    },
+                } : {}),
                 ...(!capturedTarget && submissionSessionId ? { sessionId: submissionSessionId } : {}),
                 expectedRuntime,
             };
@@ -2244,23 +2265,38 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const drafts: InlineCommentDraft[] = consumedDraftTarget
             ? consumeDrafts(consumedDraftTarget)
             : [];
-        const restoreConsumedDrafts = () => {
-            if (isSubmissionContextCurrent() && consumedDraftTarget && drafts.length > 0) {
-                useInlineCommentDraftStore.getState().restoreDrafts(consumedDraftTarget, drafts);
+        const submissionInlineDraftTarget = (): InlineCommentDraftTarget | null => {
+            if (materializedSession) {
+                const directory = materializedSession.directory ?? consumedDraftTarget?.directory ?? inlineDraftDirectory;
+                return directory ? { directory, sessionKey: materializedSession.sessionId } : null;
             }
+            return consumedDraftTarget;
+        };
+        const restoreConsumedDrafts = () => {
+            const target = submissionInlineDraftTarget();
+            if (getRuntimeKey() === submissionRuntimeKey && target && drafts.length > 0) {
+                useInlineCommentDraftStore.getState().restoreDrafts(
+                    target,
+                    drafts.map((draft) => ({ ...draft, sessionKey: target.sessionKey })),
+                );
+            }
+        };
+        const restoreConsumedSyntheticParts = () => {
+            if (!isSubmissionContextCurrent() || !syntheticParts || syntheticParts.length === 0) return;
+            const inputState = useInputStore.getState();
+            inputState.setPendingSyntheticParts([...syntheticParts, ...(inputState.getPendingSyntheticParts(mailboxTarget) ?? [])], mailboxTarget);
+        };
+        const restoreComposerAttachments = () => {
+            if (attachedFiles.length === 0 || getRuntimeKey() !== submissionRuntimeKey) return;
+            useInputStore.getState().restoreAttachedFiles(attachedFiles, submissionDraftIdentity());
         };
         // Everything a prompt command consumed comes back if it fails: the
         // attached context, the typed text, and the files.
         const restoreConsumedInput = () => {
             restoreConsumedDrafts();
-            if (syntheticParts?.length) {
-                const inputState = useInputStore.getState();
-                inputState.setPendingSyntheticParts([...syntheticParts, ...(inputState.getPendingSyntheticParts(mailboxTarget) ?? [])], mailboxTarget);
-            }
+            restoreConsumedSyntheticParts();
             restoreComposerText();
-            if (attachedFiles.length > 0) {
-                useInputStore.getState().restoreAttachedFiles(attachedFiles, chatDraftIdentity);
-            }
+            restoreComposerAttachments();
         };
 
         const availableSkillNames = new Set(
@@ -2338,12 +2374,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         const submittedMentions = new Set(confirmedMentionsRef.current);
         const restoreSubmittedInputAfterError = (error: unknown): boolean => {
-            if (error instanceof SubmissionContextChangedError || error instanceof RuntimeContextChangedError) {
-                writeChatDraft(chatDraftIdentity, inputSnapshot.message, submittedMentions);
-                return true;
-            }
-            if (!isSubmissionContextCurrent()) {
-                writeChatDraft(chatDraftIdentity, inputSnapshot.message, submittedMentions);
+            const targetDraft = submissionDraftIdentity();
+            if (
+                error instanceof SubmissionContextChangedError
+                || error instanceof RuntimeContextChangedError
+                || !isSubmissionContextCurrent()
+            ) {
+                if (inputSnapshot.message) {
+                    restoreDraft(targetDraft, inputSnapshot.message, submittedMentions);
+                }
                 return true;
             }
             const currentInput = composerRef.current?.getValue() ?? messageRef.current;
@@ -2354,10 +2393,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 ...confirmedMentionsRef.current,
                 ...submittedMentions,
             ]);
-            confirmedMentionsRef.current = restoredMentions;
-            messageRef.current = restoredInput;
-            setMessage(restoredInput);
-            writeChatDraft(chatDraftIdentity, restoredInput, restoredMentions);
+            if (restoredInput) {
+                messageRef.current = '';
+                restoreDraft(targetDraft, restoredInput, restoredMentions);
+            }
             return false;
         };
 
@@ -2490,9 +2529,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         sendMessageOptions,
                     );
                 } catch (error) {
+                    restoreConsumedDrafts();
+                    restoreConsumedSyntheticParts();
+                    restoreComposerAttachments();
                     if (restoreSubmittedInputAfterError(error)) return;
-                    restoreConsumedInput();
-                    toast.error(getSubmitErrorMessage(error, t(command.errorToastKey)));
+                    toast.error(getSubmitErrorMessage(error, t(command.errorToastKey), effectiveSubmissionSessionId()));
                 }
                 return;
             }
@@ -2535,21 +2576,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
         const ownsPendingBtwSend = () => Boolean(pendingBtwSend && currentSessionId
             && useBtwStore.getState().byParent[currentSessionId]?.pendingSend === pendingBtwSend);
-
-        const restoreConsumedSyntheticParts = () => {
-            if (!isSubmissionContextCurrent() || !syntheticParts || syntheticParts.length === 0) return;
-            const pending = useInputStore.getState().pendingSyntheticParts ?? [];
-            setPendingSyntheticParts([...syntheticParts, ...pending]);
-        };
-        const restoreComposerAttachments = () => {
-            if (!isSubmissionContextCurrent() || attachedFiles.length === 0) return;
-            const current = useInputStore.getState().attachedFiles;
-            const currentIds = new Set(current.map((attachment) => attachment.id));
-            useInputStore.getState().setAttachedFiles([
-                ...current,
-                ...attachedFiles.filter((attachment) => !currentIds.has(attachment.id)),
-            ]);
-        };
 
         if (delivery === 'queue') {
             // The queue stores the resolved payload; its drain has no skill registry.
@@ -2702,10 +2728,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             // had no session at all, so a mid-send session switch cannot
             // redirect the write to an unrelated session.
             const sessionState = useSessionUIStore.getState();
-            const linkTargetSessionId = currentSessionId ?? sessionState.currentSessionId;
+            const linkTargetSessionId = currentSessionId ?? materializedSession?.sessionId ?? sessionState.currentSessionId;
             const linkTargetDirectory = currentSessionId
                 ? currentSessionDirectoryForSync ?? currentDirectory
-                : sessionState.currentSessionDirectory
+                : materializedSession?.directory
+                    ?? sessionState.currentSessionDirectory
                     ?? (linkTargetSessionId ? sessionState.getDirectoryForSession(linkTargetSessionId) : null)
                     ?? currentDirectory;
             if (linkTargetSessionId) {
@@ -2757,10 +2784,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             restoreComposerAttachments();
             if (restoreSubmittedInputAfterError(error)) return;
             console.error('Message send failed:', rawMessage || error);
-            restoreComposerText();
 
             if (error instanceof NativeAgentsRequestError) {
-                const key = nativeSessionActionErrorKey(error, currentSessionId);
+                const key = nativeSessionActionErrorKey(error, effectiveSubmissionSessionId());
                 if (key) { toast.error(t(key)); return; }
             }
 

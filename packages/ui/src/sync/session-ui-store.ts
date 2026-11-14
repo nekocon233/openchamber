@@ -517,7 +517,7 @@ type SendMessageOptions = {
   draftSnapshot?: NewSessionDraftState
   delivery?: 'steer' | 'queue'
   messageId?: string
-  onSessionMaterialized?: (sessionId: string) => void
+  onSessionMaterialized?: (sessionId: string, directory: string | null) => void
   expectedRuntime?: ExpectedRuntimeContext
   skills?: SkillMentions
 }
@@ -1238,6 +1238,7 @@ export function materializeOpenDraftSession(selection: {
   agent?: string
   variant?: string
   expectedRuntime?: ExpectedRuntimeContext
+  onSessionMaterialized?: (sessionId: string, directory: string | null) => void
 }, draftOverride?: NewSessionDraftState): Promise<MaterializedDraftSession | null> {
   const operationRuntime = selection.expectedRuntime ?? {
     runtimeKey: getRuntimeKey(),
@@ -1337,6 +1338,7 @@ export function materializeOpenDraftSession(selection: {
     // The create response is authoritative and may canonicalize the requested
     // worktree path through symlinks or platform-specific casing.
     const createdDirectory = normalizePath(created.directory ?? draftDirectoryOverride ?? null)
+    selection.onSessionMaterialized?.(created.id, createdDirectory)
 
     persistDraftTarget({
       projectId: draftProjectId,
@@ -2283,9 +2285,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           agent: trimmedAgent,
           variant,
           expectedRuntime: options?.expectedRuntime,
+          onSessionMaterialized: options?.onSessionMaterialized,
         }, options?.draftSnapshot)
         if (!createdDraftSession) throw new Error("Failed to create session")
-        options?.onSessionMaterialized?.(createdDraftSession.sessionId)
 
         const draftParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }> | undefined = createdDraftSession.syntheticParts?.length
           ? [...(additionalParts || []), ...createdDraftSession.syntheticParts]
