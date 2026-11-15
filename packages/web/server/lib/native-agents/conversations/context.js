@@ -23,10 +23,17 @@ const retainedContextEntries = (entries) => {
   const checkpoints = new Map();
   entries.forEach((entry, index) => {
     const info = entry.record.info;
-    if (entry.segmentId && info.role === 'compaction' && info.status === 'completed'
-      && info.summary?.trim() && !info.error && !info.metadata?.nativeOutputTruncated) {
-      checkpoints.set(entry.segmentId, index);
-    }
+    if (!entry.segmentId || info.role !== 'compaction' || info.status !== 'completed'
+      || info.error || info.metadata?.nativeOutputTruncated) return;
+    if (info.summary?.trim()) { checkpoints.set(entry.segmentId, index); return; }
+    // Claude stores the completed checkpoint text in the following summary
+    // message, while the compaction record itself contains only its boundary.
+    const next = entries[index + 1];
+    if (next?.segmentId === entry.segmentId && next.record.info.role === 'assistant'
+      && next.record.info.summary === true && !next.record.info.error
+      && !next.record.info.metadata?.nativeOutputTruncated
+      && !next.record.parts.some((part) => part.metadata?.nativeOutputTruncated)
+      && textOf(next.record).trim()) checkpoints.set(entry.segmentId, index + 1);
   });
   return entries.filter((entry, index) => index >= (checkpoints.get(entry.segmentId) ?? 0));
 };

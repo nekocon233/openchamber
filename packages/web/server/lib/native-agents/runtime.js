@@ -784,10 +784,10 @@ export const createNativeAgentsRuntime = ({
   };
   // Codex and DSH keep no idle per-conversation process to retire.
   const sourceLifecycle = {
-    claude: { retire: (id) => { delegation?.retire(id); return claudeLive.closeSession(id); }, stop: stopConversationSource, delete: true, compact: true },
-    codex: { retire: async (id) => { delegation?.retire(id); }, stop: stopConversationSource, delete: true, compact: true },
-    deepseek: { retire: async (id) => { delegation?.retire(id); }, stop: (id) => deepseek.stop(id), delete: true, compact: true },
-    antigravity: { retire: (id) => { delegation?.retire(id); return antigravity.closeSession(id); }, stop: stopConversationSource, delete: false, compact: false },
+    claude: { retire: (id) => { delegation?.retire(id); return claudeLive.closeSession(id); }, stop: stopConversationSource, delete: true, compact: true, rewind: true },
+    codex: { retire: async (id) => { delegation?.retire(id); }, stop: stopConversationSource, delete: true, compact: true, rewind: true },
+    deepseek: { retire: async (id) => { delegation?.retire(id); }, stop: (id) => deepseek.stop(id), delete: true, compact: true, rewind: true },
+    antigravity: { retire: (id) => { delegation?.retire(id); return antigravity.closeSession(id); }, stop: stopConversationSource, delete: false, compact: false, rewind: false },
   };
 
   const native = {
@@ -1204,11 +1204,11 @@ export const createNativeAgentsRuntime = ({
      * stopped first.
      * @returns {Promise<{ session: object, filesRestored: number, conversationOnly: boolean }>}
      */
-    async revert(sessionId, messageId, directory) {
+    async revert(sessionId, messageId, directory, { restoreFiles = true } = {}) {
       await assertDelegationRoot(sessionId);
       const { backend } = decode(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('revert');
-      if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.revert(sessionId, messageId, directory);
+      if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.revert(sessionId, messageId, directory, { restoreFiles });
       if (backend === NATIVE_BACKEND_CODEX) await codexTitles.cancel(sessionId);
       await stopTurn(sessionId);
       let revert;
@@ -1221,7 +1221,7 @@ export const createNativeAgentsRuntime = ({
         const target = await codex.rewindTarget(sessionId, messageId);
         revert = { sessionId, messageId, messageIds: target.messageIds, rewind: { beforeTurnId: target.beforeTurnId } };
       }
-      const { filesRestored, conversationOnly } = await reverts.revert(revert);
+      const { filesRestored, conversationOnly } = await reverts.revert({ ...revert, restoreFiles });
       const session = await publishSession(sessionId, directory);
       if (!session) throw sessionNotFoundError(sessionId);
       return { session, filesRestored, conversationOnly };
@@ -1248,12 +1248,12 @@ export const createNativeAgentsRuntime = ({
      * @param {string | null} messageId
      * @param {string} directory
      */
-    async fork(sessionId, messageId, directory) {
+    async fork(sessionId, messageId, directory, { beforePublish } = {}) {
       await assertDelegationRoot(sessionId);
       const { backend } = decode(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('fork');
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
-        const session = await deepseek.fork(sessionId, messageId, directory);
+        const session = await deepseek.fork(sessionId, messageId, directory, { beforePublish });
         publisher.session(session.directory, session, { created: true });
         return decorate(session);
       }
@@ -1265,7 +1265,7 @@ export const createNativeAgentsRuntime = ({
       let forkedId;
       if (backend === NATIVE_BACKEND_CLAUDE) {
         const target = messageId === null ? { resumeAt: undefined } : await claude.rewindTarget(sessionId, directory, messageId);
-        if (target.resumeAt === null) return createSession({ backend, directory });
+        if (target.resumeAt === null) return createSession({ backend, directory }, { beforePublish });
         const nativeId = await claude.fork(sessionId, directory, target.resumeAt);
         forkedId = encodeClaudeSessionId(nativeId);
         const createdAt = now();
@@ -1281,6 +1281,7 @@ export const createNativeAgentsRuntime = ({
       }
       const session = await storeFor(forkedId).getSession(forkedId, directory);
       if (!session) throw sessionNotFoundError(forkedId);
+      await beforePublish?.(session);
       try { await interactions.fork(sessionId, forkedId, retained); }
       catch {
         publisher.session(directory, session, { created: true });

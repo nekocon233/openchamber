@@ -21,7 +21,11 @@ const telemetryCorrection = z.object({
 });
 const lifecycleSchema = z.record(nativeBackendSchema, z.object({
   stop: z.function(), retire: z.function(), delete: z.boolean(), compact: z.boolean(),
+  rewind: z.boolean(),
 }));
+const unsupportedRewind = (error) => error instanceof NativeAgentError && [
+  'NATIVE_REVERT_FIRST_MESSAGE', 'NATIVE_REVERT_MID_TURN', 'NATIVE_REWIND_BEFORE_COMPACTION',
+].includes(error.code);
 const selectionOf = (request) => conversationSelectionSchema.parse({ model: request.model, agent: request.agent, variant: request.variant });
 const checklistIdentity = (manifest, segment) => `antigravity:${manifest.id}:${segment.id}:${manifest.cut ?? 'full'}`;
 const directoryKey = (directory) => {
@@ -57,6 +61,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
   const handoffs = new Set();
   const operations = new Map();
   const clocks = new Map();
+  const sourcePrefixes = new Map();
   const recoveryFailures = new Set();
   let ready;
   let sequence = 0;
@@ -163,6 +168,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
   const restorePreparation = async (manifest) => {
     const admission = manifest.admission;
     if (!admission || admission.phase !== 'preparing') return manifest;
+    if (admission.rewindSource) await native.unrevert(admission.rewindSource, manifest.directory);
     await reverts.cancelCommit(manifest.id);
     const restored = await update(manifest.id, (current) => {
       current.segments = admission.rollback.segments;
@@ -211,17 +217,25 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     if (blocked(manifest, approval)) throw sessionBusyError();
   };
   const historyOf = async (manifest) => {
-    const history = await readConversationHistory(native, manifest);
+    const history = await readConversationHistory(native, manifest, observePrefix);
     if (get(manifest.id).historyRevision !== manifest.historyRevision) throw new NativeAgentError('Conversation history changed. Reload and retry.', {
       status: 409, code: 'NATIVE_HISTORY_CHANGED',
     });
     return history;
   };
+  const observePrefix = (segment, ids) => {
+    sourcePrefixes.set(segment.sessionId, { from: segment.from, ids: new Set(ids) });
+  };
+  const includesSourceMessage = (segment, messageId) => {
+    if (!segment.from) return true;
+    const prefix = sourcePrefixes.get(segment.sessionId);
+    return prefix?.from === segment.from && Boolean(messageId) && !prefix.ids.has(messageId);
+  };
   const publishRetainedTelemetry = (owner, source, correction) => locked(owner.id, async () => {
     const manifest = get(owner.id);
     const segment = manifest.segments.find((entry) => entry.id === owner.segmentId && entry.sessionId === source);
     if (!segment) return;
-    const history = await readConversationSegment(native, manifest, segment);
+    const history = await readConversationSegment(native, manifest, segment, observePrefix);
     const messageID = conversationMessageId(manifest.id, segment, correction.messageID);
     const ids = history.records.map((record) => conversationMessageId(manifest.id, segment, record.info.id));
     const index = ids.indexOf(messageID);
@@ -269,7 +283,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     const segment = manifest.segments.find((entry) => entry.id === manifest.admission.segmentId);
     const send = segment?.sends.find((entry) => entry.messageId === manifest.admission.messageId);
     if (!segment || !send) throw unknownAdmission();
-    const history = await readConversationSegment(native, manifest, segment);
+    const history = await readConversationSegment(native, manifest, segment, observePrefix);
     if (!history.records.some((record) => record.info.id === send.nativeMessageId)) throw unknownAdmission();
     await update(manifest.id, (current) => {
       const admitted = current.segments.find((entry) => entry.id === segment.id)?.sends.find((entry) => entry.messageId === send.messageId);
@@ -330,6 +344,8 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     let dispatched = false;
     let accepted = false;
     let reverting = false;
+    let rewindSource;
+    let createdSource = false;
     try {
       let instructions;
       if (switching) {
@@ -339,47 +355,109 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         });
         const end = manifest.cut ? history.entries.findIndex((entry) => entry.record.info.id === manifest.cut) : history.entries.length;
         if (end === -1) throw invalidRequestError('Unknown conversation rewind point');
-        const catalog = (await native.catalog()).backends[backend];
-        if (catalog?.status !== 'ok') throw new NativeAgentError('The selected native model catalog is unavailable. Retry after reconnecting the backend.', {
-          status: 503, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE',
-        });
-        instructions = await prepareConversationContext({
-          manifest, entries: history.entries.slice(0, end), target, catalog, smallModels,
-          signal: controller.signal, saveCheckpoint: (checkpoint) => update(id, (current) => ({ ...current, checkpoint })),
-        });
-        controller.signal.throwIfAborted();
-        if (old) await lifecycles[old.backend].retire(old.sessionId);
-        if (manifest.cut) {
-          reverting = true;
-        }
         const retained = manifest.cut ? conversationPrefix(manifest, history, manifest.cut) : structuredClone(manifest.segments);
-        if (!manifest.cut && old) {
-          const last = history.entries.findLast((entry) => entry.segmentId === old.id);
-          const previous = retained.find((entry) => entry.id === old.id);
-          if (last && previous) previous.through = last.nativeMessageId;
-        }
-        await native.createSession({ backend, directory: manifest.directory, ...(manifest.manualTitle ? { title: manifest.title } : {}) }, {
-          toolLaunch: { subagentModel: request.subagentModel !== undefined ? request.subagentModel : manifest.agents?.subagent ?? null },
-          beforePublish: async (source) => {
-            owned.add(source.id);
-            await registry.updateSession(source.id, { conversationId: id });
-            if (!lifecycles[backend].delete) undeletableOwners.add(id);
-            segment = { id: randomUUID(), ownerId: id, sessionId: source.id, backend, createdAt: now(), sends: [] };
-            nativeMessageId = newNativeClientUserMessageId(source.id);
-            segment.sends.push({ messageId: request.messageID, nativeMessageId, createdAt: now(), state: 'pending', fingerprint, selection: target });
+        const boundary = manifest.cut ? history.entries[end] : null;
+        const source = boundary ? manifest.segments.find((entry) => entry.id === boundary.segmentId) : null;
+        let prepared = false;
+        const bindSource = async (source, inherited = false) => {
+          createdSource = true;
+          owned.add(source.id);
+          await registry.updateSession(source.id, { conversationId: id });
+          if (!lifecycles[backend].delete) undeletableOwners.add(id);
+          nativeMessageId = newNativeClientUserMessageId(source.id);
+          segment = { id: randomUUID(), ownerId: id, sessionId: source.id, backend, createdAt: now(), sends: [] };
+          if (inherited) segment.from = nativeMessageId;
+          segment.sends.push({ messageId: request.messageID, nativeMessageId, createdAt: now(), state: 'pending', fingerprint, selection: target });
+          manifest = await update(id, (current) => {
+            current.segments = [...retained, segment];
+            current.active = segment.id;
+            current.admission = { segmentId: segment.id, messageId: request.messageID, phase: 'preparing', rollback: prior };
+            if (current.cut) {
+              current.historyRevision += 1;
+              delete current.cut;
+              delete current.checkpoint;
+            }
+            return current;
+          });
+        };
+        if (source?.backend === backend && lifecycles[backend].rewind) {
+          // A fork keeps referring to the original native history. Only its
+          // exclusive owner may rewind that source in place.
+          const exclusive = source.ownerId === id && store.unavailable().length === 0
+            && manifest.segments.filter((entry) => entry.sessionId === source.sessionId).length === 1
+            && !store.list().some((other) => other.id !== id && referencedSegments(other).some((entry) => entry.sessionId === source.sessionId));
+          if (exclusive) {
+            rewindSource = source.sessionId;
             manifest = await update(id, (current) => {
-              current.segments = [...retained, segment];
-              current.active = segment.id;
-              current.admission = { segmentId: segment.id, messageId: request.messageID, phase: 'preparing', rollback: prior };
-              if (current.cut) {
+              current.admission = { segmentId: source.id, messageId: request.messageID, phase: 'preparing', rollback: prior, rewindSource };
+              return current;
+            });
+            try {
+              await native.revert(source.sessionId, boundary.nativeMessageId, manifest.directory, { restoreFiles: false });
+              controller.signal.throwIfAborted();
+              nativeMessageId = newNativeClientUserMessageId(source.sessionId);
+              const prefix = retained.find((entry) => entry.id === source.id);
+              segment = { ...(prefix ?? source), sends: [...(prefix?.sends ?? [])] };
+              delete segment.through;
+              delete segment.before;
+              if (source.from && !prefix) segment.from = nativeMessageId;
+              segment.sends.push({ messageId: request.messageID, nativeMessageId, createdAt: now(), state: 'pending', fingerprint, selection: target });
+              reverting = true;
+              manifest = await update(id, (current) => {
+                current.segments = [...retained.filter((entry) => entry.id !== source.id), segment];
+                current.active = segment.id;
                 current.historyRevision += 1;
                 delete current.cut;
                 delete current.checkpoint;
-              }
-              return current;
-            });
-          },
-        });
+                return current;
+              });
+              prepared = true;
+            } catch (error) {
+              if (!unsupportedRewind(error)) throw error;
+              await native.unrevert(source.sessionId, manifest.directory);
+              rewindSource = undefined;
+              manifest = await update(id, (current) => { delete current.admission; return current; });
+            }
+          }
+          // Native forks preserve context without a summary and leave shared
+          // sources untouched. An empty native prefix cannot carry older CLIs.
+          if (!prepared && (retained.some((entry) => entry.id === source.id) || retained.length === 0)) {
+            try {
+              if (old) await lifecycles[old.backend].retire(old.sessionId);
+              await native.fork(source.sessionId, boundary.nativeMessageId, manifest.directory, {
+                beforePublish: (fork) => bindSource(fork, true),
+              });
+              reverting = true;
+              prepared = true;
+            } catch (error) {
+              if (!unsupportedRewind(error)) throw error;
+            }
+          }
+        }
+        if (!prepared) {
+          const catalog = (await native.catalog()).backends[backend];
+          if (catalog?.status !== 'ok') throw new NativeAgentError('The selected native model catalog is unavailable. Retry after reconnecting the backend.', {
+            status: 503, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE',
+          });
+          instructions = await prepareConversationContext({
+            manifest, entries: history.entries.slice(0, end), target, catalog, smallModels,
+            signal: controller.signal, saveCheckpoint: (checkpoint) => update(id, (current) => ({ ...current, checkpoint })),
+          });
+          controller.signal.throwIfAborted();
+          if (old) await lifecycles[old.backend].retire(old.sessionId);
+          if (manifest.cut) {
+            reverting = true;
+          }
+          if (!manifest.cut && old) {
+            const last = history.entries.findLast((entry) => entry.segmentId === old.id);
+            const previous = retained.find((entry) => entry.id === old.id);
+            if (last && previous) previous.through = last.nativeMessageId;
+          }
+          await native.createSession({ backend, directory: manifest.directory, ...(manifest.manualTitle ? { title: manifest.title } : {}) }, {
+            toolLaunch: { subagentModel: request.subagentModel !== undefined ? request.subagentModel : manifest.agents?.subagent ?? null },
+            beforePublish: bindSource,
+          });
+        }
       }
       controller.signal.throwIfAborted();
       nativeMessageId ??= newNativeClientUserMessageId(segment.sessionId);
@@ -390,17 +468,22 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           if (preview) current.title = preview;
         }
         if (!switching) {
-          current.segments.find((entry) => entry.id === segment.id).sends.push({
+          const active = current.segments.find((entry) => entry.id === segment.id);
+          if (active.from && active.sends.length === 0) active.from = nativeMessageId;
+          active.sends.push({
             messageId: request.messageID, nativeMessageId, createdAt: now(), state: 'pending', fingerprint, selection: target,
           });
         }
         current.admission = { segmentId: segment.id, messageId: request.messageID, phase: 'preparing', rollback: prior };
+        if (rewindSource) current.admission.rewindSource = rewindSource;
         return current;
       });
+      segment = manifest.segments.find((entry) => entry.id === segment.id);
       await reverts.beforePrompt(id, manifest.directory, request.messageID);
       controller.signal.throwIfAborted();
       if (reverting) await reverts.beginCommit(id);
       if (manifest.agents) await registry.updateSession(segment.sessionId, { agentConfiguration: manifest.agents });
+      if (segment.from) await readConversationSegment(native, manifest, segment, observePrefix);
       await update(id, (current) => { current.admission.phase = 'dispatched'; return current; });
       controller.signal.throwIfAborted();
       await approval?.onDispatched?.();
@@ -421,8 +504,17 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     } catch (error) {
       const definitelyRefused = !accepted && (!dispatched || definiteRefusal(error));
       if (definitelyRefused) {
+        let rewindCommitted = false;
+        if (rewindSource && dispatched) {
+          // Codex can commit thread/revert before refusing turn/start. Its
+          // removed turns cannot be restored by a manifest rollback.
+          const original = prior.segments.find((entry) => entry.sessionId === rewindSource);
+          const history = await readConversationSegment(native, manifest, { ...original, from: undefined, through: undefined, before: undefined });
+          rewindCommitted = !history.records.some((record) => conversationMessageId(id, original, record.info.id) === prior.cut);
+        }
+        if (rewindSource && !rewindCommitted) await native.unrevert(rewindSource, manifest.directory);
         await update(id, (current) => {
-          if (switching) {
+          if (switching && !rewindCommitted) {
             current.segments = prior.segments;
             current.active = prior.active;
             current.cut = prior.cut;
@@ -435,12 +527,18 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           delete current.admission;
           return current;
         });
-        if (reverting) await reverts.cancelCommit(id);
+        if (reverting) {
+          if (rewindCommitted) await reverts.finishCommit(id);
+          else await reverts.cancelCommit(id);
+        }
         await registry.dropTurns(id, [request.messageID]);
-        if (switching && segment && segment.id !== old?.id) {
+        if (createdSource && segment) {
           try {
             await lifecycles[segment.backend].retire(segment.sessionId);
-            if (lifecycles[segment.backend].delete) await native.deleteSession(segment.sessionId, manifest.directory);
+            if (lifecycles[segment.backend].delete) {
+              await native.deleteSession(segment.sessionId, manifest.directory);
+              sourcePrefixes.delete(segment.sessionId);
+            }
           }
           catch { /* The registry retains ownership for cleanup when the conversation is deleted. */ }
         }
@@ -559,7 +657,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       await load();
       if (!isConversationId(id)) return native.loadMessages(id, directory, page);
       const manifest = get(id, directory);
-      const result = await readConversationPage(native, manifest, page);
+      const result = await readConversationPage(native, manifest, page, observePrefix);
       if (native.delegatedChildren) {
         try {
           const children = await native.delegatedChildren(id);
@@ -742,6 +840,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           background.delete(source);
           waiting.delete(source);
           clocks.delete(source);
+          sourcePrefixes.delete(source);
           for (const [child, root] of childRoots) if (root === source) { foreground.delete(child); childRoots.delete(child); }
         }
         emit(manifest, 'session.deleted', { sessionID: id });
@@ -918,6 +1017,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       const manifest = owner && store.peek(owner.id);
       const segment = manifest?.segments.find((entry) => entry.id === owner.segmentId);
       if (!segment) return false;
+      if (!includesSourceMessage(segment, part.messageID)) return true;
       emit(manifest, 'message.part.updated', {
         sessionID: manifest.id,
         part: projectConversationPart(manifest.id, { ...segment, timeOffset: segment.timeOffset ?? clocks.get(source) ?? 0 }, part),
@@ -974,6 +1074,8 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         if (correction?.success) void publishRetainedTelemetry(owner, source, correction.data).catch(() => undefined);
         return;
       }
+      if (payload.type.startsWith('message.') && !includesSourceMessage(segment,
+        properties.info?.id ?? properties.part?.messageID ?? properties.messageID)) return;
       if (payload.type === 'question.asked') questionOwners.set(properties.id, { id: manifest.id, selection: manifest.selection, plan: properties.kind?.endsWith('-plan-exit') === true });
       if (payload.type === 'message.updated' && segment.timeOffset === undefined && !clocks.has(segment.sessionId)) {
         const offset = Math.max(0, segment.createdAt - properties.info.time.created);
@@ -999,6 +1101,12 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         return;
       }
       const projected = { ...properties, sessionID: manifest.id };
+      if (payload.type === 'session.revert.committed') {
+        const admission = manifest.admission;
+        if (admission?.rewindSource !== source || !admission.rollback.cut) return;
+        projected.to = admission.rollback.cut;
+        projected.nativeHistoryRevision = manifest.historyRevision;
+      }
       if (payload.type === 'session.checklist.updated' && segment.backend === 'antigravity') {
         if (manifest.cut || segment.through || segment.before) return;
         if (properties.snapshot.state === 'ready') projected.snapshot = { ...properties.snapshot, identity: checklistIdentity(manifest, segment) };

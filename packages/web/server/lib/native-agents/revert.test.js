@@ -51,6 +51,17 @@ const runTwoTurns = async ({ root, reverts }) => {
 const contents = (root) => ({ a: read(root, 'a.txt'), b: read(root, 'b.txt'), c: read(root, 'c.txt'), notes: read(root, 'notes.md') });
 
 describe('native reverts', () => {
+  it('stages a native rewind without restoring files already handled by a unified conversation', async () => {
+    const harness = createHarness();
+    await runTwoTurns(harness);
+    const before = contents(harness.root);
+    expect(await harness.reverts.revert({ sessionId: SESSION, messageId: 'ncl_u_1', messageIds: ['ncl_u_1', 'ncl_u_2'],
+      rewind: REWIND, restoreFiles: false })).toEqual({ filesRestored: 0, conversationOnly: true });
+    expect(contents(harness.root)).toEqual(before);
+    expect(await harness.reverts.pending(SESSION)).toMatchObject({ resumeAt: REWIND.resumeAt, phase: 'pending', files: [] });
+    await harness.reverts.unrevert(SESSION);
+    expect(contents(harness.root)).toEqual(before);
+  });
   it('restores what the reverted turns changed, keeps edits made between turns, and unreverts', async () => {
     const harness = createHarness();
     const { root, reverts } = harness;

@@ -207,6 +207,11 @@ for native execution and transcript delivery to settle, then drains turn
 snapshot and memory work. The shared Claude/Codex `whenIdle` interface does
 not apply to DeepSeek.
 
+Unified same-backend rewinds also use this adapter's native event-prefix fork
+and preserve its logical source ID. They stage the native revert without
+restoring files a second time. Native forks hold their creation announcements
+until the caller's ownership callback has registered the unified conversation.
+
 Identity segments keep inherited user/assistant/part ids stable while assigning
 new branch output a different namespace. `session.revert.committed` carries the
 new `nativeHistoryRevision`; shared reducers retire in-flight reads and trim the

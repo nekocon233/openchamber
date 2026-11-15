@@ -23,6 +23,7 @@ const segmentSchema = z.object({
   timeOffset: z.number().optional(),
   through: z.string().optional(),
   before: z.string().optional(),
+  from: z.string().optional(),
   sends: z.array(z.object({
     messageId: z.string().min(1),
     nativeMessageId: z.string().min(1),
@@ -62,6 +63,7 @@ const manifestSchema = z.object({
   checkpoint: checkpointSchema.optional(),
   admission: z.object({
     segmentId: z.string(), messageId: z.string(), phase: z.enum(['preparing', 'dispatched']), rollback: rollbackSchema,
+    rewindSource: z.string().optional(),
   }).optional(),
   deletion: z.array(z.string()).optional(),
 });
