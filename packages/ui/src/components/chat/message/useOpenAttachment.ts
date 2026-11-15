@@ -5,8 +5,8 @@ import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import type { AttachmentOpenTarget } from '@/lib/messages/attachmentPreview';
 import { getDirectoryForFilePath } from '@/lib/path-utils';
-import { openExternalUrl } from '@/lib/url';
 import { useUIStore } from '@/stores/useUIStore';
+import { useOpenChatLink } from '../useOpenChatLink';
 import type { ToolPopupContent } from './types';
 
 /**
@@ -18,10 +18,11 @@ export function useOpenAttachment(onShowPopup: ((content: ToolPopupContent) => v
     const runtime = React.useContext(RuntimeAPIContext);
     const mobileActions = useMobileAppActions();
     const effectiveDirectory = useEffectiveDirectory();
+    const openChatLink = useOpenChatLink(effectiveDirectory ?? '');
 
     return React.useCallback((target: AttachmentOpenTarget) => {
         if (target.kind === 'external') {
-            void openExternalUrl(target.url);
+            openChatLink(target.url);
             return;
         }
         if (target.kind === 'popup') {
@@ -35,5 +36,5 @@ export function useOpenAttachment(onShowPopup: ((content: ToolPopupContent) => v
         const directory = effectiveDirectory || getDirectoryForFilePath(effectiveDirectory, target.path);
         useUIStore.getState().openContextFile(directory, target.path);
         mobileActions?.openFiles();
-    }, [effectiveDirectory, mobileActions, onShowPopup, runtime]);
+    }, [effectiveDirectory, mobileActions, onShowPopup, openChatLink, runtime]);
 }

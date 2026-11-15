@@ -11,6 +11,7 @@ import { getDefaultTheme } from '@/lib/theme/themes';
 import { I18nProvider } from '@/lib/i18n';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
+import { useGuestItemStore } from '@/lib/guests/item-store';
 import { useGuestsStore } from '@/lib/guests/store';
 import type { InstalledGuest } from '@/lib/guests/types';
 import { SyncProvider } from '@/sync/sync-context';
@@ -105,6 +106,36 @@ test('panel and page frames publish titlebar controls across project switches wh
     await send({ channel: 'openchamber.sdk', v: 1, type: 'hello' });
     expect(received.find((message) => message.type === 'ready')).toMatchObject({
       payload: { surface: 'panel', features: { statusControls: true } },
+    });
+
+    // When item prop is omitted (rail panel), a pending Remote Desktop URL is delivered once and cleared on iframe reload.
+    await act(async () => {
+      useGuestItemStore.getState().setPendingItem('openchamber-builtin-desktop', {
+        providerId: 'openchamber-builtin-desktop',
+        id: 'remote-url-once',
+        title: 'Example',
+        url: 'https://example.test/once',
+      });
+    });
+    received.length = 0;
+    await act(async () => root.render(
+      <I18nProvider><ThemeSystemContext.Provider value={themeContext}>
+        <SyncProvider sdk={sdk} directory="/project-a">
+          <PluginPane
+            mode="plugin:openchamber-builtin-desktop"
+            surface="panel"
+            onStatusControls={(binding) => bindings.push(binding)}
+          />
+        </SyncProvider>
+      </ThemeSystemContext.Provider></I18nProvider>,
+    ));
+    expect(received.filter((message) => message.type === 'item').at(-1)).toMatchObject({
+      payload: { item: { id: 'remote-url-once', url: 'https://example.test/once' } },
+    });
+    received.length = 0;
+    await send({ channel: 'openchamber.sdk', v: 1, type: 'hello' });
+    expect(received.find((message) => message.type === 'ready')).toMatchObject({
+      payload: { item: null },
     });
 
     await send({

@@ -9,6 +9,7 @@ import {
   GUEST_POPOVER_HEIGHT_MIN,
   GUEST_POPOVER_HEIGHT_MAX,
   guestFileScope,
+  isGuestAttachItem,
   type AttachIssueRequest,
   type GuestHostSurface,
   type GuestItem,
@@ -81,6 +82,7 @@ import { cn } from '@/lib/utils';
 import { closeGuestTabsEverywhere } from '@/lib/guests/tabs';
 import { pluginIdFromMode, type PluginContextPanelMode } from '@/lib/surfaces/modes';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
+import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 import { getDefaultContextZone, getZoneView, zoneOfMode } from '@/lib/workspace/zones';
 import { useInputStore } from '@/sync/input-store';
 import { useBackgroundShellsStore } from '@/sync/background-shells';
@@ -206,6 +208,10 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   const pendingItem = useGuestItemStore((state) => state.pendingItemByGuest[guestId]);
   const takePendingItem = useGuestItemStore((state) => state.takePendingItem);
   const [railItem, setRailItem] = React.useState<GuestItem | null>(null);
+  const railItemRef = React.useRef<GuestItem | null>(null);
+  railItemRef.current = railItem;
+  const helloReceivedRef = React.useRef(false);
+  const deliveredDesktopItemIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (headless || itemProp !== undefined || !pendingItem) return;
     setRailItem(takePendingItem(guestId));
@@ -435,6 +441,9 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   }, [frameKey, src, srcDoc]);
 
   const pushHostState = React.useCallback(() => {
+    if (helloReceivedRef.current && guestIdRef.current === DESKTOP_GUEST_ID && isGuestAttachItem(readyRef.current.item)) {
+      deliveredDesktopItemIdRef.current = readyRef.current.item.id;
+    }
     postToGuest(buildReadyMessage(readyRef.current));
     postToGuest(buildDirectoryMessage(directoryRef.current || null));
     postToGuest(buildSessionMessage(readyRef.current.session));
@@ -571,6 +580,16 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       if (message.type === 'hello') {
         acknowledgeHandshake();
         clearSubscriptions();
+        helloReceivedRef.current = true;
+        if (
+          guestIdRef.current === DESKTOP_GUEST_ID
+          && isGuestAttachItem(railItemRef.current)
+          && deliveredDesktopItemIdRef.current === railItemRef.current.id
+        ) {
+          railItemRef.current = null;
+          readyRef.current = { ...readyRef.current, item: null };
+          setRailItem(null);
+        }
         pushHostState();
         connectFileChannel();
         registerResolver();

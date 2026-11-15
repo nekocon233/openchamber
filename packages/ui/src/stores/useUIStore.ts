@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { GUEST_ATTACH_TITLE_MAX, GUEST_ATTACH_URL_MAX } from '@openchamber/sdk';
 import { favoriteAgentCombinationIdsSchema } from '@/lib/native-agents/combinations';
 import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
 import { DEFAULT_SESSION_GOAL_MAX_AUTO_TURNS, isSessionGoalMaxAutoTurns } from '@/lib/sessionGoalTurnLimit';
@@ -8,6 +9,8 @@ import type { SidebarSection } from '@/constants/sidebar';
 import { createDeferredSafeJSONStorage } from './utils/safeStorage';
 import { useWorkspaceViewStateStore, workspaceViewKey } from './useWorkspaceViewStateStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { useGuestItemStore } from '@/lib/guests/item-store';
+import { isExternalHttpUrl } from '@/lib/url';
 import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey } from '@/lib/typography';
 import type { ShortcutCombo } from '@/lib/shortcuts';
 import type { DraftStarterRef } from '@/lib/draftStarters';
@@ -53,7 +56,14 @@ import {
   type WorkStatusPanelSectionId,
 } from '@/components/chat/work-status/sections';
 import { validEditorSplitRatio } from '@/lib/workspace/editorSplit';
-import { getEditorDiffTabState, type EditorDiffTabState } from '@/lib/workspace/editorTabs';
+import {
+  DESKTOP_GUEST_ID,
+  DESKTOP_PANEL_MODE,
+  getEditorDesktopTabState,
+  getEditorDiffTabState,
+  type EditorDesktopTabState,
+  type EditorDiffTabState,
+} from '@/lib/workspace/editorTabs';
 import type { WorkspaceLayout } from '@/lib/workspace/sidebarGeometry';
 
 const parseDiffFileLayouts = (value: unknown): Record<string, 'inline' | 'side-by-side'> => {
@@ -88,6 +98,7 @@ const persistedPanelHeightsSchema = z.object({
 });
 const persistedEditorTabSchema = z.object({
   editorDiffTab: z.enum(['closed', 'background', 'active']).catch('closed').optional(),
+  editorDesktopTab: z.enum(['closed', 'background', 'active']).catch('closed').optional(),
 });
 type MermaidRenderingMode = 'svg' | 'ascii';
 type UserMessageRenderingMode = 'markdown' | 'plain';
@@ -156,6 +167,7 @@ type ContextPanelTabDescriptor = {
 
 type ContextPanelDirectoryState = {
   editorDiffTab?: EditorDiffTabState;
+  editorDesktopTab?: EditorDesktopTabState;
   // The right zone, kept top-level (see lib/workspace/zones.ts).
   isOpen: boolean;
   expanded: boolean;
@@ -379,6 +391,13 @@ const normalizeBrowserTabOwner = (mode: ContextPanelMode, value: string | null |
   mode === 'browser' && value?.trim() ? value.trim() : null
 );
 
+let lastTabTouchAt = 0;
+const nextTabTouchAt = (): number => {
+  const now = Date.now();
+  lastTabTouchAt = now > lastTabTouchAt ? now : lastTabTouchAt + 1;
+  return lastTabTouchAt;
+};
+
 const createContextPanelTab = (descriptor: ContextPanelTabDescriptor): ContextPanelTab => {
   const normalizedTargetPath = normalizeContextTargetPath(descriptor.targetPath);
   const normalizedTargetDirectory = contextPanelModeKeepsTargetDirectory(descriptor.mode)
@@ -403,7 +422,7 @@ const createContextPanelTab = (descriptor: ContextPanelTabDescriptor): ContextPa
     diffScope: normalizePendingDiffScope(descriptor.diffScope) ?? (descriptor.stagedDiff === true ? 'staged' : null),
     preview: descriptor.mode === 'file' && descriptor.preview === true,
     ownerSessionId: normalizeBrowserTabOwner(descriptor.mode, descriptor.ownerSessionId),
-    touchedAt: Date.now(),
+    touchedAt: nextTabTouchAt(),
   };
 };
 
@@ -617,7 +636,7 @@ const upsertContextPanelTab = (
           readOnly: nextTab.readOnly,
           // Reopening a preview as a preview keeps it one; any other open pins it.
           preview: tab.preview && nextTab.preview,
-          touchedAt: Date.now(),
+          touchedAt: nextTabTouchAt(),
         }
       : tab));
 
@@ -692,9 +711,25 @@ const closeContextPanelTabs = (
       : { activeTabId: null, isOpen: false, expanded: false };
   }
 
+  const droppedActiveDiff = current.editorDiffTab === 'active' && !nextTabs.some((tab) => tab.mode === 'diff');
+  const droppedActiveDesktop = current.editorDesktopTab === 'active' && !nextTabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE);
+  let editorDiffTab: EditorDiffTabState | undefined = nextTabs.some((tab) => tab.mode === 'diff') ? current.editorDiffTab : 'closed';
+  let editorDesktopTab: EditorDesktopTabState | undefined = nextTabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE) ? current.editorDesktopTab : 'closed';
+  if (droppedActiveDesktop || droppedActiveDiff) {
+    const promoted = nextResidentTabOnClose(
+      { ...current, tabs: nextTabs, editorDiffTab, editorDesktopTab },
+      placement,
+      defaultZone,
+      droppedActiveDesktop ? 'desktop' : 'diff',
+    );
+    editorDiffTab = promoted.editorDiffTab;
+    editorDesktopTab = promoted.editorDesktopTab;
+  }
+
   let next: ContextPanelDirectoryState = {
     ...current, tabs: nextTabs, touchedAt: Date.now(),
-    editorDiffTab: nextTabs.some((tab) => tab.mode === 'diff') ? current.editorDiffTab : 'closed',
+    editorDiffTab,
+    editorDesktopTab,
   };
   for (const zone of CONTEXT_ZONES) {
     const patch = views[zone];
@@ -867,8 +902,10 @@ const sanitizeContextPanelByDirectory = (
       if (isContextPanelMode(mode) && pixels !== undefined) heightByMode[mode] = clampContextPanelHeight(pixels);
     }
 
+    const parsedEditorTabs = persistedEditorTabSchema.parse(rawState);
     next[directory] = {
-      editorDiffTab: clampedTabs.some((tab) => tab.mode === 'diff') ? persistedEditorTabSchema.parse(rawState).editorDiffTab : 'closed',
+      editorDiffTab: clampedTabs.some((tab) => tab.mode === 'diff') ? parsedEditorTabs.editorDiffTab : 'closed',
+      editorDesktopTab: clampedTabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE) ? parsedEditorTabs.editorDesktopTab : 'closed',
       isOpen: candidate.isOpen === true,
       expanded: candidate.expanded === true,
       tabs: clampedTabs,
@@ -887,6 +924,33 @@ const sanitizeContextPanelByDirectory = (
   return next;
 };
 
+let remoteDesktopRequestCounter = 0;
+
+const usesResidentEditor = (state: { workspaceLayout: WorkspaceLayout; isMobile: boolean }): boolean => (
+  state.workspaceLayout === 'editor' && !state.isMobile && !isVSCodeRuntime()
+);
+
+const nextResidentTabOnClose = (
+  panel: ContextPanelDirectoryState,
+  placement: ContextZonePlacement,
+  defaultZone: DefaultContextZone,
+  closing: 'file' | 'diff' | 'desktop',
+) => {
+  const diffState = closing === 'diff' ? 'closed' : getEditorDiffTabState(panel, placement, defaultZone);
+  const desktopState = closing === 'desktop' ? 'closed' : getEditorDesktopTabState(panel, placement, defaultZone);
+  const files = panel.tabs.filter((tab) => tab.mode === 'file' && tab.targetPath);
+  const bestFile = files.reduce<ContextPanelTab | null>((best, tab) => (!best || tab.touchedAt >= best.touchedAt ? tab : best), null);
+  const diffTab = diffState === 'background' ? panel.tabs.find((tab) => tab.mode === 'diff') : undefined;
+  const desktopTab = desktopState === 'background' ? panel.tabs.find((tab) => tab.mode === DESKTOP_PANEL_MODE) : undefined;
+  const bestFileTouchedAt = bestFile?.touchedAt ?? -1;
+  const activateDiff = Boolean(diffTab && diffTab.touchedAt > bestFileTouchedAt && (!desktopTab || diffTab.touchedAt >= desktopTab.touchedAt));
+  const activateDesktop = Boolean(!activateDiff && desktopTab && desktopTab.touchedAt > bestFileTouchedAt);
+  return {
+    editorDiffTab: activateDiff ? 'active' : diffState,
+    editorDesktopTab: activateDesktop ? 'active' : desktopState,
+  };
+};
+
 const reconcileContextPanelPlacement = (
   panels: Record<string, ContextPanelDirectoryState>,
   placement: ContextZonePlacement,
@@ -894,10 +958,40 @@ const reconcileContextPanelPlacement = (
 ): Record<string, ContextPanelDirectoryState> => {
   let next = panels;
   for (const [directory, panel] of Object.entries(panels)) {
+    const wasDesktopOpenInZone = CONTEXT_ZONES.some((zone) => {
+      const view = getZoneView(panel, zone);
+      return view.isOpen && panel.tabs.some((tab) => tab.id === view.activeTabId && tab.mode === DESKTOP_PANEL_MODE);
+    });
     const placed = reconcileZonePlacement(panel, placement, defaultZone);
-    const reconciled = defaultZone === 'left' && placed.editorDiffTab === undefined
-      ? { ...placed, editorDiffTab: getEditorDiffTabState(placed, placement, defaultZone) }
-      : placed;
+    let reconciled = placed;
+    if (defaultZone === 'left') {
+      const editorDiffTab = placed.editorDiffTab === undefined ? getEditorDiffTabState(placed, placement, defaultZone) : placed.editorDiffTab;
+      const editorDesktopTab = wasDesktopOpenInZone
+        ? 'active'
+        : placed.editorDesktopTab ?? getEditorDesktopTabState(placed, placement, defaultZone);
+      let resolvedDiffTab = editorDiffTab;
+      let resolvedDesktopTab = editorDesktopTab;
+      if (resolvedDiffTab === 'active' && resolvedDesktopTab === 'active') {
+        const diffTouchedAt = placed.tabs.find((tab) => tab.mode === 'diff')?.touchedAt ?? 0;
+        const desktopTouchedAt = placed.tabs.find((tab) => tab.mode === DESKTOP_PANEL_MODE)?.touchedAt ?? 0;
+        if (desktopTouchedAt > diffTouchedAt) resolvedDiffTab = 'background';
+        else resolvedDesktopTab = 'background';
+      }
+      if (resolvedDiffTab !== placed.editorDiffTab || resolvedDesktopTab !== placed.editorDesktopTab) {
+        reconciled = { ...placed, editorDiffTab: resolvedDiffTab, editorDesktopTab: resolvedDesktopTab };
+      }
+    } else if (placed.editorDesktopTab === 'active') {
+      const desktopTab = placed.tabs.find((tab) => tab.mode === DESKTOP_PANEL_MODE);
+      if (desktopTab) {
+        const zone = zoneOfMode(placement, DESKTOP_PANEL_MODE, defaultZone);
+        reconciled = settleZones(withZoneView({ ...placed, editorDesktopTab: undefined }, zone, {
+          isOpen: true,
+          activeTabId: desktopTab.id,
+        }), placement, defaultZone);
+      } else {
+        reconciled = { ...placed, editorDesktopTab: 'closed' };
+      }
+    }
     if (reconciled === panel) continue;
     if (next === panels) next = { ...panels };
     next[directory] = reconciled;
@@ -1304,6 +1398,8 @@ interface UIStore {
   openTrackerItem: (directory: string, item: { url: string; key: string; label: string; targetDirectory: string | null }) => string | null;
   openContextDiff: (directory: string, filePath: string, staged?: boolean, scope?: PendingDiffScope | null) => void;
   setEditorDiffTabState: (directory: string, value: EditorDiffTabState) => void;
+  setEditorDesktopTabState: (directory: string, value: EditorDesktopTabState) => void;
+  openRemoteDesktopUrl: (directory: string, url?: string) => void;
   /** `preview` opens it as the replaceable preview tab (a files-tree click). */
   /** `expanded` also expands the file's zone beside the chat. */
   openContextFile: (directory: string, filePath: string, options?: { preview?: boolean; expanded?: boolean }) => void;
@@ -1885,6 +1981,11 @@ export const useUIStore = create<UIStore>()(
           const state = get();
           const placement = state.contextSurfaceZones;
           const panelState = state.contextPanelByDirectory[normalizedDirectory];
+          if (mode === DESKTOP_PANEL_MODE && usesResidentEditor(state)) {
+            const desktopState = getEditorDesktopTabState(panelState, placement, getDefaultContextZone(state.workspaceLayout));
+            state.setEditorDesktopTabState(normalizedDirectory, desktopState === 'active' ? 'closed' : 'active');
+            return;
+          }
           const tabs = panelState?.tabs ?? [];
           const zone = zoneOfMode(placement, mode, getDefaultContextZone(state.workspaceLayout));
           const zoneView = panelState ? getZoneView(panelState, zone) : null;
@@ -1965,10 +2066,10 @@ export const useUIStore = create<UIStore>()(
 
           // Revealing a real file shows it, even if the editor was hidden.
           const showsFile = nextTab.mode === 'file' && Boolean(nextTab.targetPath) && options?.reveal !== false;
-          const residentFile = nextTab.mode === 'file' && Boolean(nextTab.targetPath)
-            && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
-          const residentDiff = nextTab.mode === 'diff'
-            && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
+          const isEditorMode = usesResidentEditor(get());
+          const residentFile = nextTab.mode === 'file' && Boolean(nextTab.targetPath) && isEditorMode;
+          const residentDiff = nextTab.mode === 'diff' && isEditorMode;
+          const residentDesktop = nextTab.mode === DESKTOP_PANEL_MODE && isEditorMode;
 
           const diffOwner = workspaceViewKey(getRuntimeKey(), normalizedDirectory);
           if (diffOwner && nextTab.mode === 'diff' && nextTab.targetPath?.trim() && options?.reveal !== false) {
@@ -1978,13 +2079,31 @@ export const useUIStore = create<UIStore>()(
 
           set((state) => {
             const prev = state.contextPanelByDirectory[normalizedDirectory];
-            const current = touchContextPanelState(prev, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout));
-            const editorDiffTab = residentDiff && options?.reveal !== false ? 'active'
-              : residentFile && showsFile && getEditorDiffTabState(current, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout)) !== 'closed'
-                ? 'background' : current.editorDiffTab;
+            const defaultZone = getDefaultContextZone(state.workspaceLayout);
+            const current = touchContextPanelState(prev, state.contextSurfaceZones, defaultZone);
+            const revealsResidentDiff = residentDiff && options?.reveal !== false;
+            const revealsResidentDesktop = residentDesktop && options?.reveal !== false;
+            const currentDiffState = getEditorDiffTabState(current, state.contextSurfaceZones, defaultZone);
+            const currentDesktopState = getEditorDesktopTabState(current, state.contextSurfaceZones, defaultZone);
+            const editorDiffTab = revealsResidentDiff
+              ? 'active'
+              : ((residentFile && showsFile) || revealsResidentDesktop) && currentDiffState !== 'closed'
+                ? 'background'
+                : current.editorDiffTab;
+            const editorDesktopTab = revealsResidentDesktop
+              ? 'active'
+              : ((residentFile && showsFile) || revealsResidentDiff) && currentDesktopState !== 'closed'
+                ? 'background'
+                : current.editorDesktopTab;
             const byDirectory = {
               ...state.contextPanelByDirectory,
-              [normalizedDirectory]: upsertContextPanelTab({ ...current, editorDiffTab }, nextTab, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout), residentFile ? { reveal: false } : options),
+              [normalizedDirectory]: upsertContextPanelTab(
+                { ...current, editorDiffTab, editorDesktopTab },
+                nextTab,
+                state.contextSurfaceZones,
+                defaultZone,
+                residentFile || residentDesktop ? { reveal: false } : options,
+              ),
             };
 
             return {
@@ -2002,12 +2121,86 @@ export const useUIStore = create<UIStore>()(
           set((state) => {
             const panel = state.contextPanelByDirectory[key];
             if (!panel || !panel.tabs.some((tab) => tab.mode === 'diff') || panel.editorDiffTab === value) return state;
+            const defaultZone = getDefaultContextZone(state.workspaceLayout);
+            const currentDiffState = getEditorDiffTabState(panel, state.contextSurfaceZones, defaultZone);
+            const currentDesktopState = getEditorDesktopTabState(panel, state.contextSurfaceZones, defaultZone);
+            const editorDesktopTab = value === 'active'
+              ? (currentDesktopState === 'active' ? 'background' : panel.editorDesktopTab)
+              : value === 'closed' && currentDiffState === 'active'
+                ? nextResidentTabOnClose(panel, state.contextSurfaceZones, defaultZone, 'diff').editorDesktopTab
+                : panel.editorDesktopTab;
             return { contextPanelByDirectory: {
               ...state.contextPanelByDirectory,
-              [key]: { ...panel, editorDiffTab: value, touchedAt: Date.now(),
-                tabs: value === 'active' ? panel.tabs.map((tab) => tab.mode === 'diff' ? { ...tab, touchedAt: Date.now() } : tab) : panel.tabs },
+              [key]: { ...panel, editorDiffTab: value, editorDesktopTab, touchedAt: Date.now(),
+                tabs: value === 'active' ? panel.tabs.map((tab) => tab.mode === 'diff' ? { ...tab, touchedAt: nextTabTouchAt() } : tab) : panel.tabs },
             } };
           });
+        },
+
+        setEditorDesktopTabState: (directory, value) => {
+          const key = normalizeContextPanelDirectoryKey(directory);
+          if (!key) return;
+          set((state) => {
+            const defaultZone = getDefaultContextZone(state.workspaceLayout);
+            const prev = state.contextPanelByDirectory[key];
+            const hasDesktopTab = Boolean(prev?.tabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE));
+            if (value !== 'active' && !hasDesktopTab) return state;
+            if (prev && hasDesktopTab && prev.editorDesktopTab === value) return state;
+            const current = touchContextPanelState(prev, state.contextSurfaceZones, defaultZone);
+            const currentDiffState = getEditorDiffTabState(current, state.contextSurfaceZones, defaultZone);
+            const currentDesktopState = getEditorDesktopTabState(current, state.contextSurfaceZones, defaultZone);
+            const editorDiffTab = value === 'active'
+              ? (currentDiffState === 'active' ? 'background' : current.editorDiffTab)
+              : value === 'closed' && currentDesktopState === 'active'
+                ? nextResidentTabOnClose(current, state.contextSurfaceZones, defaultZone, 'desktop').editorDiffTab
+                : current.editorDiffTab;
+            const nextPanel = hasDesktopTab
+              ? {
+                  ...current,
+                  editorDiffTab,
+                  editorDesktopTab: value,
+                  touchedAt: Date.now(),
+                  tabs: value === 'active'
+                    ? current.tabs.map((tab) => (tab.mode === DESKTOP_PANEL_MODE ? { ...tab, touchedAt: nextTabTouchAt() } : tab))
+                    : current.tabs,
+                }
+              : upsertContextPanelTab(
+                  { ...current, editorDiffTab, editorDesktopTab: value },
+                  { mode: DESKTOP_PANEL_MODE },
+                  state.contextSurfaceZones,
+                  defaultZone,
+                  { reveal: false },
+                );
+            return {
+              contextPanelByDirectory: clampContextPanelRoots({
+                ...state.contextPanelByDirectory,
+                [key]: nextPanel,
+              }, 20),
+            };
+          });
+        },
+
+        openRemoteDesktopUrl: (directory, url) => {
+          const normalizedDirectory = normalizeDirectoryPath((directory || '').trim());
+          if (!normalizedDirectory) return;
+          const trimmedUrl = url?.trim() ?? '';
+          if (trimmedUrl) {
+            if (!isExternalHttpUrl(trimmedUrl) || trimmedUrl.length > GUEST_ATTACH_URL_MAX) {
+              return;
+            }
+            const id = `remote-url-${++remoteDesktopRequestCounter}-${Date.now()}`;
+            useGuestItemStore.getState().setPendingItem(DESKTOP_GUEST_ID, {
+              providerId: DESKTOP_GUEST_ID,
+              id,
+              title: trimmedUrl.slice(0, GUEST_ATTACH_TITLE_MAX),
+              url: trimmedUrl,
+            });
+          }
+          if (usesResidentEditor(get())) {
+            get().setEditorDesktopTabState(normalizedDirectory, 'active');
+            return;
+          }
+          get().openContextPanelTab(normalizedDirectory, { mode: DESKTOP_PANEL_MODE }, { reveal: true });
         },
 
         openTrackerItem: (directory, item) => {
@@ -2210,14 +2403,15 @@ export const useUIStore = create<UIStore>()(
           }
 
           const selectedTab = get().contextPanelByDirectory[normalizedDirectory]?.tabs.find((tab) => tab.id === normalizedTabID);
-          const residentFile = selectedTab?.mode === 'file' && selectedTab.targetPath
-            && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
-          const residentDiff = selectedTab?.mode === 'diff'
-            && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime();
+          const isEditorMode = usesResidentEditor(get());
+          const residentFile = selectedTab?.mode === 'file' && selectedTab.targetPath && isEditorMode;
+          const residentDiff = selectedTab?.mode === 'diff' && isEditorMode;
+          const residentDesktop = selectedTab?.mode === DESKTOP_PANEL_MODE && isEditorMode;
 
           set((state) => {
             const prev = state.contextPanelByDirectory[normalizedDirectory];
-            const current = touchContextPanelState(prev, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout));
+            const defaultZone = getDefaultContextZone(state.workspaceLayout);
+            const current = touchContextPanelState(prev, state.contextSurfaceZones, defaultZone);
             const targetTab = current.tabs.find((tab) => tab.id === normalizedTabID);
             if (!targetTab) {
               return state;
@@ -2225,25 +2419,37 @@ export const useUIStore = create<UIStore>()(
 
             // Picking a file tab shows its editor, even if the editor was hidden.
             const showsFile = targetTab.mode === 'file' && Boolean(targetTab.targetPath);
-            const zone = zoneOfMode(state.contextSurfaceZones, targetTab.mode, getDefaultContextZone(state.workspaceLayout));
+            const zone = zoneOfMode(state.contextSurfaceZones, targetTab.mode, defaultZone);
             const view = getZoneView(current, zone);
 
-            if (!residentFile && !residentDiff && view.activeTabId === normalizedTabID && view.isOpen) {
+            if (!residentFile && !residentDiff && !residentDesktop && view.activeTabId === normalizedTabID && view.isOpen) {
               return showsFile ? { contextEditorVisible: true } : state;
             }
+
+            const currentDiffState = getEditorDiffTabState(current, state.contextSurfaceZones, defaultZone);
+            const currentDesktopState = getEditorDesktopTabState(current, state.contextSurfaceZones, defaultZone);
+            const editorDiffTab = residentDiff
+              ? 'active'
+              : (residentFile || residentDesktop) && currentDiffState !== 'closed'
+                ? 'background'
+                : current.editorDiffTab;
+            const editorDesktopTab = residentDesktop
+              ? 'active'
+              : (residentFile || residentDiff) && currentDesktopState !== 'closed'
+                ? 'background'
+                : current.editorDesktopTab;
 
             const byDirectory = {
               ...state.contextPanelByDirectory,
               [normalizedDirectory]: withZoneView({
                 ...current,
-                editorDiffTab: residentDiff ? 'active'
-                  : residentFile && getEditorDiffTabState(current, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout)) !== 'closed'
-                    ? 'background' : current.editorDiffTab,
+                editorDiffTab,
+                editorDesktopTab,
                 touchedAt: Date.now(),
                 tabs: current.tabs.map((tab) => (tab.id === normalizedTabID
-                  ? { ...tab, touchedAt: Date.now() }
+                  ? { ...tab, touchedAt: nextTabTouchAt() }
                   : tab)),
-              }, zone, residentFile ? {} : { isOpen: true, activeTabId: normalizedTabID }),
+              }, zone, residentFile || residentDesktop ? {} : { isOpen: true, activeTabId: normalizedTabID }),
             };
 
             return {
@@ -2373,16 +2579,21 @@ export const useUIStore = create<UIStore>()(
               useFilesViewTabsStore.getState().removeOpenPath(normalizedDirectory, tab.targetPath);
             }
           }
-          if (selectedFileClosed && get().workspaceLayout === 'editor' && !get().isMobile && !isVSCodeRuntime()) {
+          if (selectedFileClosed && usesResidentEditor(get())) {
             const state = get();
             const panel = state.contextPanelByDirectory[normalizedDirectory];
-            const diffState = getEditorDiffTabState(panel, state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout));
             const files = panel?.tabs.filter((tab) => tab.mode === 'file' && tab.targetPath) ?? [];
             const next = files.reduce<ContextPanelTab | null>((best, tab) => !best || tab.touchedAt >= best.touchedAt ? tab : best, null);
             useFilesViewTabsStore.getState().setSelectedPath(normalizedDirectory, next?.targetPath ?? null, { allowOutsideRoot: true });
-            const diff = panel?.tabs.find((tab) => tab.mode === 'diff');
-            if (diffState === 'background' && diff && (!next || diff.touchedAt > next.touchedAt)) {
-              get().setEditorDiffTabState(normalizedDirectory, 'active');
+            const defaultZone = getDefaultContextZone(state.workspaceLayout);
+            if (
+              panel
+              && getEditorDiffTabState(panel, state.contextSurfaceZones, defaultZone) !== 'active'
+              && getEditorDesktopTabState(panel, state.contextSurfaceZones, defaultZone) !== 'active'
+            ) {
+              const fallback = nextResidentTabOnClose(panel, state.contextSurfaceZones, defaultZone, 'file');
+              if (fallback.editorDiffTab === 'active') get().setEditorDiffTabState(normalizedDirectory, 'active');
+              else if (fallback.editorDesktopTab === 'active') get().setEditorDesktopTabState(normalizedDirectory, 'active');
             }
           }
         },

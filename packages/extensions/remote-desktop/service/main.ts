@@ -1,9 +1,9 @@
 import http from 'node:http';
 import { ZodError } from 'zod';
-import { desktopStartSchema, type DesktopServiceReply, type DesktopFailure } from '../contract.ts';
+import { desktopOpenUrlSchema, desktopStartSchema, type DesktopServiceReply, type DesktopFailure } from '../contract.ts';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { inspectEnvironment, INSTALL_COMMANDS } from './environment.ts';
+import { findBrowserBinary, inspectEnvironment, INSTALL_COMMANDS } from './environment.ts';
 import { createDesktopSessions, DesktopError } from './session.ts';
 import { runSessionSupervisor } from './supervisor.ts';
 import { createRfbWebSocket, websocketAccept } from './websocket.ts';
@@ -26,6 +26,10 @@ const readStartBody = async (req: http.IncomingMessage) => {
   const raw = (await readRawBody(req)).trim();
   return desktopStartSchema.parse(raw ? JSON.parse(raw) : {});
 };
+const readOpenUrlBody = async (req: http.IncomingMessage) => {
+  const raw = (await readRawBody(req)).trim();
+  return desktopOpenUrlSchema.parse(raw ? JSON.parse(raw) : {});
+};
 
 export const startDesktopService = (port: number, token: string) => {
   const sessions = createDesktopSessions(fileURLToPath(import.meta.url));
@@ -44,9 +48,11 @@ export const startDesktopService = (port: number, token: string) => {
             if (!environment.binaries.virtual) missing.push('NO_VIRTUAL_SERVER');
             if (!environment.binaries.desktop) missing.push('NO_DESKTOP');
           }
+          const browser = environment.platform === 'linux' ? Boolean(await findBrowserBinary()) : false;
           json(res, 200, {
             platform: environment.platform,
             missing,
+            browser,
             session: sessions.status(),
             install: INSTALL_COMMANDS,
           });
@@ -63,6 +69,12 @@ export const startDesktopService = (port: number, token: string) => {
           const session = await sessions.start({ width, height });
           // This short-lived VNC credential authenticates only this loopback
           // desktop. The host service bearer and TCP port never reach the frame.
+          json(res, 200, { id: session.id, display: session.display, password: session.password });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/session/open-url') {
+          const { url: targetUrl, width, height } = await readOpenUrlBody(req);
+          const session = await sessions.openUrl({ url: targetUrl, width, height });
           json(res, 200, { id: session.id, display: session.display, password: session.password });
           return;
         }

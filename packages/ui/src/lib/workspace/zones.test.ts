@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  DESKTOP_PANEL_MODE,
   carrySurfaceToZone,
   reconcileZonePlacement,
   zoneOfMode,
@@ -138,5 +139,22 @@ describe('workspace zones', () => {
     expect(keepZoneViewsOnTabs(zoneViewsSchema.parse({ left: { isOpen: true, expanded: true, activeTabId: 'gone' } }), ids).left).toEqual(CLOSED_ZONE_VIEW);
     expect(keepZoneViewsOnTabs(zoneViewsSchema.parse({ bottom: { isOpen: true, expanded: false, activeTabId: 'git' } }), ids).bottom)
       .toEqual({ isOpen: true, expanded: false, activeTabId: 'git' });
+  });
+
+  test('Remote Desktop stays out of side/bottom zones in editor layout while keeping classic zone placement', () => {
+    const state: ZonedPanel = {
+      isOpen: true,
+      expanded: false,
+      activeTabId: DESKTOP_PANEL_MODE,
+      tabs: [{ id: DESKTOP_PANEL_MODE, mode: DESKTOP_PANEL_MODE, touchedAt: 10 }],
+      zones: { left: CLOSED_ZONE_VIEW, bottom: CLOSED_ZONE_VIEW },
+    };
+    expect(resolveZoneActiveTab(state, {}, 'right', 'right')?.id).toBe(DESKTOP_PANEL_MODE);
+    expect(isZoneShown(state, {}, 'right', 'right')).toBe(true);
+
+    const reconciled = reconcileZonePlacement(state, {}, 'left');
+    expect(reconciled.isOpen).toBe(false);
+    expect(reconciled.zones.left).toEqual(CLOSED_ZONE_VIEW);
+    expect(resolveZoneActiveTab(reconciled, {}, 'left', 'left')).toBeNull();
   });
 });

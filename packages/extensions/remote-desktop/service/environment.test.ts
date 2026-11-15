@@ -2,10 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { findVncBinary } from './environment.ts';
+import { buildBrowserCommand, findBrowserBinary, findVncBinary } from './environment.ts';
 import { reserveDisplay } from './supervisor.ts';
+import { desktopOpenUrlSchema } from '../contract.ts';
 import { messages } from '../panel/i18n.ts';
-import { readDesktopStatus } from '../panel/model.ts';
+import { readDesktopStatus, readDesktopUrlItem, readFailure } from '../panel/model.ts';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -47,5 +48,66 @@ describe('desktop environment boundary', () => {
     expect(() => readDesktopStatus('{"error":"UNAUTHORIZED"}')).toThrow();
     expect(() => readDesktopStatus('{"platform":"linux","missing":["UNKNOWN"],"session":null,"install":{"debian":"","fedora":"","arch":""}}')).toThrow();
     expect(readDesktopStatus('{"platform":"linux","missing":["NO_VIRTUAL_SERVER"],"session":null,"install":{"debian":"","fedora":"","arch":""}}').missing).toEqual(['NO_VIRTUAL_SERVER']);
+  });
+
+  test('resolves browser binaries and builds maximized persistent Chromium commands without --new-window', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-browser-bin-'));
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
+    const firefox = path.join(root, 'firefox');
+    await fs.writeFile(firefox, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    expect(await findBrowserBinary(root)).toEqual({ path: firefox, kind: 'firefox' });
+
+    const chrome = path.join(root, 'google-chrome');
+    await fs.writeFile(chrome, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    expect(await findBrowserBinary(root)).toEqual({ path: chrome, kind: 'chromium' });
+
+    const nonRoot = buildBrowserCommand({ path: chrome, kind: 'chromium' }, 'https://example.test/app?a=1', {
+      profileDir: '/home/openchamber/.config/openchamber/remote-desktop-browser',
+      uid: 1000,
+    });
+    expect(nonRoot.args).toContain('--user-data-dir=/home/openchamber/.config/openchamber/remote-desktop-browser');
+    expect(nonRoot.args).toContain('--start-maximized');
+    expect(nonRoot.args).not.toContain('--new-window');
+    expect(nonRoot.args).not.toContain('--no-sandbox');
+    expect(nonRoot.args.slice(-2)).toEqual(['--', 'https://example.test/app?a=1']);
+
+    const asRoot = buildBrowserCommand({ path: chrome, kind: 'chromium' }, 'http://127.0.0.1:3000/', {
+      profileDir: '/root/.config/openchamber/remote-desktop-browser',
+      uid: 0,
+    });
+    expect(asRoot.args).toContain('--no-sandbox');
+    expect(buildBrowserCommand({ path: firefox, kind: 'firefox' }, 'https://example.test/', { profileDir: '/tmp/p', uid: 1000 }).args)
+      .toEqual(['--new-tab', 'https://example.test/']);
+  });
+
+  test('validates open-url requests and desktop URL items strictly to http/https', () => {
+    expect(desktopOpenUrlSchema.parse({ url: 'https://example.test/page', width: 1200, height: 800 })).toEqual({
+      url: 'https://example.test/page',
+      width: 1200,
+      height: 800,
+    });
+    for (const invalid of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,hi', '']) {
+      expect(() => desktopOpenUrlSchema.parse({ url: invalid })).toThrow();
+    }
+    expect(readDesktopUrlItem({
+      providerId: 'openchamber-builtin-desktop',
+      id: 'req-1',
+      title: 'Example',
+      url: 'https://example.test/chat',
+    })).toEqual({ id: 'req-1', url: 'https://example.test/chat' });
+    expect(readDesktopUrlItem({
+      providerId: 'other-extension',
+      id: 'req-2',
+      title: 'Other',
+      url: 'https://example.test/chat',
+    })).toBeNull();
+    expect(readDesktopUrlItem({
+      providerId: 'openchamber-builtin-desktop',
+      id: 'req-3',
+      title: 'Bad',
+      url: 'file:///etc/passwd',
+    })).toBeNull();
+    expect(readFailure('not-json', 'BROWSER_FAILED')).toBe('BROWSER_FAILED');
+    expect(readFailure('{"error":"NO_BROWSER"}')).toBe('NO_BROWSER');
   });
 });

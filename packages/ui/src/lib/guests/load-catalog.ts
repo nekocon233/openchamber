@@ -1,10 +1,14 @@
+import { z } from 'zod';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 
 import { useGuestBadgeStore } from './badge-store.ts';
+import { isGuestActive } from './capabilities.ts';
 import { parseGuestCatalogJson } from './parse.ts';
+import { proxyGuestServiceRequest } from './service.ts';
 import { useGuestsStore } from './store.ts';
 
 const alignCatalogRuntime = (runtimeKey: string): void => {
@@ -74,8 +78,37 @@ const loadGuestCatalogOnce = async (runtimeKey: string): Promise<void> => {
       store.markFailed(runtimeKey, { method: 'GET', path: '/api/guests', kind: 'invalid-response', status: response.status });
       return;
     }
-    useGuestsStore.getState().replaceCatalog(catalog.guests, runtimeKey, catalog.unreadable);
+    useGuestsStore.getState().replaceCatalog(catalog.guests, runtimeKey, catalog.unreadable, catalog.hostPlatform);
+    const desktopGuest = catalog.guests.find((guest) => guest.id === DESKTOP_GUEST_ID);
+    if (catalog.hostPlatform === 'linux' && desktopGuest && isGuestActive(desktopGuest)) {
+      void probeDesktopUrlReady(runtimeKey);
+    }
   } catch {
     useGuestsStore.getState().markFailed(runtimeKey, { method: 'GET', path: '/api/guests', kind: 'network' });
+  }
+};
+
+const desktopReadyStatusSchema = z.object({
+  platform: z.string().min(1),
+  missing: z.array(z.string()),
+  browser: z.boolean().optional(),
+});
+
+const probeDesktopUrlReady = async (runtimeKey: string): Promise<void> => {
+  try {
+    const response = await proxyGuestServiceRequest(DESKTOP_GUEST_ID, { method: 'GET', path: '/status' });
+    if (useGuestsStore.getState().runtimeKey !== runtimeKey) return;
+    if (!response.ok || response.result.status !== 200) {
+      useGuestsStore.getState().setDesktopUrlReady(false, runtimeKey);
+      return;
+    }
+    const parsed = desktopReadyStatusSchema.safeParse(JSON.parse(response.result.body));
+    const ready = parsed.success
+      && parsed.data.platform === 'linux'
+      && parsed.data.missing.length === 0
+      && parsed.data.browser !== false;
+    useGuestsStore.getState().setDesktopUrlReady(ready, runtimeKey);
+  } catch {
+    useGuestsStore.getState().setDesktopUrlReady(false, runtimeKey);
   }
 };

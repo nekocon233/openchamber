@@ -26,7 +26,7 @@ import {
   type ContextZone,
 } from '@/lib/workspace/zones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
-import { getEditorDiffTabState } from '@/lib/workspace/editorTabs';
+import { DESKTOP_PANEL_MODE, getEditorDesktopTabState, getEditorDiffTabState } from '@/lib/workspace/editorTabs';
 import { clampContextEditorTreeWidth, normalizeContextPanelDirectoryKey, useUIStore, type PendingDiffScope } from '@/stores/useUIStore';
 import { markSessionViewed } from '@/sync/notification-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
@@ -86,7 +86,7 @@ const DockedGuestPage: React.FC<{ mode: PluginContextPanelMode; docking: GuestSu
   );
 };
 
-const GuestPanelPane: React.FC<{ mode: PluginContextPanelMode; headerSlot: HTMLElement | null }> = ({ mode, headerSlot }) => {
+const GuestPanelPane: React.FC<{ mode: PluginContextPanelMode; headerSlot: HTMLElement | null; onDismiss?: () => void }> = ({ mode, headerSlot, onDismiss }) => {
   const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
   return (
     <>
@@ -104,7 +104,7 @@ const GuestPanelPane: React.FC<{ mode: PluginContextPanelMode; headerSlot: HTMLE
           </ContextPanelHeaderToolbar>
         </ContextPanelHeaderSlotProvider>
       ) : null}
-      <PluginPane mode={mode} onStatusControls={setControls} />
+      <PluginPane mode={mode} onStatusControls={setControls} onDismiss={onDismiss} />
     </>
   );
 };
@@ -262,10 +262,10 @@ const ZonePane: React.FC<{
 }> = ({ zone, host, isOpen, directoryKey, className, children }) => {
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const handleKeyDownCapture = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (host !== undefined) return;
     closeZoneOnEscape(event, isOpen, () => {
       if (directoryKey) closeContextZone(directoryKey, zone);
-    }, host === undefined ? event.currentTarget.closest('[data-context-zone]')
-      : useZoneHostsStore.getState().body[zone]?.closest('[data-context-zone]') ?? null);
+    }, event.currentTarget.closest('[data-context-zone]'));
   }, [closeContextZone, directoryKey, host, isOpen, zone]);
   return (
     <MovablePane zone={host === undefined ? zone : undefined} host={host}>
@@ -290,6 +290,8 @@ export const ContextSurfacePanes: React.FC = () => {
   const editorLayout = useIsEditorWorkspaceLayout();
   const [classicEditorHost, setClassicEditorHost] = React.useState<HTMLDivElement | null>(null);
   const [editorDiffHost, setEditorDiffHost] = React.useState<HTMLDivElement | null>(null);
+  const [editorDesktopHost, setEditorDesktopHost] = React.useState<HTMLDivElement | null>(null);
+  const [editorDesktopHeaderSlot, setEditorDesktopHeaderSlot] = React.useState<HTMLDivElement | null>(null);
   const { t } = useI18n();
   const effectiveDirectory = useEffectiveDirectory() ?? '';
   const directoryKey = React.useMemo(
@@ -596,7 +598,14 @@ export const ContextSurfacePanes: React.FC = () => {
           </ContextPanelHeaderSlotProvider>
         </ZonePane>
       ) : null}
-      <FileEditorPane directoryKey={directoryKey} classicHost={classicEditorHost} classicVisible={!contentHidden(fileZone.zone) && isFileTabActive && showsEditor} onDiffHostChange={setEditorDiffHost} />
+      <FileEditorPane
+        directoryKey={directoryKey}
+        classicHost={classicEditorHost}
+        classicVisible={!contentHidden(fileZone.zone) && isFileTabActive && showsEditor}
+        onDiffHostChange={setEditorDiffHost}
+        onDesktopHostChange={setEditorDesktopHost}
+        onDesktopHeaderSlotChange={setEditorDesktopHeaderSlot}
+      />
       {chatActiveTab && activeChatSessionID && activeChatPinnedSession ? (
         // The chat renders in this app, pinned to its session: it shares
         // the app's connection, stores and theme, and opens like a session
@@ -721,6 +730,31 @@ export const ContextSurfacePanes: React.FC = () => {
       ) : null}
       {pluginTabs.map((tab) => {
         if (!isPluginContextPanelMode(tab.mode)) return null;
+        if (editorLayout && tab.mode === DESKTOP_PANEL_MODE) {
+          const desktopState = getEditorDesktopTabState(panelState, placement, defaultZone);
+          if (desktopState === 'closed') return null;
+          const active = desktopState === 'active';
+          return (
+            <ZonePane
+              key={tab.id}
+              zone={zoneFor(tab.mode).zone}
+              host={editorDesktopHost}
+              isOpen={active}
+              directoryKey={directoryKey}
+              className={cn('absolute inset-0', !active && 'hidden')}
+            >
+              <React.Suspense fallback={null}>
+                <GuestPanelPane
+                  mode={tab.mode}
+                  headerSlot={active ? editorDesktopHeaderSlot : null}
+                  onDismiss={() => {
+                    if (directoryKey) useUIStore.getState().setEditorDesktopTabState(directoryKey, 'closed');
+                  }}
+                />
+              </React.Suspense>
+            </ZonePane>
+          );
+        }
         const pluginZone = zoneFor(tab.mode);
         // A shared-surface extension's picture is drawn by the host and
         // mounted only while shown, so an unwatched surface holds no socket
@@ -743,7 +777,13 @@ export const ContextSurfacePanes: React.FC = () => {
           >
             <React.Suspense fallback={null}>
               {!sharedSurface ? (
-                <GuestPanelPane mode={tab.mode} headerSlot={headerSlotFor(pluginZone.zone, shown && pluginZone.isOpen)} />
+                <GuestPanelPane
+                  mode={tab.mode}
+                  headerSlot={headerSlotFor(pluginZone.zone, shown && pluginZone.isOpen)}
+                  onDismiss={() => {
+                    if (directoryKey) closeContextPanelTab(directoryKey, tab.id);
+                  }}
+                />
               ) : !docking ? (
                 <GuestSurfacePane mode={tab.mode} />
               ) : (

@@ -1,5 +1,6 @@
 import React from 'react';
-import { useDefaultContextZone } from './workspaceLayout';
+import { useDefaultContextZone, useIsEditorWorkspaceLayout } from './workspaceLayout';
+import { DESKTOP_PANEL_MODE, getEditorDesktopTabState } from '@/lib/workspace/editorTabs';
 import {
   DndContext,
   MouseSensor,
@@ -75,6 +76,7 @@ type RailItemProps = {
   orderNumber?: number | null;
   showOrderNumber?: boolean;
   workspaceSide: 'left' | 'right';
+  canMoveZone: boolean;
   onSelect: (surface: ContextSurfaceDescriptor) => void;
 };
 
@@ -94,6 +96,7 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
   orderNumber,
   showOrderNumber,
   workspaceSide,
+  canMoveZone,
   onSelect,
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -101,6 +104,76 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
   });
 
   const displayBadgeCount = badgeCount != null && badgeCount > 0 ? formatRailBadgeCount(badgeCount) : null;
+  const trigger = (
+    <Tooltip delayDuration={RAIL_TOOLTIP_DELAY_MS}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          onClick={() => onSelect(surface)}
+          aria-label={badgeAriaLabel ?? label}
+          aria-pressed={isActive}
+          data-context-surface={surface.id}
+          className={cn(
+            'flex h-7 w-7 touch-none select-none items-center justify-center rounded-md transition-colors',
+            isActive
+              ? 'text-primary'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {surface.id === 'diff' ? (
+            <DiffViewIcon className="h-[18px] w-[18px]" />
+          ) : surface.id === 'context' ? (
+            <ContextUsageRingIcon className="h-[18px] w-[18px]" />
+          ) : (
+            <GuestIcon
+              icon={surface.icon}
+              iconSrc={surface.iconSrc}
+              className="h-[18px] w-[18px]"
+            />
+          )}
+          {showOrderNumber && orderNumber != null ? (
+            <span
+              aria-hidden="true"
+              className="absolute inset-e-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-muted px-1 text-[0.625rem] font-medium leading-none text-muted-foreground"
+            >
+              {orderNumber === 10 ? '0' : orderNumber}
+            </span>
+          ) : displayBadgeCount ? (
+            <span
+              aria-hidden="true"
+              // Muted digits on the muted surface sat at almost the same
+              // luminance as the glyph they overlap. The count is a live
+              // signal, so it takes the info tone on its own opaque chip.
+              className="absolute -inset-e-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[0.625rem] font-semibold leading-none"
+              style={{
+                backgroundColor: 'var(--status-info-background)',
+                color: 'var(--status-info)',
+              }}
+            >
+              {displayBadgeCount}
+            </span>
+          ) : showActivityDot ? (
+            <span
+              aria-hidden="true"
+              className="absolute inset-e-1 top-1 h-1.5 w-1.5 rounded-full bg-[var(--status-info)]"
+            />
+          ) : null}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side={workspaceSide} sideOffset={8}>
+        <div className="flex flex-col gap-0.5">
+          <span>{label}</span>
+          <span className="typography-micro text-muted-foreground">{description}</span>
+          {badgeDescription ? (
+            <span className="typography-micro text-muted-foreground">{badgeDescription}</span>
+          ) : null}
+          {surface.id === 'context' ? <ContextRailTooltipDetails /> : null}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
 
   return (
     <div
@@ -108,82 +181,14 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn('relative', isDragging && 'z-10 opacity-70')}
     >
-    {/* Right-click moves the surface to another zone around the chat. */}
-    <ContextMenu>
-    <ContextMenuTrigger render={<div />}>
-      <Tooltip delayDuration={RAIL_TOOLTIP_DELAY_MS}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            {...attributes}
-            {...listeners}
-            onClick={() => onSelect(surface)}
-            aria-label={badgeAriaLabel ?? label}
-            aria-pressed={isActive}
-            data-context-surface={surface.id}
-            className={cn(
-              'flex h-7 w-7 touch-none select-none items-center justify-center rounded-md transition-colors',
-              isActive
-                ? 'text-primary'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {surface.id === 'diff' ? (
-              <DiffViewIcon className="h-[18px] w-[18px]" />
-            ) : surface.id === 'context' ? (
-              <ContextUsageRingIcon className="h-[18px] w-[18px]" />
-            ) : (
-              <GuestIcon
-                icon={surface.icon}
-                iconSrc={surface.iconSrc}
-                className="h-[18px] w-[18px]"
-              />
-            )}
-            {showOrderNumber && orderNumber != null ? (
-              <span
-                aria-hidden="true"
-                className="absolute inset-e-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-muted px-1 text-[0.625rem] font-medium leading-none text-muted-foreground"
-              >
-                {orderNumber === 10 ? '0' : orderNumber}
-              </span>
-            ) : displayBadgeCount ? (
-              <span
-                aria-hidden="true"
-                // Muted digits on the muted surface sat at almost the same
-                // luminance as the glyph they overlap. The count is a live
-                // signal, so it takes the info tone on its own opaque chip.
-                className="absolute -inset-e-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[0.625rem] font-semibold leading-none"
-                style={{
-                  backgroundColor: 'var(--status-info-background)',
-                  color: 'var(--status-info)',
-                }}
-              >
-                {displayBadgeCount}
-              </span>
-            ) : showActivityDot ? (
-              <span
-                aria-hidden="true"
-                className="absolute inset-e-1 top-1 h-1.5 w-1.5 rounded-full bg-[var(--status-info)]"
-              />
-            ) : null}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side={workspaceSide} sideOffset={8}>
-          <div className="flex flex-col gap-0.5">
-            <span>{label}</span>
-            <span className="typography-micro text-muted-foreground">{description}</span>
-            {badgeDescription ? (
-              <span className="typography-micro text-muted-foreground">{badgeDescription}</span>
-            ) : null}
-            {surface.id === 'context' ? <ContextRailTooltipDetails /> : null}
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    </ContextMenuTrigger>
-    <ContextMenuContent>
-      <ZoneMoveMenuItems mode={surface.mode} />
-    </ContextMenuContent>
-    </ContextMenu>
+      {canMoveZone ? (
+        <ContextMenu>
+          <ContextMenuTrigger render={<div />}>{trigger}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ZoneMoveMenuItems mode={surface.mode} />
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : trigger}
     </div>
   );
 };
@@ -202,6 +207,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const contextSurfaceZones = useUIStore((state) => state.contextSurfaceZones);
   const defaultZone = useDefaultContextZone();
+  const editorLayout = useIsEditorWorkspaceLayout();
   const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
   const githubAuthChecked = (useSourceControlAuthEntry(GITHUB_SOURCE_CONTROL_IDENTITY)?.hasChecked ?? false);
   // Change requests come from GitHub or GitLab, whichever the project lives on,
@@ -297,10 +303,13 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
   const clearGuestBadge = useGuestBadgeStore((state) => state.clearBadge);
   const tabs = panelState?.tabs ?? EMPTY_TABS;
   // One surface per open zone is on screen; each lights its rail icon.
-  const shownModes = React.useMemo(
-    () => shownContextModes(panelState, contextSurfaceZones, defaultZone),
-    [contextSurfaceZones, defaultZone, panelState],
-  );
+  const shownModes = React.useMemo(() => {
+    const modes = shownContextModes(panelState, contextSurfaceZones, defaultZone);
+    if (editorLayout && getEditorDesktopTabState(panelState, contextSurfaceZones, defaultZone) === 'active') {
+      modes.add(DESKTOP_PANEL_MODE);
+    }
+    return modes;
+  }, [contextSurfaceZones, defaultZone, editorLayout, panelState]);
   const changedFilesCount = gitStatus?.files.length ?? 0;
 
   const surfaces = React.useMemo(() => {
@@ -334,14 +343,14 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     const surface = surfaces.find((entry) => entry.id === event.active.id);
     const railRect = railRef.current?.getBoundingClientRect();
-    if (!surface || !railRect) return;
+    if (!surface || !railRect || (editorLayout && surface.mode === DESKTOP_PANEL_MODE)) return;
     zoneGestureRef.current?.cancel();
     zoneGestureRef.current = startZoneDragGesture({
       mode: surface.mode,
       label: surface.label ?? t(changeRequestCopy(surface.labelKey, repositoryProvider)),
       from: zoneOfMode(useUIStore.getState().contextSurfaceZones, surface.mode, getDefaultContextZone(useUIStore.getState().workspaceLayout)),
     }, (point) => workspaceSide === 'right' ? point.x > railRect.right + 16 : point.x < railRect.left - 16);
-  }, [repositoryProvider, surfaces, t, workspaceSide]);
+  }, [editorLayout, repositoryProvider, surfaces, t, workspaceSide]);
   const handleDragCancel = React.useCallback(() => {
     zoneGestureRef.current?.cancel();
     zoneGestureRef.current = null;
@@ -424,6 +433,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
                 orderNumber={index + 1}
                 showOrderNumber={revealNumbers}
                 workspaceSide={workspaceSide}
+                canMoveZone={!editorLayout || surface.mode !== DESKTOP_PANEL_MODE}
                 onSelect={(selected) => {
                   if (isPluginContextPanelMode(selected.mode)) clearGuestBadge(pluginIdFromMode(selected.mode));
                   openContextSurface(directoryKey, selected.mode);

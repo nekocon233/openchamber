@@ -13,11 +13,11 @@ import { useUIStore } from '@/stores/useUIStore';
 import type { ToolPart } from '@/lib/opencode/model';
 import { renderedPage, type RenderedPageAsk } from '@/lib/opencode/tools';
 import { answerRenderedPage } from '@/lib/renderPageAnswer';
-import { openExternalUrl } from '@/lib/url';
 import type { ChatQuoteAnchor } from '@/lib/chatQuoteAnchor';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { dispatchFrameScroll, dispatchPageWaiting } from '@/components/chat/lib/scroll/timelineScrollIntent';
 import { useChatSurfaceMode } from '@/components/chat/useChatSurfaceMode';
+import { useOpenChatLink } from '@/components/chat/useOpenChatLink';
 import { dispatchFrameSelection, frameRectInApp } from '../frameSelection';
 import {
     clearOtherPageSelections,
@@ -105,6 +105,9 @@ interface HtmlRenderDocumentProps {
  * reveals pass through here to the chat (see pageQuoteBridge.ts).
  */
 function HtmlRenderDocument({ partId, html, title, className, style, contained = false, answerState = NO_ANSWER, onSubmit, onContentHeight, frameRef: outerFrameRef }: HtmlRenderDocumentProps) {
+    const openChatLink = useOpenChatLink(useEffectiveDirectory() ?? '');
+    const openChatLinkRef = React.useRef(openChatLink);
+    openChatLinkRef.current = openChatLink;
     const theme = useHtmlRenderTheme();
     const [initialTheme] = React.useState(theme);
     const [initialAnswerState] = React.useState(answerState);
@@ -212,7 +215,7 @@ function HtmlRenderDocument({ partId, html, title, className, style, contained =
                 setShown(true);
                 onContentHeight?.(message.height);
             }
-            if (message?.kind === 'open-link') void openExternalUrl(message.url);
+            if (message?.kind === 'open-link') openChatLinkRef.current(message.url);
             if (message?.kind === 'key') replayKeyChord(frame, message.chord);
             if (message?.kind === 'scroll') dispatchFrameScroll(frame, message.direction);
             if (message?.kind === 'submit') {
