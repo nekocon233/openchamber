@@ -1028,7 +1028,7 @@ export const createDeepseekBackend = ({
         }
       });
     },
-    revert(id, messageId, directory) {
+    revert(id, messageId, directory, { restoreFiles = true } = {}) {
       return serial(id, async () => {
         if (!reverts) throw deepseekUnsupported();
         markMutation(id);
@@ -1042,7 +1042,7 @@ export const createDeepseekBackend = ({
         await memory?.setProgressVisible(id, directory, false);
         let restored;
         try {
-          restored = await reverts.revert({ sessionId: id, messageId, messageIds: target.messageIds,
+          restored = await reverts.revert({ sessionId: id, messageId, messageIds: target.messageIds, restoreFiles,
             rewind: { deepseek: { nativeId: source.nativeId, seq: target.seq } } });
         } catch (error) {
           if (!wasPending) await memory?.setProgressVisible(id, directory, true);
@@ -1152,7 +1152,7 @@ export const createDeepseekBackend = ({
       const position = projection.position(records[start]?.info.id) ?? events[0]?.seq ?? 0;
       return { records: records.slice(start, end), cursor: complete ? null : deepseekHistoryCursor(id, state.nativeId, position), complete, childSessions: [], historyRevision };
     },
-    fork(id, messageId, directory) {
+    fork(id, messageId, directory, { beforePublish = async () => undefined } = {}) {
       return serial(id, async () => {
       const source = await resolve(id, directory);
       const state = await follow(id, directory);
@@ -1173,14 +1173,25 @@ export const createDeepseekBackend = ({
         hasMore = page.hasMore;
       }
       if (messageId && atSeq === undefined) throw invalidRequestError('Unknown DeepSeek Harness fork message');
-      if (atSeq === 0) return this.createSession(source.directory);
+      if (atSeq === 0) return this.createSession(source.directory, undefined, beforePublish);
       const request = { sessionId: source.nativeId };
       if (atSeq !== undefined) request.atSeq = atSeq - 1;
-      const result = await transport.request('session/fork', { request }, wire.sessionCreated);
-      const forkedId = encodeDeepseekSessionId(result.sessionId);
-      await registry.registerSession(forkedId, { backend: 'deepseek', nativeId: result.sessionId, directory: source.directory, origin: 'openchamber', createdAt: now(), confirmedAt: now() });
-      await listAll();
-      return backend.getSession(forkedId, source.directory);
+      internalForks += 1;
+      try {
+        const result = await transport.request('session/fork', { request }, wire.sessionCreated);
+        const forkedId = encodeDeepseekSessionId(result.sessionId);
+        await registry.registerSession(forkedId, { backend: 'deepseek', nativeId: result.sessionId, directory: source.directory, origin: 'openchamber', createdAt: now(), confirmedAt: now() });
+        const session = await backend.getSession(forkedId, source.directory);
+        await beforePublish(session);
+        await listAll();
+        return session;
+      } finally {
+        internalForks -= 1;
+        if (!internalForks) {
+          for (const summary of deferredAdded.values()) updateSummary(summary);
+          deferredAdded.clear();
+        }
+      }
       });
     },
     stop(id, directory) {

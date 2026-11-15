@@ -12,6 +12,7 @@ import { createNativePlanExecution } from '../plan-execution.js';
 import { NativeAgentError } from '../errors.js';
 import { JsonRpcError } from '../codex/rpc.js';
 import { createNativeConversations } from './runtime.js';
+import { conversationMessageId } from './history.js';
 import { checklistReceipt } from '../antigravity/checklist-protocol.mjs';
 import { NATIVE_BACKENDS as UI_BACKENDS, nativeProviderIdOf } from '@openchamber/ui/lib/native-agents/ids';
 import { nativeCapabilitiesSchema, nativeMessagePageSchema } from '@openchamber/ui/lib/native-agents/schemas';
@@ -37,9 +38,12 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
   const requests = [];
   const events = [];
   const operations = [];
+  const rewinds = new Map();
+  const replayOnRead = new Set();
   let clock = 1000;
   let hold = false;
   let refusal = null;
+  let refuseAfterRewind = false;
   let uncertain = false;
   let controller;
   const emit = (type, properties) => controller.publish({ directory, payload: { id: `fixture-${clock++}`, type, properties } });
@@ -73,6 +77,16 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
       return record;
     },
     async prompt(id, request) {
+      if (refusal && !refuseAfterRewind) throw refusal;
+      const rewind = rewinds.get(id);
+      if (rewind) {
+        const source = sources.get(id);
+        source.records = source.records.slice(0, source.records.findIndex((record) => record.info.id === rewind));
+        rewinds.delete(id);
+        if (source.record.metadata.openchamber.native.backend === 'deepseek') emit('session.revert.committed', {
+          sessionID: id, to: rewind, nativeHistoryRevision: 500,
+        });
+      }
       if (refusal) throw refusal;
       requests.push({ id, request: structuredClone(request) });
       running.set(id, { type: 'busy' });
@@ -98,6 +112,10 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
     },
     async loadMessages(id) {
       if (missing.has(id)) throw new Error('Source temporarily unreadable');
+      if (replayOnRead.has(id)) for (const record of sources.get(id).records) {
+        emit('message.updated', { info: { ...record.info, sessionID: id } });
+        for (const part of record.parts) emit('message.part.updated', { part: { ...part, sessionID: id } });
+      }
       return { records: sources.get(id).records, childSessions: [], complete: true, cursor: null, metadataComplete: !incomplete.has(id) };
     },
     async listSessions() {
@@ -111,15 +129,32 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
     async abort(id) { complete(id); return true; },
     async deleteSession(id) { operations.push(`delete:${id}`); sources.delete(id); await registry.removeSession(id); },
     async compact(id) { operations.push(`compact:${id}`); },
+    async revert(id, messageId, directory, options) {
+      operations.push(`rewind:${id}`);
+      expect(options).toEqual({ restoreFiles: false });
+      rewinds.set(id, messageId);
+    },
+    async unrevert(id) { rewinds.delete(id); },
+    async fork(id, messageId, directory, options) {
+      const original = sources.get(id);
+      const session = await native.createSession({ backend: original.record.metadata.openchamber.native.backend, directory }, options);
+      const end = original.records.findIndex((record) => record.info.id === messageId);
+      sources.get(session.id).records = structuredClone(original.records.slice(0, end));
+      replayOnRead.add(session.id);
+      operations.push(`fork:${id}`);
+      return session;
+    },
     async shutdown() {},
   };
   const sourceLifecycle = Object.fromEntries(NATIVE_BACKENDS.map((backend) => [backend, {
     async retire(id) { operations.push(`retire:${id}`); },
     async stop(id) { operations.push(`stop:${id}`); complete(id); },
     delete: backend !== 'antigravity', compact: backend !== 'antigravity',
+    rewind: backend !== 'antigravity',
   }]));
   const reverts = {
-    async beforePrompt() {}, async afterTurn() {}, async cancelCommit() {}, async beginCommit() {}, async finishCommit() {}, async unrevert() {},
+    async beforePrompt() {}, async afterTurn() {}, async cancelCommit() {}, async beginCommit() {}, async finishCommit() {},
+    async unrevert(id) { rewinds.delete(id); },
     async revert() { return { files: [] }; },
   };
   const create = () => createNativeConversations({ dataDir, native, registry, reverts, sourceLifecycle,
@@ -138,12 +173,196 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
   const history = (id, options = {}) => controller.api.loadMessages(id, directory, { limit: 100, ...options });
   return { get api() { return controller.api; }, controller, directory, registry, sources, requests, events, operations, missing, incomplete, native, sourceLifecycle,
     conversation, send, history, complete,
-    hold: () => { hold = true; }, refuse: (error) => { refusal = error; }, uncertain: () => { uncertain = true; },
+    hold: () => { hold = true; }, refuse: (error, afterRewind = false) => { refusal = error; refuseAfterRewind = afterRewind; }, uncertain: () => { uncertain = true; },
     async restart() { await controller.api.shutdown(); controller = create(); },
   };
 };
 
 describe('unified native backend contract', () => {
+  it.each(['claude', 'codex', 'deepseek'])('uses %s native rewind without a summary or replacement source', async (backend) => {
+    const h = await setup();
+    const session = await h.conversation(backend);
+    const first = await h.send(session.id, backend, 'Retained context '.repeat(20000));
+    const cut = await h.send(session.id, backend, 'Discard this');
+    const source = h.requests[0].id;
+    await h.api.revert(session.id, cut, h.directory);
+    const replacement = await h.send(session.id, backend, 'Replacement');
+    expect(h.requests.at(-1).id).toBe(source);
+    expect(h.requests.at(-1).request.instructions).toBeUndefined();
+    expect(h.operations.filter((entry) => entry.startsWith('create:'))).toHaveLength(1);
+    expect(h.operations).toContain(`rewind:${source}`);
+    const history = await h.history(session.id);
+    expect(history.records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, replacement]);
+    expect((await h.api.getSession(session.id, h.directory)).revert).toBeUndefined();
+    await h.restart();
+    expect((await h.history(session.id)).records).toEqual(history.records);
+  });
+
+  it.each(['claude', 'codex', 'deepseek'])('preserves a frozen fork while rewinding its shared %s source natively', async (backend) => {
+    const h = await setup();
+    const session = await h.conversation(backend);
+    const first = await h.send(session.id, backend, 'Retained context '.repeat(20000));
+    const cut = await h.send(session.id, backend, 'Keep in the frozen fork');
+    const child = await h.api.fork(session.id, null, h.directory);
+    const childHistory = await h.history(child.id);
+    const source = h.requests[0].id;
+    await h.api.revert(session.id, cut, h.directory);
+    const replacement = await h.send(session.id, backend, 'Replacement');
+    expect(h.requests.at(-1).id).not.toBe(source);
+    expect(h.requests.at(-1).request.instructions).toBeUndefined();
+    expect(h.operations).toContain(`fork:${source}`);
+    expect(h.operations).not.toContain(`rewind:${source}`);
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, replacement]);
+    expect(await h.history(child.id)).toEqual(childHistory);
+    const forkSource = h.requests.at(-1).id;
+    const manifestFile = path.join(h.directory, 'native-agents', 'conversations', `${session.id}.json`);
+    const forkSegment = JSON.parse(await fs.readFile(manifestFile, 'utf8')).segments.at(-1);
+    const inheritedIds = new Set(h.sources.get(forkSource).records.slice(0, 2).map((record) => conversationMessageId(session.id, forkSegment, record.info.id)));
+    const eventsBeforeReplay = h.events.length;
+    await h.history(session.id);
+    expect(h.events.slice(eventsBeforeReplay).some((event) => event.payload.type === 'message.updated'
+      && inheritedIds.has(event.payload.properties.info.id))).toBe(false);
+    expect(JSON.parse(await fs.readFile(manifestFile, 'utf8')).segments.at(-1).timeOffset).toBe(0);
+    await h.restart();
+    const beforeRestartReplay = h.events.length;
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, replacement]);
+    const replayEvents = h.events.slice(beforeRestartReplay).filter((event) => event.payload.type.startsWith('message.'));
+    expect(replayEvents.some((event) => inheritedIds.has(event.payload.properties.info?.id ?? event.payload.properties.part?.messageID))).toBe(false);
+    await h.api.revert(session.id, replacement, h.directory);
+    const retried = await h.send(session.id, backend, 'Replace the first forked turn');
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, retried]);
+  });
+
+  it.each(['claude', 'codex', 'deepseek'])('keeps the %s rewind undoable after a definite pre-send refusal', async (backend) => {
+    const h = await setup();
+    const session = await h.conversation(backend);
+    await h.send(session.id, backend, 'Keep');
+    const cut = await h.send(session.id, backend, 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    h.refuse(new NativeAgentError('Invalid model', { status: 400, code: 'NATIVE_INVALID_REQUEST' }));
+    await expect(h.send(session.id, backend)).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+    expect((await h.api.getSession(session.id, h.directory)).revert.messageID).toBe(cut);
+    await h.api.unrevert(session.id, h.directory);
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toContain(cut);
+    h.refuse(null);
+    await h.send(session.id, backend, 'Continue without rewinding');
+    expect(h.requests.at(-1).id).toBe(h.requests[0].id);
+    expect((await h.history(session.id)).records).toHaveLength(6);
+  });
+
+  it('keeps a committed Codex rewind when the subsequent turn is refused', async () => {
+    const h = await setup();
+    const session = await h.conversation('codex');
+    const first = await h.send(session.id, 'codex', 'Keep');
+    const cut = await h.send(session.id, 'codex', 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    h.refuse(new JsonRpcError('Invalid model', -32600, 'response'), true);
+    await expect(h.send(session.id, 'codex')).rejects.toThrow('Invalid model');
+    expect((await h.api.getSession(session.id, h.directory)).revert).toBeUndefined();
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first]);
+    h.refuse(null);
+    await h.send(session.id, 'codex', 'Retry the refused prompt');
+    expect(h.requests.at(-1).id).toBe(h.requests[0].id);
+  });
+
+  it('projects a DeepSeek revert commit into logical cut and history revision identities', async () => {
+    const h = await setup();
+    const session = await h.conversation('deepseek');
+    await h.send(session.id, 'deepseek', 'Keep');
+    const cut = await h.send(session.id, 'deepseek', 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    await h.send(session.id, 'deepseek', 'Replacement');
+    const current = await h.api.getSession(session.id, h.directory);
+    const event = h.events.find((event) => event.payload.type === 'session.revert.committed');
+    expect(event.payload.properties).toEqual({ sessionID: session.id, to: cut,
+      nativeHistoryRevision: current.metadata.openchamber.native.historyRevision });
+    expect(event.payload.properties.nativeHistoryRevision).not.toBe(500);
+  });
+
+  it('streams a retry after Codex committed the first forked turn rewind but refused its replacement', async () => {
+    const h = await setup();
+    const session = await h.conversation('codex');
+    await h.send(session.id, 'codex', 'Keep');
+    const cut = await h.send(session.id, 'codex', 'Discard');
+    await h.api.fork(session.id, null, h.directory);
+    await h.api.revert(session.id, cut, h.directory);
+    const forkedTurn = await h.send(session.id, 'codex', 'First forked turn');
+    await h.api.revert(session.id, forkedTurn, h.directory);
+    h.refuse(new JsonRpcError('Invalid model', -32600, 'response'), true);
+    await expect(h.send(session.id, 'codex')).rejects.toThrow('Invalid model');
+    h.refuse(null);
+    const beforeRetry = h.events.length;
+    const replacement = await h.send(session.id, 'codex', 'Retry and stream');
+    const streamed = h.events.slice(beforeRetry).filter((event) => event.payload.type === 'message.updated');
+    expect(streamed.some((event) => event.payload.properties.info.id === replacement)).toBe(true);
+    expect(streamed.some((event) => event.payload.properties.info.role === 'assistant')).toBe(true);
+  });
+
+  it('falls back only for an explicitly unsupported native rewind point', async () => {
+    const h = await setup();
+    const session = await h.conversation('claude');
+    const first = await h.send(session.id, 'claude', 'Keep');
+    const cut = await h.send(session.id, 'claude', 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    h.native.revert = h.native.fork = async () => { throw new NativeAgentError('Before compaction', { status: 409, code: 'NATIVE_REWIND_BEFORE_COMPACTION' }); };
+    const replacement = await h.send(session.id, 'claude');
+    expect(h.requests.at(-1).id).not.toBe(h.requests[0].id);
+    expect(h.requests.at(-1).request.instructions).toContain('Keep');
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, replacement]);
+  });
+
+  it('rewinds an earlier source of the selected backend without deleting it after refusal', async () => {
+    const h = await setup();
+    const session = await h.conversation('claude');
+    const first = await h.send(session.id, 'claude', 'Keep');
+    const cut = await h.send(session.id, 'claude', 'Discard');
+    const source = h.requests[0].id;
+    await h.send(session.id, 'codex');
+    await h.api.revert(session.id, cut, h.directory);
+    h.refuse(new NativeAgentError('Refused', { status: 400, code: 'NATIVE_INVALID_REQUEST' }));
+    await expect(h.send(session.id, 'claude')).rejects.toThrow('Refused');
+    expect(h.sources.has(source)).toBe(true);
+    h.refuse(null);
+    const replacement = await h.send(session.id, 'claude');
+    expect(h.requests.at(-1).id).toBe(source);
+    expect((await h.history(session.id)).records.filter((record) => record.info.role === 'user').map((record) => record.info.id)).toEqual([first, replacement]);
+  });
+
+  it('recovers a staged native rewind before dispatch after restart', async () => {
+    const h = await setup();
+    const session = await h.conversation('claude');
+    await h.send(session.id, 'claude', 'Keep');
+    const cut = await h.send(session.id, 'claude', 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    const file = path.join(h.directory, 'native-agents', 'conversations', `${session.id}.json`);
+    const manifest = JSON.parse(await fs.readFile(file, 'utf8'));
+    const segment = manifest.segments.at(-1);
+    const nativeCut = segment.sends.at(-1).nativeMessageId;
+    await h.native.revert(segment.sessionId, nativeCut, h.directory, { restoreFiles: false });
+    manifest.admission = { segmentId: segment.id, messageId: 'interrupted-send', phase: 'preparing', rewindSource: segment.sessionId,
+      rollback: { segments: manifest.segments, active: manifest.active, cut } };
+    await fs.writeFile(file, JSON.stringify(manifest));
+    await h.restart();
+    expect((await h.api.getSession(session.id, h.directory)).revert.messageID).toBe(cut);
+    await h.api.unrevert(session.id, h.directory);
+    await h.send(session.id, 'claude', 'Continue without rewinding');
+    expect((await h.history(session.id)).records).toHaveLength(6);
+  });
+
+  it('confirms a native rewind with uncertain admission without replay', async () => {
+    const h = await setup();
+    const session = await h.conversation('claude');
+    await h.send(session.id, 'claude', 'Keep');
+    const cut = await h.send(session.id, 'claude', 'Discard');
+    await h.api.revert(session.id, cut, h.directory);
+    h.uncertain();
+    const request = { directory: h.directory, messageID: `ncv_u_${randomUUID()}`, parts: [{ type: 'text', text: 'Replace once' }], ...selection('claude') };
+    await expect(h.api.prompt(session.id, request)).rejects.toMatchObject({ code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN' });
+    await h.restart();
+    await h.api.prompt(session.id, request);
+    expect(h.requests).toHaveLength(3);
+    expect(h.requests.at(-1).id).toBe(h.requests[0].id);
+  });
   it.each(['codex', 'claude', 'deepseek'])('hands compacted AGY history to %s without another summary request', async (backend) => {
     const h = await setup();
     const session = await h.conversation('antigravity');

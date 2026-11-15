@@ -5,6 +5,25 @@ import { projectAntigravityHistory } from '../antigravity/projector.js';
 import { parseAgyTranscript } from '../antigravity/protocol.js';
 
 describe('conversation context model aliases', () => {
+  it('reuses the separate Claude summary after its completed compaction boundary', async () => {
+    const context = await prepareConversationContext({
+      manifest: { directory: '/fixture' },
+      entries: [
+        { segmentId: 'claude', record: { info: { id: 'old', role: 'user' }, parts: [{ type: 'text', text: 'Covered history '.repeat(20000) }] } },
+        { segmentId: 'claude', record: { info: { id: 'boundary', role: 'compaction', status: 'completed', summary: '' }, parts: [] } },
+        { segmentId: 'claude', record: { info: { id: 'summary', role: 'assistant', summary: true }, parts: [{ type: 'text', text: 'Native Claude checkpoint' }] } },
+        { segmentId: 'claude', record: { info: { id: 'recent', role: 'user' }, parts: [{ type: 'text', text: 'Continue this work' }] } },
+      ],
+      target: { model: { providerID: 'codex-native', modelID: 'codex-model' } },
+      catalog: { models: [{ id: 'codex-model', contextWindow: 64000 }] },
+      signal: new AbortController().signal,
+      smallModels: async () => { throw new Error('A completed native summary must be reused'); },
+      saveCheckpoint: async () => {},
+    });
+    expect(context).toContain('Native Claude checkpoint');
+    expect(context).toContain('Continue this work');
+    expect(context).not.toContain('Covered history');
+  });
   it('hands off validated Antigravity tasks and child reports while keeping reasoning at the source', async () => {
     const parent = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
     const child = '410d8822-277d-48ee-a2eb-42b5c19688dc';

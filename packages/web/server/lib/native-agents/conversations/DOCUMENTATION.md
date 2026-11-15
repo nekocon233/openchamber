@@ -38,7 +38,8 @@ including Antigravity's registry-bound native steps. No backend prefix list
 controls logical message identity.
 
 Every backend change starts another native source. An unchanged backend keeps
-its source until a rewind or frozen fork needs a new one. Closed sources have
+its source, including supported native rewinds of an exclusively owned source.
+Closed sources have
 a retained message boundary and Claude queries close before another backend
 starts. A source referenced by another conversation survives deletion of its
 original conversation. Unreadable manifests prevent destructive assumptions
@@ -157,7 +158,8 @@ Legacy model-id aliases, including unified Opus, resolve to the same catalog row
 The target catalog supplies context limits; an unknown window uses the existing
 64k estimate and character-budget convention. Context first replaces each
 segment's covered prefix with its last completed, nonempty native compaction
-summary. Failed, running or truncated summaries cannot replace history. The
+summary. Claude's completed boundary can take its text from the following
+assistant summary record. Failed, running or truncated summaries cannot replace history. The
 rewind boundary is applied first, so a discarded checkpoint covers nothing.
 Other execution segments and the full visible transcript remain intact.
 
@@ -180,11 +182,48 @@ from discarding another CLI's history.
 
 Revert snapshots belong to the logical ID. Revert sets a retained-prefix marker;
 redo restores its files until the next admitted prompt commits it. That prompt
-opens a new source from the retained prefix. Before restoring files, the
+first uses the retained source's native rewind when the selected backend matches.
+Claude resumes at the previous chain entry, Codex reverts before the native turn,
+and DeepSeek commits its native event-prefix fork behind the same source ID.
+The logical conversation alone restores files; staging the native rewind takes
+no second file snapshot or restoration. Native first-message, mid-turn and
+pre-compaction limitations fall back to context transfer. Antigravity's
+headless protocol has no rewind or fork operation and uses that fallback.
+
+An inherited source or one referenced by another conversation uses a native fork
+at the exact cut when available. Its inherited transcript supplies CLI context;
+the new segment's optional `from` message marks its first new prompt so those
+inherited records do not appear twice in logical history. Older manifests omit
+this field and retain their existing behavior. Unreadable manifests prevent
+in-place mutation because their source references are unknown.
+History reads establish the excluded native message IDs for live projection.
+Before that boundary is known, replayed messages and parts cannot publish or
+initialize the segment clock. The same exclusion applies on reconnect and to
+interaction parts; it is not a one-time replay flag.
+
+The preparation admission records an optional `rewindSource` before staging the
+native revert. Restart recovery removes that pending native revert before
+restoring the logical cut. Definite refusals preserve redo while native history
+still contains the cut. If Codex already committed its native revert before
+refusing the replacement turn, the retained prefix stays committed and the
+replacement can be retried. An uncertain send keeps its admission and confirms
+the same message from native history without replay.
+Native revert-commit events use the admission's logical cut and the manifest's
+history revision, never the backend's independent message ID or branch version.
+
+Before restoring files, the
 controller stops and settles the active source through its backend's own
 lifecycle operation; DeepSeek uses its serialized native cancellation flow.
 Forks freeze references to retained records and acquire their own sources when
-prompted. Titles and archive state
+prompted.
+
+### Why native rewind precedes context transfer
+
+A same-backend retry can retain native checkpoints, reasoning and tool state
+without generating another summary. Shared sources require a native fork so
+rewinding one conversation cannot change another conversation's retained history.
+
+Titles and archive state
 belong to the conversation; only the first source may supply an automatic title.
 Initial previews omit hidden instructions and the `/plan` command prefix.
 For an Antigravity or DeepSeek first source, `auto-title.js` summarizes the

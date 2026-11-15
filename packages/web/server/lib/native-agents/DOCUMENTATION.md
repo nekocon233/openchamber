@@ -816,6 +816,12 @@ Conversation:
 - A revert first stops a running turn and waits up to 10 s for the CLI to
   settle it, else `409 NATIVE_SESSION_BUSY`.
 
+Unified conversations stage these same native rewinds with file restoration
+disabled, because their logical snapshots already restored the workspace.
+Their admission journal owns recovery and shared-source protection; see
+`conversations/DOCUMENTATION.md`. Native forks accept an internal ownership
+callback before publication so cloned execution sources stay out of the sidebar.
+
 Forks copy the conversation before a user message into a new session: Claude
 `forkSession({ upToMessageId })` at the entry a revert would resume at, Codex
 `thread/fork { beforeTurnId }`. A fork without a message copies the whole

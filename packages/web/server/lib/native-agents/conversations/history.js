@@ -52,7 +52,7 @@ const historyChanged = () => new NativeAgentError('The conversation history chan
 });
 
 /** Reads native pages without admitting a partial source as complete history. */
-export const readConversationSegment = async (native, manifest, segment) => {
+export const readConversationSegment = async (native, manifest, segment, observePrefix) => {
   const pages = [];
   const children = new Map();
   const cursors = new Set();
@@ -72,6 +72,12 @@ export const readConversationSegment = async (native, manifest, segment) => {
     cursor = page.cursor;
   }
   let records = pages.flat();
+  if (segment.from) {
+    const index = records.findIndex((record) => record.info.id === segment.from);
+    if (index === -1 && segment.sends.some((send) => send.nativeMessageId === segment.from && send.state === 'accepted')) throw historyChanged();
+    observePrefix?.(segment, records.slice(0, index === -1 ? records.length : index).map((record) => record.info.id));
+    records = index === -1 ? [] : records.slice(index);
+  }
   if (segment.through) {
     const index = records.findIndex((record) => record.info.id === segment.through);
     if (index === -1) throw historyChanged();
@@ -87,12 +93,12 @@ export const readConversationSegment = async (native, manifest, segment) => {
 };
 
 /** Entries retain their source outside the public record for rewind and fork boundaries. */
-export const readConversationHistory = async (native, manifest) => {
+export const readConversationHistory = async (native, manifest, observePrefix) => {
   const entries = [];
   const children = new Map();
   let metadataComplete = true;
   for (const segment of manifest.segments) {
-    const history = await readConversationSegment(native, manifest, segment);
+    const history = await readConversationSegment(native, manifest, segment, observePrefix);
     metadataComplete &&= history.metadataComplete;
     for (const child of history.children) children.set(child.id, child);
     for (const original of history.records) {
@@ -112,7 +118,7 @@ const pageCursor = (manifest, segmentId, before) => `ncvpage_${Buffer.from(JSON.
 
 /** A page reads only the execution segments it needs. Unavailable older sources
  * retain a retry cursor without discarding a readable newest window. */
-export const readConversationPage = async (native, manifest, { limit, before }) => {
+export const readConversationPage = async (native, manifest, { limit, before }, observePrefix) => {
   let index = manifest.segments.length - 1;
   let boundary;
   if (before !== undefined) {
@@ -133,7 +139,7 @@ export const readConversationPage = async (native, manifest, { limit, before }) 
   while (index >= 0 && records.length < limit) {
     const segment = manifest.segments[index];
     let history;
-    try { history = await readConversationSegment(native, manifest, segment); }
+    try { history = await readConversationSegment(native, manifest, segment, observePrefix); }
     catch (error) {
       if (records.length === 0) throw error;
       cursor = pageCursor(manifest, segment.id, boundary);

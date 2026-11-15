@@ -100,9 +100,10 @@ export const createNativeReverts = ({ registry, snapshots }) => {
      * @param {string} input.messageId first reverted user message
      * @param {string[]} input.messageIds that message and every later user message
      * @param {ConversationRewind} input.rewind
+     * @param {boolean} [input.restoreFiles] Unified conversations already restore their own file snapshots.
      * @returns {Promise<{ filesRestored: number, conversationOnly: boolean }>}
      */
-    revert({ sessionId, messageId, messageIds, rewind }) {
+    revert({ sessionId, messageId, messageIds, rewind, restoreFiles = true }) {
       return serialized(sessionId, async () => {
         const previous = await registry.pendingRevert(sessionId);
         const dropped = new Set(messageIds);
@@ -110,6 +111,10 @@ export const createNativeReverts = ({ registry, snapshots }) => {
         if (previous?.phase === 'committed') for (const id of previous.messageIds) dropped.add(id);
 
         const base = { messageId, messageIds: [...dropped], phase: 'pending', ...rewind };
+        if (!restoreFiles) {
+          await registry.setPendingRevert(sessionId, { ...base, files: [] });
+          return { filesRestored: 0, conversationOnly: true };
+        }
         const reverted = new Set(messageIds);
         const turns = (await registry.turnSnapshots(sessionId)).filter((record) => reverted.has(record.messageId));
         const first = turns.find((record) => record.messageId === messageId);
