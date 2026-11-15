@@ -1,9 +1,59 @@
-import RFB from '@novnc/novnc';
+import RFB, { type RfbScreenSize } from '@novnc/novnc';
 import { remoteModifierKey, sendPasteKeys } from './clipboard-keys.ts';
 import { GUEST_CLIPBOARD_TEXT_MAX, connectHost, type HostReadyContext, type GuestServiceSocket } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import { translate, type TextKey } from './i18n.ts';
-import { readDesktopStatus, readDesktopUrlItem, readSession, readFailure, type DesktopStatus } from './model.ts';
+import {
+  displayRatioOptions,
+  readDesktopStatus,
+  readDesktopUrlItem,
+  readDisplayRatio,
+  readFailure,
+  readSession,
+  resolveSessionSize,
+  targetDesktopResolution,
+  type DesktopDisplayRatio,
+  type DesktopDisplayResolution,
+  type DesktopStatus,
+} from './model.ts';
+
+const DISPLAY_RATIO_STORAGE_KEY = 'displayRatio';
+
+class DesktopRFB extends RFB {
+  private targetSize: DesktopDisplayResolution | null;
+  private readingRemoteTarget = false;
+
+  constructor(
+    target: HTMLElement,
+    channel: GuestServiceSocket,
+    options: { credentials?: { password: string }; shared?: boolean },
+    targetSize: DesktopDisplayResolution | null,
+  ) {
+    super(target, channel, options);
+    this.targetSize = targetSize;
+  }
+
+  setTargetDesktopSize(size: DesktopDisplayResolution | null): void {
+    this.targetSize = size;
+    if (this.resizeSession) this._requestRemoteResize();
+  }
+
+  protected override _requestRemoteResize(): void {
+    this.readingRemoteTarget = true;
+    try {
+      super._requestRemoteResize();
+    } finally {
+      this.readingRemoteTarget = false;
+    }
+  }
+
+  protected override _screenSize(): RfbScreenSize {
+    if (this.readingRemoteTarget && this.targetSize) {
+      return { w: this.targetSize.width, h: this.targetSize.height };
+    }
+    return super._screenSize();
+  }
+}
 
 const host = connectHost();
 const root = document.querySelector<HTMLElement>('#root');
@@ -21,7 +71,7 @@ root.append(viewport, empty);
 let context: HostReadyContext | null = null;
 let locale = 'en';
 let desktopStatus: DesktopStatus | null = null;
-let rfb: RFB | null = null;
+let rfb: DesktopRFB | null = null;
 let socket: GuestServiceSocket | null = null;
 let state: 'loading' | 'connecting' | 'connected' | 'disconnected' = 'loading';
 let failure: TextKey | null = null;
@@ -31,6 +81,8 @@ let resumeWhenVisible = false;
 let viewportVisible = true;
 let pasteWithShift = false;
 let publishedSignature = '';
+let displayRatio: DesktopDisplayRatio = 'auto';
+let ratioChangedByUser = false;
 let pendingOpenRequest: { id: string; url: string } | null = null;
 let lastHandledItemId: string | null = null;
 let openInFlight = false;
@@ -43,6 +95,7 @@ const viewportSize = () => {
     height: Math.max(200, Math.min(4096, Math.round(bounds.height))),
   };
 };
+const desiredSessionSize = () => resolveSessionSize(displayRatio, viewportSize());
 async function handleUnsupportedFallback(url: string, dismiss = true): Promise<void> {
   await host.openUrl(url).catch(() => {});
   if (dismiss) await host.close().catch(() => {});
@@ -51,12 +104,23 @@ async function handleUnsupportedFallback(url: string, dismiss = true): Promise<v
 function publishHeaderControl(missingCount: number): void {
   if (!context?.features?.statusControls) return;
   const connected = state === 'connected';
-  const controls = [{
-    kind: 'button' as const,
-    id: 'connection',
-    label: t(connected ? 'disconnect' : 'connect'),
-    disabled: !context.features?.serviceSockets || state === 'loading' || state === 'connecting' || (!connected && missingCount > 0),
-  }];
+  const unavailable = !context.features?.serviceSockets || state === 'loading' || (!connected && missingCount > 0);
+  const controls = [
+    {
+      kind: 'select' as const,
+      id: 'ratio',
+      label: t('ratioLabel'),
+      value: displayRatio,
+      options: displayRatioOptions(t('ratioAuto')),
+      disabled: unavailable,
+    },
+    {
+      kind: 'button' as const,
+      id: 'connection',
+      label: t(connected ? 'disconnect' : 'connect'),
+      disabled: unavailable || state === 'connecting',
+    },
+  ];
   const signature = JSON.stringify(controls);
   if (signature === publishedSignature) return;
   publishedSignature = signature;
@@ -103,7 +167,7 @@ async function openUrlOnConnectedDesktop(url: string): Promise<void> {
     const result = await host.serviceRequest({
       method: 'POST',
       path: '/session/open-url',
-      body: JSON.stringify({ url, ...viewportSize() }),
+      body: JSON.stringify({ url, ...desiredSessionSize() }),
     });
     if (result.status !== 200) {
       const code = readFailure(result.body, 'BROWSER_FAILED');
@@ -159,7 +223,7 @@ async function connect(openUrl?: string): Promise<void> {
   const current = generation;
   state = 'connecting'; failure = null; render();
   try {
-    const size = viewportSize();
+    const size = desiredSessionSize();
     const result = await host.serviceRequest({
       method: 'POST',
       path: openUrl ? '/session/open-url' : '/session/start',
@@ -177,8 +241,8 @@ async function connect(openUrl?: string): Promise<void> {
     }
     const session = readSession(result.body);
     const channel = host.openServiceSocket({ path: '/rfb', query: { session: session.id }, protocols: ['binary'] }); socket = channel;
-    const client = new RFB(viewport, channel, { credentials: { password: session.password }, shared: true }); rfb = client;
-    client.scaleViewport = true; client.resizeSession = true; client.focusOnClick = true;
+    const client = new DesktopRFB(viewport, channel, { credentials: { password: session.password }, shared: true }, targetDesktopResolution(displayRatio)); rfb = client;
+    client.background = 'var(--oc-background)'; client.scaleViewport = true; client.resizeSession = true; client.focusOnClick = true;
     client.addEventListener('connect', () => {
       if (current !== generation) return;
       state = 'connected'; failure = null; render(); client.focus();
@@ -217,7 +281,15 @@ function pasteClipboard(text: string, withShift = false): void {
   rfb.focus();
 }
 
-host.onStatusControl(({ id }) => {
+host.onStatusControl(({ id, value }) => {
+  if (id === 'ratio') {
+    ratioChangedByUser = true;
+    displayRatio = readDisplayRatio(value);
+    void host.storage.set(DISPLAY_RATIO_STORAGE_KEY, displayRatio).catch(() => {});
+    rfb?.setTargetDesktopSize(targetDesktopResolution(displayRatio));
+    render();
+    return;
+  }
   if (id !== 'connection') return;
   if (rfb || state === 'connecting') { pendingOpenRequest = null; failure = null; disconnect(); }
   else void connect();
@@ -269,8 +341,13 @@ host.onReady((next) => {
     return;
   }
   void (async () => {
-    await refresh();
-    if (state === 'loading') { state = 'disconnected'; render(); }
+    const [storedRatio] = await Promise.all([
+      host.storage.get(DISPLAY_RATIO_STORAGE_KEY).catch(() => undefined),
+      refresh(),
+    ]);
+    if (!ratioChangedByUser) displayRatio = readDisplayRatio(storedRatio);
+    if (state === 'loading') state = 'disconnected';
+    render();
     if (pendingOpenRequest) await processPendingOpen();
     else if (desktopStatus?.session?.ready && state === 'disconnected') await connect();
   })().catch(() => { pendingOpenRequest = null; failure = 'START_FAILED'; state = 'disconnected'; render(); });

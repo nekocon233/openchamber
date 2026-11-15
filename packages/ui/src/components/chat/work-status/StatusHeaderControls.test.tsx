@@ -3,8 +3,6 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 
-import { StatusHeaderControls } from './StatusHeaderControls.tsx';
-
 test('renders independent controls with full accessible labels and refuses disabled activation', async () => {
   const dom = new Window({ url: 'http://status.test' });
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -12,13 +10,25 @@ test('renders independent controls with full accessible labels and refuses disab
     window: dom,
     document: dom.document,
     navigator: dom.navigator,
+    Node: dom.Node,
+    Element: dom.Element,
     HTMLElement: dom.HTMLElement,
     Event: dom.Event,
+    CustomEvent: dom.CustomEvent,
+    KeyboardEvent: dom.KeyboardEvent,
+    MouseEvent: dom.MouseEvent,
+    PointerEvent: dom.PointerEvent,
+    MutationObserver: dom.MutationObserver,
+    ResizeObserver: dom.ResizeObserver,
+    getComputedStyle: dom.getComputedStyle.bind(dom),
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     IS_REACT_ACT_ENVIRONMENT: true,
   })) {
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
+  const { StatusHeaderControls } = await import('./StatusHeaderControls.tsx');
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
@@ -66,6 +76,16 @@ test('renders independent controls with full accessible labels and refuses disab
     await act(async () => disabled.click());
     expect(events).toEqual([{ id: 'refresh' }]);
 
+    const scopeTrigger = container.querySelector<HTMLButtonElement>('[data-work-status-control="scope"] button');
+    if (!scopeTrigger) throw new Error('Scope control did not render');
+    await act(async () => scopeTrigger.click());
+    const allOption = [...document.querySelectorAll<HTMLElement>('[data-work-status-popup] [role="menuitemradio"]')]
+      .find((item) => item.textContent?.includes('All repositories'));
+    if (!allOption) throw new Error(`Select option did not open (expanded=${scopeTrigger.getAttribute('aria-expanded')}, body=${document.body.innerHTML.slice(0, 300)})`);
+    await act(async () => allOption.click());
+    expect(events).toEqual([{ id: 'refresh' }, { id: 'scope', value: 'all' }]);
+    expect(scopeTrigger.getAttribute('aria-expanded')).toBe('false');
+
     await act(async () => root.render(
       <StatusHeaderControls
         layout="inline"
@@ -79,7 +99,7 @@ test('renders independent controls with full accessible labels and refuses disab
     expect(toolbarButton.className).toContain('app-region-no-drag');
     expect(toolbarButton.className).toContain('h-7');
     await act(async () => toolbarButton.click());
-    expect(events).toEqual([{ id: 'refresh' }, { id: 'connect' }]);
+    expect(events).toEqual([{ id: 'refresh' }, { id: 'scope', value: 'all' }, { id: 'connect' }]);
   } finally {
     await act(async () => root.unmount());
     await dom.happyDOM.close();

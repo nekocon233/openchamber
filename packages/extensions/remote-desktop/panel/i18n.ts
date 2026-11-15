@@ -1,5 +1,6 @@
 const en = {
   connect: 'Connect', disconnect: 'Disconnect',
+  ratioLabel: 'Aspect ratio', ratioAuto: 'Auto',
   loading: 'Checking desktop', connecting: 'Connecting', choose: 'Connect to open the remote desktop.', install: 'Install on the server',
   clipboardLimit: 'Copy a smaller selection. Clipboard text is limited to 32,000 characters.',
   clipboardFailed: 'Clipboard access failed.', unsupportedHost: 'Update OpenChamber to use remote desktop.',
@@ -20,6 +21,7 @@ export const messages = {
   en,
   de: {
     connect: 'Verbinden', disconnect: 'Trennen',
+    ratioLabel: 'Seitenverhältnis', ratioAuto: 'Automatisch',
     loading: 'Desktop wird geprüft', connecting: 'Verbindung wird hergestellt', choose: 'Verbinde dich, um den Remote-Desktop zu öffnen.', install: 'Auf dem Server installieren',
     clipboardLimit: 'Kopiere eine kleinere Auswahl. Die Zwischenablage ist auf 32.000 Zeichen begrenzt.',
     clipboardFailed: 'Kein Zugriff auf die Zwischenablage.', unsupportedHost: 'Aktualisiere OpenChamber, um den Remote-Desktop zu nutzen.',
@@ -35,6 +37,7 @@ export const messages = {
   },
   fr: {
     connect: 'Connecter', disconnect: 'Déconnecter',
+    ratioLabel: 'Format', ratioAuto: 'Automatique',
     loading: 'Vérification du bureau', connecting: 'Connexion', choose: 'Connectez-vous pour ouvrir le bureau distant.', install: 'Installer sur le serveur',
     clipboardLimit: 'Copiez une sélection plus courte. Le presse-papiers est limité à 32 000 caractères.',
     clipboardFailed: 'Accès au presse-papiers impossible.', unsupportedHost: 'Mettez OpenChamber à jour pour utiliser le bureau distant.',
@@ -50,6 +53,7 @@ export const messages = {
   },
   nl: {
     connect: 'Verbinden', disconnect: 'Verbreken',
+    ratioLabel: 'Beeldverhouding', ratioAuto: 'Automatisch',
     loading: 'Bureaublad controleren', connecting: 'Verbinden', choose: 'Maak verbinding om het externe bureaublad te openen.', install: 'Op de server installeren',
     clipboardLimit: 'Kopieer een kleinere selectie. Klembordtekst is beperkt tot 32.000 tekens.',
     clipboardFailed: 'Geen toegang tot het klembord.', unsupportedHost: 'Werk OpenChamber bij om het externe bureaublad te gebruiken.',
@@ -65,6 +69,7 @@ export const messages = {
   },
   'zh-CN': {
     connect: '连接', disconnect: '断开',
+    ratioLabel: '画面比例', ratioAuto: '自适应',
     loading: '正在检查桌面', connecting: '正在连接', choose: '点击连接打开远程桌面。', install: '在服务器上安装',
     clipboardLimit: '请复制较小的选区，剪贴板文本最多支持 32,000 个字符。',
     clipboardFailed: '无法访问剪贴板。', unsupportedHost: '请更新 OpenChamber 后使用远程桌面。',
@@ -80,6 +85,7 @@ export const messages = {
   },
   'zh-TW': {
     connect: '連線', disconnect: '中斷',
+    ratioLabel: '畫面比例', ratioAuto: '自動調整',
     loading: '正在檢查桌面', connecting: '正在連線', choose: '點擊連線開啟遠端桌面。', install: '在伺服器上安裝',
     clipboardLimit: '請複製較小的選取範圍，剪貼簿文字最多支援 32,000 個字元。',
     clipboardFailed: '無法存取剪貼簿。', unsupportedHost: '請更新 OpenChamber 後使用遠端桌面。',
@@ -95,6 +101,7 @@ export const messages = {
   },
   uk: {
     connect: 'Підключити', disconnect: 'Відключити',
+    ratioLabel: 'Співвідношення сторін', ratioAuto: 'Авто',
     loading: 'Перевірка робочого столу', connecting: 'Підключення', choose: 'Підключіться, щоб відкрити віддалений робочий стіл.', install: 'Установити на сервері',
     clipboardLimit: 'Скопіюйте менший фрагмент. Текст буфера обмежено 32 000 символами.',
     clipboardFailed: 'Немає доступу до буфера.', unsupportedHost: 'Оновіть OpenChamber для віддаленого робочого столу.',
@@ -110,6 +117,7 @@ export const messages = {
   },
   es: {
     connect: 'Conectar', disconnect: 'Desconectar',
+    ratioLabel: 'Relación de aspecto', ratioAuto: 'Automático',
     loading: 'Comprobando escritorio', connecting: 'Conectando', choose: 'Conéctate para abrir el escritorio remoto.', install: 'Instalar en el servidor',
     clipboardLimit: 'Copia una selección más pequeña. El portapapeles admite hasta 32 000 caracteres.',
     clipboardFailed: 'No se pudo acceder al portapapeles.', unsupportedHost: 'Actualiza OpenChamber para usar el escritorio remoto.',
@@ -125,6 +133,7 @@ export const messages = {
   },
   'pt-BR': {
     connect: 'Conectar', disconnect: 'Desconectar',
+    ratioLabel: 'Proporção', ratioAuto: 'Automático',
     loading: 'Verificando área de trabalho', connecting: 'Conectando', choose: 'Conecte-se para abrir a área de trabalho remota.', install: 'Instalar no servidor',
     clipboardLimit: 'Copie uma seleção menor. O texto está limitado a 32.000 caracteres.',
     clipboardFailed: 'Não foi possível acessar a área de transferência.', unsupportedHost: 'Atualize o OpenChamber para usar a área de trabalho remota.',
@@ -140,6 +149,7 @@ export const messages = {
   },
   ko: {
     connect: '연결', disconnect: '연결 끊기',
+    ratioLabel: '화면 비율', ratioAuto: '자동',
     loading: '데스크톱 확인 중', connecting: '연결 중', choose: '원격 데스크톱을 열려면 연결하세요.', install: '서버에 설치',
     clipboardLimit: '더 작은 범위를 복사하세요. 클립보드 텍스트는 32,000자까지 지원합니다.',
     clipboardFailed: '클립보드에 접근할 수 없습니다.', unsupportedHost: '원격 데스크톱을 사용하려면 OpenChamber를 업데이트하세요.',
@@ -155,6 +165,7 @@ export const messages = {
   },
   pl: {
     connect: 'Połącz', disconnect: 'Rozłącz',
+    ratioLabel: 'Proporcje', ratioAuto: 'Automatycznie',
     loading: 'Sprawdzanie pulpitu', connecting: 'Łączenie', choose: 'Połącz się, aby otworzyć zdalny pulpit.', install: 'Zainstaluj na serwerze',
     clipboardLimit: 'Skopiuj mniejszy fragment. Tekst schowka jest ograniczony do 32 000 znaków.',
     clipboardFailed: 'Brak dostępu do schowka.', unsupportedHost: 'Zaktualizuj OpenChamber, aby korzystać ze zdalnego pulpitu.',
@@ -170,6 +181,7 @@ export const messages = {
   },
   ja: {
     connect: '接続', disconnect: '切断',
+    ratioLabel: 'アスペクト比', ratioAuto: '自動',
     loading: 'デスクトップを確認中', connecting: '接続中', choose: '接続してリモートデスクトップを開いてください。', install: 'サーバーにインストール',
     clipboardLimit: 'コピーする範囲を小さくしてください。クリップボードは 32,000 文字まで対応しています。',
     clipboardFailed: 'クリップボードにアクセスできません。', unsupportedHost: 'リモートデスクトップを使うには OpenChamber を更新してください。',
@@ -185,6 +197,7 @@ export const messages = {
   },
   tr: {
     connect: 'Bağlan', disconnect: 'Bağlantıyı kes',
+    ratioLabel: 'En boy oranı', ratioAuto: 'Otomatik',
     loading: 'Masaüstü denetleniyor', connecting: 'Bağlanıyor', choose: 'Uzak masaüstünü açmak için bağlanın.', install: 'Sunucuya yükle',
     clipboardLimit: 'Daha küçük bir bölüm kopyalayın. Pano metni 32.000 karakterle sınırlıdır.',
     clipboardFailed: 'Panoya erişilemedi.', unsupportedHost: 'Uzak masaüstü için OpenChamber uygulamasını güncelleyin.',
@@ -200,6 +213,7 @@ export const messages = {
   },
   ar: {
     connect: 'اتصال', disconnect: 'قطع الاتصال',
+    ratioLabel: 'نسبة العرض إلى الارتفاع', ratioAuto: 'تلقائي',
     loading: 'جارٍ فحص سطح المكتب', connecting: 'جارٍ الاتصال', choose: 'اتصل لفتح سطح المكتب البعيد.', install: 'التثبيت على الخادم',
     clipboardLimit: 'انسخ جزءًا أصغر. نص الحافظة محدود بـ 32,000 حرف.',
     clipboardFailed: 'تعذر الوصول إلى الحافظة.', unsupportedHost: 'حدّث OpenChamber لاستخدام سطح المكتب البعيد.',
@@ -215,6 +229,7 @@ export const messages = {
   },
   he: {
     connect: 'התחברות', disconnect: 'ניתוק',
+    ratioLabel: 'יחס גובה-רוחב', ratioAuto: 'אוטומטי',
     loading: 'בודק את שולחן העבודה', connecting: 'מתחבר', choose: 'התחברו כדי לפתוח את שולחן העבודה המרוחק.', install: 'התקנה בשרת',
     clipboardLimit: 'העתיקו קטע קצר יותר. טקסט הלוח מוגבל ל־32,000 תווים.',
     clipboardFailed: 'אין גישה ללוח.', unsupportedHost: 'עדכנו את OpenChamber כדי להשתמש בשולחן העבודה המרוחק.',

@@ -43,15 +43,19 @@ viewer-selected TCP target.
   and omit `--new-window` so subsequent links open as tabs in the existing window.
   Non-Linux hosts return `UNSUPPORTED` so the panel hands the URL back to
   `host.openUrl` and dismisses itself.
-- The panel publishes one `Connect` / `Disconnect` control into the host panel
-  or page header through `setStatusControls` and renders no inner toolbar or
-  status bar. Loading, empty and error notices render in the centered empty
-  overlay while disconnected. It covers every host locale; the desktop viewport
-  always has physical left-to-right coordinates.
+- The panel publishes an aspect-ratio selector (`Auto`, `16:9 (1920×1080)`,
+  `16:10 (1440×900)`, `4:3 (1280×960)`) and a `Connect` / `Disconnect` control
+  into the host panel or page header through `setStatusControls`, persisting the
+  selected ratio in extension storage (`host.storage`) and rendering no inner
+  toolbar or status bar. Loading, empty and error notices render in the centered
+  empty overlay while disconnected. It covers every host locale; the desktop
+  viewport always has physical left-to-right coordinates.
 - Automatic clipboard writes and deliberate paste events exchange text up to
   the SDK limit; clipboard failures surface through host toasts.
-- Local scaling and remote resolution changes stay on so the virtual display
-  follows the frame size. No automatic reconnect loop is used.
+- Local scaling stays on so any framebuffer scales proportionally and centers
+  inside the viewport; remote resolution tracks the viewport in `Auto` mode or
+  holds the selected preset resolution otherwise. No automatic reconnect loop is
+  used.
 
 ## Decisions
 
@@ -95,3 +99,11 @@ The extension sandbox requires one classic IIFE. noVNC 1.7 uses module-level
 await for H.264 detection, which cannot be emitted as IIFE. The shipped patch
 keeps that detection asynchronous through a promise and retains the current
 noVNC release. The upstream source, patch and licenses are named in NOTICE.md.
+
+### Why a panel RFB subclass decouples target resolution from viewport scaling
+
+noVNC's `RFB` reads `_screenSize()` both to autoscale the local canvas and to
+request `SetDesktopSize` over RFB. Subclassing `RFB` in the panel to supply the
+preset dimensions only inside `_requestRemoteResize()` keeps container-based
+proportional scaling intact without assuming `xrandr` is installed on the host
+or expanding the `@novnc/novnc` build patch.
