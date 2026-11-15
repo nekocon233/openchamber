@@ -331,17 +331,22 @@ on release. The selected document remains in `useFilesViewTabsStore`; file tab
 metadata stays in `contextPanelByDirectory`. Classic file visibility and tree
 side settings keep their values when the workspace layout changes.
 
-Each directory's `editorDiffTab` records the Changes document as `closed`,
-`background` or `active`, independently of the tool zone. Ordinary document
+Each directory's `editorDiffTab` and `editorDesktopTab` record the Changes and
+Remote Desktop tabs as `closed`, `background` or `active`, mutually exclusive
+for `active` and independent of the tool zones. Ordinary document
 selection stays in `useFilesViewTabsStore.selectedPath`; opening a file puts
-an open Changes document in the background. `setEditorDiffTabState` selects
-or closes that document without changing the zone or deleting its diff record.
-Rail opens and explicit diff links select the document as well as the list;
-background scope updates leave both selections alone. Closing the selected
-file can return to the most recently used Changes document. Removing the diff
-record makes its document unavailable. Hydration and entering editor layout
-initialize old records once from the visible Changes panel, then preserve the
-independent selection. Malformed document states load as closed.
+open Changes or Remote Desktop tabs in the background. `setEditorDiffTabState`
+and `setEditorDesktopTabState` select or close those tabs without changing zones
+or deleting their tab records.
+Rail opens and explicit diff links select the Changes document as well as the list;
+background scope updates leave both selections alone. In editor layout,
+clicking the Remote Desktop rail icon or opening an ordinary chat link via
+`openRemoteDesktopUrl` activates `editorDesktopTab` without opening a side zone
+or altering `editorChatSplitRatio`. Closing the selected
+tab returns to the most recently touched remaining file, Changes, or Remote
+Desktop tab. Removing a record makes its tab unavailable. Hydration and
+entering editor layout initialize old records once from the visible panel,
+then preserve independent selection. Malformed tab states load as closed.
 
 `editorToolPanelWidth` is the device-local width shared by all side tool panels
 in editor layout, including the directory and extensions. It starts at 320 px

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { useUIStore } from './useUIStore';
 import { useFilesViewTabsStore } from './useFilesViewTabsStore';
+import { useGuestItemStore } from '@/lib/guests/item-store';
 import { getZoneView, resolveZoneActiveTab } from '@/lib/workspace/zones';
 import { readAutoSaveSnapshot } from '@/lib/settings/registry';
-import { getEditorDiffTabState } from '@/lib/workspace/editorTabs';
+import { DESKTOP_GUEST_ID, DESKTOP_PANEL_MODE, getEditorDesktopTabState, getEditorDiffTabState } from '@/lib/workspace/editorTabs';
 
 const initial = useUIStore.getState();
 const originalFiles = useFilesViewTabsStore.getState();
@@ -11,15 +12,21 @@ const directory = '/repo';
 beforeEach(() => {
   useUIStore.setState({ ...useUIStore.getInitialState(), workspaceLayout: 'editor', isMobile: false }, true);
   useFilesViewTabsStore.setState({ byRoot: {} });
+  useGuestItemStore.setState({ pendingItemByGuest: {} });
 });
 afterEach(() => {
   useUIStore.setState(initial, true);
   useFilesViewTabsStore.setState(originalFiles, true);
+  useGuestItemStore.setState({ pendingItemByGuest: {} });
 });
 const selected = () => useFilesViewTabsStore.getState().byRoot[directory]?.selectedPath ?? null;
 const diffState = () => {
   const state = useUIStore.getState();
   return getEditorDiffTabState(state.contextPanelByDirectory[directory], state.contextSurfaceZones, 'left');
+};
+const desktopState = () => {
+  const state = useUIStore.getState();
+  return getEditorDesktopTabState(state.contextPanelByDirectory[directory], state.contextSurfaceZones, 'left');
 };
 const active = (zone: 'left' | 'right' | 'bottom' = 'left') => {
   const ui = useUIStore.getState();
@@ -240,4 +247,81 @@ test('the shared tool width preserves classic widths and is local to the device'
       expect(useUIStore.getState().editorToolPanelWidth).toBe(expected);
     }
   } finally { useUIStore.persist.setOptions(options); }
+});
+
+test('Remote Desktop opens in the resident editor without touching zones or split ratio, and toggles via the rail', async () => {
+  const ui = useUIStore.getState();
+  ui.setEditorChatSplitRatio(0.61);
+  ui.openContextFile(directory, '/repo/a.ts');
+  ui.openRemoteDesktopUrl(directory, 'https://example.test/page');
+  expect(desktopState()).toBe('active');
+  expect(useUIStore.getState().editorChatSplitRatio).toBe(0.61);
+  expect(getZoneView(useUIStore.getState().contextPanelByDirectory[directory], 'left').isOpen).toBe(false);
+  expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toMatchObject({
+    providerId: DESKTOP_GUEST_ID,
+    url: 'https://example.test/page',
+  });
+
+  // Opening a file or Changes backgrounds Remote Desktop without closing it.
+  ui.openContextFile(directory, '/repo/b.ts');
+  expect(desktopState()).toBe('background');
+  ui.openContextDiff(directory, 'a.ts');
+  expect(diffState()).toBe('active');
+  expect(desktopState()).toBe('background');
+
+  // Rail icon activates background Remote Desktop, and a second click closes it back to the active tab.
+  ui.openContextSurface(directory, DESKTOP_PANEL_MODE);
+  expect(desktopState()).toBe('active');
+  expect(diffState()).toBe('background');
+  expect(getZoneView(useUIStore.getState().contextPanelByDirectory[directory], 'left').isOpen).toBe(true);
+  ui.openContextSurface(directory, DESKTOP_PANEL_MODE);
+  expect(desktopState()).toBe('closed');
+  expect(diffState()).toBe('active');
+
+  // Classic layout opens Remote Desktop as a normal zone panel; switching to editor brings it into the resident strip.
+  ui.setWorkspaceLayout('classic');
+  ui.openRemoteDesktopUrl(directory, 'https://example.test/classic');
+  const classicPanel = useUIStore.getState().contextPanelByDirectory[directory];
+  expect(getZoneView(classicPanel, 'right').isOpen).toBe(true);
+  expect(resolveZoneActiveTab(classicPanel, {}, 'right', 'right')?.mode).toBe(DESKTOP_PANEL_MODE);
+
+  // Even if editorDesktopTab was previously closed, reopening in classic carries into editor.
+  useUIStore.setState({
+    contextPanelByDirectory: {
+      [directory]: { ...classicPanel, editorDesktopTab: 'closed' },
+    },
+  });
+  ui.setWorkspaceLayout('editor');
+  expect(desktopState()).toBe('active');
+  expect(diffState()).toBe('background');
+  expect(getZoneView(useUIStore.getState().contextPanelByDirectory[directory], 'left').isOpen).toBe(false);
+
+  // Switching editor -> classic opens active Remote Desktop in the classic zone.
+  ui.setWorkspaceLayout('classic');
+  const returnedClassic = useUIStore.getState().contextPanelByDirectory[directory];
+  expect(getZoneView(returnedClassic, 'right').isOpen).toBe(true);
+  expect(resolveZoneActiveTab(returnedClassic, {}, 'right', 'right')?.mode).toBe(DESKTOP_PANEL_MODE);
+  ui.closeContextZone(directory, 'right');
+  ui.setWorkspaceLayout('editor');
+  expect(desktopState()).toBe('closed');
+});
+
+test('closing a background selected file preserves active Remote Desktop, and removing active desktop promotes background Changes', () => {
+  const ui = useUIStore.getState();
+  ui.openContextFile(directory, '/repo/a.ts');
+  ui.openContextDiff(directory, 'a.ts');
+  ui.openRemoteDesktopUrl(directory, 'https://example.test/active');
+  expect(selected()).toBe('/repo/a.ts');
+  expect(diffState()).toBe('background');
+  expect(desktopState()).toBe('active');
+
+  // Closing the background selected file must not steal focus away from Remote Desktop.
+  ui.closeContextFile(directory, '/repo/a.ts');
+  expect(desktopState()).toBe('active');
+  expect(diffState()).toBe('background');
+
+  // Removing Remote Desktop (disable/uninstall) promotes background Changes.
+  ui.closeContextPanelTabs(directory, [DESKTOP_PANEL_MODE]);
+  expect(desktopState()).toBe('closed');
+  expect(diffState()).toBe('active');
 });

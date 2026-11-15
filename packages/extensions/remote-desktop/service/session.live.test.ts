@@ -82,4 +82,40 @@ describe.skipIf(process.env.OPENCHAMBER_DESKTOP_LIVE !== '1')('local TigerVNC li
       expect(await canConnect(next.port)).toBe(true);
     } finally { release(); }
   }, 20_000);
+
+  test('openUrl launches a browser on the virtual display, handles missing browser, and cleans up the group', async () => {
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-desktop-browser-'));
+    await fs.chmod(binDir, 0o755);
+    cleanups.push(() => fs.rm(binDir, { recursive: true, force: true }));
+    const logFile = path.join(binDir, 'launches.log');
+    const chrome = path.join(binDir, 'google-chrome');
+    await fs.writeFile(chrome, `#!/bin/sh\nprintf '%s\\n' "$DISPLAY|$*" >> "${logFile}"\nsleep 30 &\nexit 0\n`, { mode: 0o755 });
+
+    const noBrowser = createDesktopSessions(undefined, undefined, async () => null);
+    cleanups.push(() => noBrowser.stopAll());
+    await expect(noBrowser.openUrl({ url: 'https://example.test/one' })).rejects.toMatchObject({ code: 'NO_BROWSER' });
+
+    const builtRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-desktop-openurl-'));
+    await fs.chmod(builtRoot, 0o755);
+    cleanups.push(() => fs.rm(builtRoot, { recursive: true, force: true }));
+    const output = await Bun.build({ entrypoints: [path.join(import.meta.dir, 'main.ts')], target: 'node', outdir: builtRoot });
+    if (!output.success) throw new Error('Service build failed');
+    const urlSessions = createDesktopSessions(path.join(builtRoot, 'main.js'), undefined, async () => ({ path: chrome, kind: 'chromium' }));
+    cleanups.push(() => urlSessions.stopAll());
+
+    const first = await urlSessions.openUrl({ url: 'https://example.test/first', width: 1024, height: 768 });
+    const second = await urlSessions.openUrl({ url: 'https://example.test/second' });
+    expect(second.id).toBe(first.id);
+    await waitUntil(async () => (await fs.readFile(logFile, 'utf8').catch(() => '')).trim().split('\n').length >= 2);
+    const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+    expect(lines[0]).toContain(`${first.display}|`);
+    expect(lines[0]).toContain('--start-maximized');
+    expect(lines[0]).not.toContain('--new-window');
+    expect(lines[0]).toContain('https://example.test/first');
+    expect(lines[1]).toContain(`${first.display}|`);
+    expect(lines[1]).toContain('https://example.test/second');
+
+    await urlSessions.stop();
+    expect(await canConnect(first.port)).toBe(false);
+  }, 20_000);
 });

@@ -3,7 +3,7 @@ import { remoteModifierKey, sendPasteKeys } from './clipboard-keys.ts';
 import { GUEST_CLIPBOARD_TEXT_MAX, connectHost, type HostReadyContext, type GuestServiceSocket } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import { translate, type TextKey } from './i18n.ts';
-import { readDesktopStatus, readSession, readFailure, type DesktopStatus } from './model.ts';
+import { readDesktopStatus, readDesktopUrlItem, readSession, readFailure, type DesktopStatus } from './model.ts';
 
 const host = connectHost();
 const root = document.querySelector<HTMLElement>('#root');
@@ -31,8 +31,22 @@ let resumeWhenVisible = false;
 let viewportVisible = true;
 let pasteWithShift = false;
 let publishedSignature = '';
+let pendingOpenRequest: { id: string; url: string } | null = null;
+let lastHandledItemId: string | null = null;
+let openInFlight = false;
 const heldModifiers = new Map<string, ReturnType<typeof remoteModifierKey>>();
 const t = (key: TextKey) => translate(locale, key);
+const viewportSize = () => {
+  const bounds = viewport.getBoundingClientRect();
+  return {
+    width: Math.max(320, Math.min(4096, Math.round(bounds.width))),
+    height: Math.max(200, Math.min(4096, Math.round(bounds.height))),
+  };
+};
+async function handleUnsupportedFallback(url: string, dismiss = true): Promise<void> {
+  await host.openUrl(url).catch(() => {});
+  if (dismiss) await host.close().catch(() => {});
+}
 
 function publishHeaderControl(missingCount: number): void {
   if (!context?.features?.statusControls) return;
@@ -83,34 +97,101 @@ async function refresh(): Promise<void> {
   desktopStatus = readDesktopStatus(result.body);
 }
 
-async function connect(): Promise<void> {
+async function openUrlOnConnectedDesktop(url: string): Promise<void> {
+  openInFlight = true;
+  try {
+    const result = await host.serviceRequest({
+      method: 'POST',
+      path: '/session/open-url',
+      body: JSON.stringify({ url, ...viewportSize() }),
+    });
+    if (result.status !== 200) {
+      const code = readFailure(result.body, 'BROWSER_FAILED');
+      if (code === 'UNSUPPORTED') {
+        await handleUnsupportedFallback(url);
+        return;
+      }
+      void host.toast({ kind: 'error', message: t(code) }).catch(() => {});
+      await handleUnsupportedFallback(url, false);
+      return;
+    }
+    rfb?.focus();
+  } catch {
+    void host.toast({ kind: 'error', message: t('BROWSER_FAILED') }).catch(() => {});
+    await handleUnsupportedFallback(url, false);
+  } finally {
+    openInFlight = false;
+    if (pendingOpenRequest) void processPendingOpen();
+  }
+}
+
+async function processPendingOpen(): Promise<void> {
+  if (!pendingOpenRequest || !initialized || state === 'loading' || state === 'connecting' || openInFlight) return;
+  if (!context?.features?.serviceSockets || !context?.features?.statusControls) {
+    const request = pendingOpenRequest;
+    pendingOpenRequest = null;
+    await handleUnsupportedFallback(request.url, false);
+    return;
+  }
+  const missing = desktopStatus?.missing ?? [];
+  if (missing.length > 0) {
+    const request = pendingOpenRequest;
+    pendingOpenRequest = null;
+    await handleUnsupportedFallback(request.url, missing.includes('UNSUPPORTED'));
+    return;
+  }
+  if (!viewportVisible || document.hidden) {
+    resumeWhenVisible = true;
+    return;
+  }
+  const request = pendingOpenRequest;
+  pendingOpenRequest = null;
+  if (state === 'connected' && rfb) {
+    await openUrlOnConnectedDesktop(request.url);
+    return;
+  }
+  await connect(request.url);
+}
+
+async function connect(openUrl?: string): Promise<void> {
   if (!viewportVisible || document.hidden) { resumeWhenVisible = true; return; }
   disconnect();
   const current = generation;
   state = 'connecting'; failure = null; render();
   try {
-    const bounds = viewport.getBoundingClientRect();
+    const size = viewportSize();
     const result = await host.serviceRequest({
       method: 'POST',
-      path: '/session/start',
-      body: JSON.stringify({
-        width: Math.max(320, Math.min(4096, Math.round(bounds.width))),
-        height: Math.max(200, Math.min(4096, Math.round(bounds.height))),
-      }),
+      path: openUrl ? '/session/open-url' : '/session/start',
+      body: JSON.stringify(openUrl ? { url: openUrl, ...size } : size),
     });
     if (current !== generation) return;
-    if (result.status !== 200) { failure = readFailure(result.body); state = 'disconnected'; render(); return; }
+    if (result.status !== 200) {
+      const code = readFailure(result.body);
+      pendingOpenRequest = null;
+      failure = code;
+      state = 'disconnected';
+      render();
+      if (openUrl) await handleUnsupportedFallback(openUrl, code === 'UNSUPPORTED');
+      return;
+    }
     const session = readSession(result.body);
     const channel = host.openServiceSocket({ path: '/rfb', query: { session: session.id }, protocols: ['binary'] }); socket = channel;
     const client = new RFB(viewport, channel, { credentials: { password: session.password }, shared: true }); rfb = client;
     client.scaleViewport = true; client.resizeSession = true; client.focusOnClick = true;
-    client.addEventListener('connect', () => { if (current !== generation) return; state = 'connected'; failure = null; render(); client.focus(); void refresh().then(render).catch(() => {}); });
+    client.addEventListener('connect', () => {
+      if (current !== generation) return;
+      state = 'connected'; failure = null; render(); client.focus();
+      void refresh().then(render).catch(() => {});
+      if (pendingOpenRequest) void processPendingOpen();
+    });
     client.addEventListener('disconnect', ({ detail }) => {
       if (current !== generation) return;
       rfb = null; socket = null; state = 'disconnected';
-      if (!detail.clean) failure = 'START_FAILED'; render();
+      if (!detail.clean) { pendingOpenRequest = null; failure = 'START_FAILED'; }
+      render();
     });
-    client.addEventListener('securityfailure', () => { if (current === generation) { failure = 'START_FAILED'; render(); } });
+    client.addEventListener('securityfailure', () => { if (current === generation) { pendingOpenRequest = null; failure = 'START_FAILED'; render(); } });
     client.addEventListener('clipboard', ({ detail }) => {
       if (current !== generation) return;
       const text = detail.text;
@@ -122,7 +203,7 @@ async function connect(): Promise<void> {
         if (current === generation) void host.toast({ kind: 'error', message: t('clipboardFailed') }).catch(() => {});
       });
     });
-  } catch { if (current === generation) { disconnect(); failure = 'START_FAILED'; render(); } }
+  } catch { if (current === generation) { pendingOpenRequest = null; disconnect(); failure = 'START_FAILED'; render(); } }
 }
 
 function pasteClipboard(text: string, withShift = false): void {
@@ -138,8 +219,16 @@ function pasteClipboard(text: string, withShift = false): void {
 
 host.onStatusControl(({ id }) => {
   if (id !== 'connection') return;
-  if (rfb || state === 'connecting') { failure = null; disconnect(); }
+  if (rfb || state === 'connecting') { pendingOpenRequest = null; failure = null; disconnect(); }
   else void connect();
+});
+
+host.onItem((item) => {
+  const request = readDesktopUrlItem(item);
+  if (!request || request.id === lastHandledItemId) return;
+  lastHandledItemId = request.id;
+  pendingOpenRequest = request;
+  void processPendingOpen();
 });
 
 // The iframe cannot read the OS clipboard directly. A real paste supplies
@@ -159,6 +248,7 @@ document.addEventListener('paste', (event) => {
 const visibilityChanged = () => {
   const viewing = viewportVisible && !document.hidden;
   if (!viewing && (rfb || state === 'connecting')) disconnect(true);
+  else if (viewing && pendingOpenRequest) { resumeWhenVisible = false; void processPendingOpen(); }
   else if (viewing && resumeWhenVisible) { resumeWhenVisible = false; void connect(); }
 };
 const visibility = new IntersectionObserver(([entry]) => { viewportVisible = Boolean(entry?.isIntersecting); visibilityChanged(); });
@@ -173,10 +263,15 @@ host.onReady((next) => {
   render();
   if (initialized) return;
   initialized = true;
-  if (!next.features?.serviceSockets || !next.features?.statusControls) { failure = 'unsupportedHost'; state = 'disconnected'; render(); return; }
+  if (!next.features?.serviceSockets || !next.features?.statusControls) {
+    failure = 'unsupportedHost'; state = 'disconnected'; render();
+    if (pendingOpenRequest) void processPendingOpen();
+    return;
+  }
   void (async () => {
     await refresh();
-    state = 'disconnected'; render();
-    if (desktopStatus?.session?.ready) await connect();
-  })().catch(() => { failure = 'START_FAILED'; state = 'disconnected'; render(); });
+    if (state === 'loading') { state = 'disconnected'; render(); }
+    if (pendingOpenRequest) await processPendingOpen();
+    else if (desktopStatus?.session?.ready && state === 'disconnected') await connect();
+  })().catch(() => { pendingOpenRequest = null; failure = 'START_FAILED'; state = 'disconnected'; render(); });
 });

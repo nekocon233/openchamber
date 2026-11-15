@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { isContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/modes';
 import type { WorkspaceLayout } from './sidebarGeometry';
 
+export const DESKTOP_GUEST_ID = 'openchamber-builtin-desktop';
+export const DESKTOP_PANEL_MODE = `plugin:${DESKTOP_GUEST_ID}` as const;
+
 /**
  * Where a context surface opens around the chat. The chat is always the
  * centre and takes the remaining space; every other surface lives in one of
@@ -60,7 +63,7 @@ export const withZoneView = <P extends ZonedPanel>(panel: P, zone: ContextZone, 
 );
 
 const tabsInZone = <T extends ZonedTab>(tabs: readonly T[], placement: ContextZonePlacement, zone: ContextZone, defaultZone: DefaultContextZone = 'right'): T[] =>
-  tabs.filter((tab) => zoneOfMode(placement, tab.mode, defaultZone) === zone);
+  tabs.filter((tab) => !(defaultZone === 'left' && tab.mode === DESKTOP_PANEL_MODE) && zoneOfMode(placement, tab.mode, defaultZone) === zone);
 
 /**
  * The zone's tab: the one it names when that tab is still open and placed in
@@ -221,7 +224,7 @@ export const reconcileZonePlacement = <P extends ZonedPanel>(
     const view = getZoneView(panel, from);
     if (!view.isOpen) continue;
     const tab = panel.tabs.find((entry) => entry.id === view.activeTabId);
-    if (!tab) continue;
+    if (!tab || (defaultZone === 'left' && tab.mode === DESKTOP_PANEL_MODE)) continue;
     const to = zoneOfMode(placement, tab.mode, defaultZone);
     const prior = visible.get(to);
     if (!prior || tab.touchedAt > prior.tab.touchedAt || (tab.touchedAt === prior.tab.touchedAt && from === to)) {

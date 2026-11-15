@@ -90,7 +90,7 @@ export type InstalledGuest = {
 /** A catalog row this build could not read; `id` and `name` are null when they were unreadable too. */
 export type UnreadableGuest = { id: string | null; name: string | null; builtIn: boolean };
 
-export type GuestCatalog = { guests: InstalledGuest[]; unreadable: UnreadableGuest[] };
+export type GuestCatalog = { guests: InstalledGuest[]; unreadable: UnreadableGuest[]; hostPlatform?: string };
 
 export type GuestGitOrigin = { url: string; ref?: string };
 

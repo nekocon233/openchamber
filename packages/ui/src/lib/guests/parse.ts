@@ -207,6 +207,7 @@ const installedGuestSchema = z.object({
 
 const catalogSchema = z.object({
   guests: z.array(z.unknown()),
+  hostPlatform: z.string().min(1).optional(),
 });
 
 // What Settings can still show of a row it cannot read, so the user can
@@ -227,6 +228,7 @@ export const parseGuestCatalogJson = (json: string): GuestCatalog | null => {
     const parsed = catalogSchema.safeParse(JSON.parse(json));
     if (!parsed.success) return null;
     const catalog: GuestCatalog = { guests: [], unreadable: [] };
+    if (parsed.data.hostPlatform) catalog.hostPlatform = parsed.data.hostPlatform;
     for (const row of parsed.data.guests) {
       const guest = installedGuestSchema.safeParse(row);
       if (guest.success) {

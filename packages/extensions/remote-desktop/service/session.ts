@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { currentUser, inspectEnvironment, type DesktopEnvironment, type DesktopUser } from './environment.ts';
-import { reserveDisplay, type SessionSpec } from './supervisor.ts';
+import { currentUser, findBrowserBinary, buildBrowserCommand, inspectEnvironment, type DesktopEnvironment, type DesktopUser } from './environment.ts';
+import { reserveDisplay, supervisorSpawnReplySchema, type SessionSpec, type SupervisorSpawnRequest } from './supervisor.ts';
 import type { DesktopFailure } from '../contract.ts';
 
 export class DesktopError extends Error {
@@ -17,6 +17,8 @@ type DesktopSession = {
   id: string; display: string; password: string; port: number; state: 'starting' | 'ready'; displayLock: string | null;
   child: ChildProcess | null; directory: string | null; abort: AbortController;
   releaseDisplay: (() => Promise<void>) | null; viewers: Set<() => void>;
+  user: DesktopUser | null; browserEnv: Record<string, string> | null;
+  spawnWaiters: Map<string, (ok: boolean) => void>;
   ready: Promise<DesktopSession>;
 };
 
@@ -31,12 +33,19 @@ const reservePort = (): Promise<number> => new Promise((resolve, reject) => {
   });
 });
 
-const childEnvironment = (user: DesktopUser, display: string, authority: string) => ({
-  PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: user.home, USER: user.name, LOGNAME: user.name,
-  LANG: process.env.LANG ?? 'en_US.UTF-8', DISPLAY: display, XAUTHORITY: authority,
-  XDG_RUNTIME_DIR: `/run/user/${user.uid}`,
-  ELECTRON_RUN_AS_NODE: '1',
-});
+const childEnvironment = (user: DesktopUser, display: string, authority: string, asNode = true) => {
+  const base = {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: user.home,
+    USER: user.name,
+    LOGNAME: user.name,
+    LANG: process.env.LANG ?? 'en_US.UTF-8',
+    DISPLAY: display,
+    XAUTHORITY: authority,
+    XDG_RUNTIME_DIR: `/run/user/${user.uid}`,
+  };
+  return asNode ? { ...base, ELECTRON_RUN_AS_NODE: '1' } : base;
+};
 
 const passwordBytes = (binary: string, password: string, signal: AbortSignal): Promise<Buffer> => new Promise((resolve, reject) => {
   const child = spawn(binary, ['-f'], { stdio: ['pipe', 'pipe', 'ignore'], signal, windowsHide: true });
@@ -71,7 +80,11 @@ const stopChild = async (child: ChildProcess): Promise<void> => {
   });
 };
 
-export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), createDirectory = () => fs.mkdtemp(path.join(os.tmpdir(), 'openchamber-desktop-'))) => {
+export const createDesktopSessions = (
+  entry = fileURLToPath(import.meta.url),
+  createDirectory = () => fs.mkdtemp(path.join(os.tmpdir(), 'openchamber-desktop-')),
+  resolveBrowser: () => Promise<Awaited<ReturnType<typeof findBrowserBinary>>> = findBrowserBinary,
+) => {
   let activeSession: DesktopSession | null = null;
   const cleaning = new WeakMap<DesktopSession, Promise<void>>();
   let shuttingDown = false;
@@ -80,6 +93,8 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
     if (current) return current;
     const pending = (async () => {
       session.abort.abort();
+      for (const settleSpawn of session.spawnWaiters.values()) settleSpawn(false);
+      session.spawnWaiters.clear();
       for (const close of [...session.viewers]) close();
       session.viewers.clear();
       if (session.child) await stopChild(session.child);
@@ -100,6 +115,7 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       if (!environment.binaries.virtual) throw new DesktopError('NO_VIRTUAL_SERVER');
       if (!environment.binaries.desktop) throw new DesktopError('NO_DESKTOP');
       const user = currentUser();
+      session.user = user;
       const reserved = await reserveDisplay();
       session.display = reserved.display;
       session.releaseDisplay = reserved.release;
@@ -120,6 +136,7 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       assertActive();
       session.port = await reservePort();
       assertActive();
+      session.browserEnv = childEnvironment(user, session.display, authority, false);
       const spec = sessionCommand(session, environment, options, passwordFile, childEnvironment(user, session.display, authority));
       const child = spawn(process.execPath, [entry, '--desktop-session'], {
         env: { PATH: process.env.PATH, ELECTRON_RUN_AS_NODE: '1' },
@@ -129,24 +146,80 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
       });
       session.child = child;
       child.stdin.on('error', () => {});
+      let stdoutBuffer = '';
+      let readySettled = false;
       child.stdin.write(`${JSON.stringify(spec)}\n`);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new DesktopError('START_FAILED')), 15_000);
-        const abort = () => reject(new DesktopError('STOPPED'));
+        const settleReady = (fn: () => void) => {
+          if (readySettled) return;
+          readySettled = true;
+          clearTimeout(timer);
+          session.abort.signal.removeEventListener('abort', abort);
+          child.off('error', onError);
+          child.off('exit', onExit);
+          fn();
+        };
+        const timer = setTimeout(() => settleReady(() => reject(new DesktopError('START_FAILED'))), 15_000);
+        const abort = () => settleReady(() => reject(new DesktopError('STOPPED')));
+        const onError = () => settleReady(() => reject(new DesktopError('START_FAILED')));
+        const onExit = () => settleReady(() => reject(new DesktopError('START_FAILED')));
         session.abort.signal.addEventListener('abort', abort, { once: true });
-        child.once('error', () => reject(new DesktopError('START_FAILED')));
-        child.once('exit', () => reject(new DesktopError('START_FAILED')));
-        child.stdout.once('data', (data: Buffer) => data.toString().trim() === 'ready' ? resolve() : reject(new DesktopError('START_FAILED')));
+        child.once('error', onError);
+        child.once('exit', onExit);
         child.once('spawn', () => { if (session.abort.signal.aborted) abort(); });
-        const done = () => { clearTimeout(timer); session.abort.signal.removeEventListener('abort', abort); };
-        child.stdout.once('data', done); child.once('exit', done); child.once('error', done);
-        session.abort.signal.addEventListener('abort', done, { once: true });
+        child.stdout.on('data', (data: Buffer) => {
+          stdoutBuffer += data.toString('utf8');
+          let end = stdoutBuffer.indexOf('\n');
+          while (end >= 0) {
+            const line = stdoutBuffer.slice(0, end).trim();
+            stdoutBuffer = stdoutBuffer.slice(end + 1);
+            if (!readySettled) {
+              if (line === 'ready') settleReady(resolve);
+              else settleReady(() => reject(new DesktopError('START_FAILED')));
+            } else if (line) {
+              try {
+                const reply = supervisorSpawnReplySchema.safeParse(JSON.parse(line));
+                if (reply.success) {
+                  const waiter = session.spawnWaiters.get(reply.data.id);
+                  if (waiter) {
+                    session.spawnWaiters.delete(reply.data.id);
+                    waiter(reply.data.ok);
+                  }
+                }
+              } catch { /* Ignore malformed supervisor output. */ }
+            }
+            end = stdoutBuffer.indexOf('\n');
+          }
+        });
       });
       assertActive();
       child.once('exit', () => { void cleanup(session); });
       session.state = 'ready';
       return session;
     } catch (error) { await cleanup(session); throw error instanceof DesktopError ? error : new DesktopError('START_FAILED'); }
+  };
+  const spawnOnSession = (session: DesktopSession, command: { file: string; args: string[] }, env: Record<string, string>): Promise<boolean> => {
+    if (!session.child?.stdin || session.child.stdin.destroyed || session.abort.signal.aborted) return Promise.resolve(false);
+    const id = randomUUID();
+    const payload: SupervisorSpawnRequest = { type: 'spawn', id, command, env };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { session.spawnWaiters.delete(id); resolve(false); }, 10_000);
+      const onAbort = () => { clearTimeout(timer); session.spawnWaiters.delete(id); resolve(false); };
+      session.abort.signal.addEventListener('abort', onAbort, { once: true });
+      session.spawnWaiters.set(id, (ok) => {
+        clearTimeout(timer);
+        session.abort.signal.removeEventListener('abort', onAbort);
+        resolve(ok);
+      });
+      try {
+        session.child!.stdin!.write(`${JSON.stringify(payload)}\n`);
+      } catch {
+        clearTimeout(timer);
+        session.abort.signal.removeEventListener('abort', onAbort);
+        session.spawnWaiters.delete(id);
+        resolve(false);
+      }
+    });
   };
   return {
     start(options: { width?: number; height?: number } = {}): Promise<DesktopSession> {
@@ -157,11 +230,26 @@ export const createDesktopSessions = (entry = fileURLToPath(import.meta.url), cr
         : current.ready;
       const session: DesktopSession = {
         id: randomUUID(), display: '', state: 'starting', displayLock: null, password: randomBytes(6).toString('base64'), port: 0,
-        child: null, directory: null, releaseDisplay: null, viewers: new Set(), abort: new AbortController(),
+        child: null, directory: null, releaseDisplay: null, viewers: new Set(), user: null, browserEnv: null, spawnWaiters: new Map(), abort: new AbortController(),
         ready: Promise.resolve().then(() => prepare(session, options)),
       };
       activeSession = session;
       return session.ready;
+    },
+    async openUrl(options: { url: string; width?: number; height?: number }): Promise<DesktopSession> {
+      if (shuttingDown) throw new DesktopError('STOPPED');
+      if (process.platform !== 'linux') throw new DesktopError('UNSUPPORTED');
+      const browser = await resolveBrowser();
+      if (!browser) throw new DesktopError('NO_BROWSER');
+      const session = await this.start({ width: options.width, height: options.height });
+      if (session.abort.signal.aborted || !session.user || !session.browserEnv) throw new DesktopError('STOPPED');
+      const profileDir = path.join(session.user.home, '.config', 'openchamber', 'remote-desktop-browser');
+      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      if (process.getuid?.() === 0) await fs.chown(profileDir, session.user.uid, session.user.gid);
+      const command = buildBrowserCommand(browser, options.url, { profileDir, uid: session.user.uid });
+      const spawned = await spawnOnSession(session, command, session.browserEnv);
+      if (!spawned) throw new DesktopError('BROWSER_FAILED');
+      return session;
     },
     get(id: string) { return activeSession && activeSession.id === id && activeSession.state === 'ready' && !activeSession.abort.signal.aborted ? activeSession : null; },
     status() {

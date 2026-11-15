@@ -110,6 +110,13 @@ navigates the document. The list and document close independently. Selecting
 an existing document does not switch the tool zone. Moving the Changes tool
 moves only the list. Classic keeps its combined Changes view.
 
+Remote Desktop (`plugin:openchamber-builtin-desktop`) also lives as a single
+tab inside the resident editor in editor layout, with its `setStatusControls`
+connection button portalled into the editor header while active. Clicking its
+rail icon toggles or activates that middle tab instead of opening a second copy
+in a side zone, and ordinary http/https chat links open there without resizing
+the outer split. Classic layout keeps Remote Desktop as a zone panel.
+
 Open sessions and New session stay at the titlebar's start. Open sessions shows
 the complete session browser in a dropdown below its button. Selecting or
 reselecting a session closes it, as do Escape, clicking outside, and the trigger.

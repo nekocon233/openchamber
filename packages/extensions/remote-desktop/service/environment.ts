@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 export type DesktopUser = { uid: number; gid: number; home: string; name: string };
+type BrowserBinary = { path: string; kind: 'chromium' | 'firefox' | 'xdg-open' };
 export type DesktopEnvironment = {
   platform: string;
   binaries: { virtual: string | null; password: string | null; desktop: string | null; dbus: string | null };
@@ -49,7 +50,45 @@ export const inspectEnvironment = async (): Promise<DesktopEnvironment> => {
   return { platform: process.platform, binaries: { virtual, password, desktop, dbus } };
 };
 
+export const findBrowserBinary = async (searchPath?: string): Promise<BrowserBinary | null> => {
+  const chromium = await findBinary(['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'], searchPath);
+  if (chromium) return { path: chromium, kind: 'chromium' };
+  const firefox = await findBinary(['firefox'], searchPath);
+  if (firefox) return { path: firefox, kind: 'firefox' };
+  const xdgOpen = await findBinary(['xdg-open'], searchPath);
+  if (xdgOpen) return { path: xdgOpen, kind: 'xdg-open' };
+  return null;
+};
+
+export const buildBrowserCommand = (
+  browser: BrowserBinary,
+  url: string,
+  options: { profileDir: string; uid: number },
+) => {
+  if (browser.kind === 'chromium') {
+    return {
+      file: browser.path,
+      args: [
+        `--user-data-dir=${options.profileDir}`,
+        '--password-store=basic',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-background-mode',
+        '--disable-features=MacAppCodeSignClone',
+        '--start-maximized',
+        ...(options.uid === 0 ? ['--no-sandbox'] : []),
+        '--',
+        url,
+      ],
+    };
+  }
+  if (browser.kind === 'firefox') {
+    return { file: browser.path, args: ['--new-tab', url] };
+  }
+  return { file: browser.path, args: [url] };
+};
+
 export const currentUser = (): DesktopUser => {
   const user = os.userInfo();
-  return { uid: user.uid, gid: user.gid, name: user.username, home: user.homedir };
+  return { uid: user.uid, gid: user.gid, name: user.username, home: process.env.HOME?.trim() || user.homedir };
 };

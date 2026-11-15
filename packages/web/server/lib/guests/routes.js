@@ -329,6 +329,7 @@ export const registerGuestRoutes = (app, {
       const guests = await listInstalledGuests({ persistPath });
       res.json({
         guests: guests.map((guest) => toPublicGuest(withGuestUpdate(guest, persistPath))),
+        hostPlatform: process.platform,
       });
     } catch (error) {
       console.error('Failed to list guests:', error);

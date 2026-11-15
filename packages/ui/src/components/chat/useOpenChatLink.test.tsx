@@ -23,6 +23,9 @@ const { useDirectoryStore } = await import('@/stores/useDirectoryStore');
 const { useSessionUIStore } = await import('@/sync/session-ui-store');
 const { usePullRequestSelectionStore, pullRequestNavigationKey } = await import('@/stores/usePullRequestSelectionStore');
 const { getRuntimeKey } = await import('@/lib/runtime-switch');
+const { useGuestsStore } = await import('@/lib/guests/store');
+const { useGuestItemStore } = await import('@/lib/guests/item-store');
+const { DESKTOP_GUEST_ID, DESKTOP_PANEL_MODE, getEditorDesktopTabState } = await import('@/lib/workspace/editorTabs');
 const { useOpenOnBoard } = await import('@/components/sourceBoard/openOnBoard');
 const { useWorkStatusNavigation } = await import('./work-status/useWorkStatusNavigation');
 const { useSourceBoardStore } = await import('@/stores/useSourceBoardStore');
@@ -47,6 +50,8 @@ beforeEach(() => {
   usePullRequestSelectionStore.getState().resetOpenRequests();
   useSourceBoardStore.setState({ choices: {}, repositoryFocus: null, linearFocus: null });
   useLinearAuthStore.setState({ status: { connected: true } });
+  useGuestsStore.getState().resetForRuntimeSwitch(getRuntimeKey());
+  useGuestItemStore.setState({ pendingItemByGuest: {} });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -184,5 +189,85 @@ describe('chat tracker link destinations', () => {
     useUIStore.setState({ openLinksInBrowserPanel: false });
     await clickLink(url);
     expect(external).toEqual([url]);
+  });
+
+  test('routes ordinary http/https links to Remote Desktop when enabled while keeping PR links on the built-in pane', async () => {
+    const runtimeKey = getRuntimeKey();
+    useGuestsStore.getState().replaceCatalog([{
+      id: DESKTOP_GUEST_ID,
+      name: 'Remote Desktop',
+      icon: 'computer',
+      entry: 'panel/index.html',
+      pageEntry: 'panel/index.html',
+      source: 'bundled',
+      enabled: true,
+      capabilities: { requested: [], granted: [] },
+    }], runtimeKey);
+    useUIStore.setState({ workspaceLayout: 'editor', openLinksInBrowserPanel: true });
+
+    await clickLink('https://example.com/docs');
+    expect(external).toEqual([]);
+    const panel = useUIStore.getState().contextPanelByDirectory['/repo'];
+    expect(getEditorDesktopTabState(panel, {}, 'left')).toBe('active');
+    expect(panel?.zones.left.isOpen).toBe(false);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toMatchObject({
+      providerId: DESKTOP_GUEST_ID,
+      url: 'https://example.com/docs',
+    });
+
+    // GitHub PRs still open in the built-in PR pane.
+    await clickLink('https://github.com/org/repo/pull/12');
+    expect(usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, '/repo'))).toMatchObject({
+      url: 'https://github.com/org/repo/pull/12',
+    });
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'pr')).toBe(true);
+
+    // Mini chat and VS Code still open links externally.
+    useGuestItemStore.setState({ pendingItemByGuest: {} });
+    await clickLink('https://example.com/mini', '/repo', 'mini-chat');
+    expect(external).toEqual(['https://example.com/mini']);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
+
+    // Disabling Remote Desktop falls back to the existing link behavior.
+    useGuestsStore.getState().replaceCatalog([{
+      id: DESKTOP_GUEST_ID,
+      name: 'Remote Desktop',
+      icon: 'computer',
+      entry: 'panel/index.html',
+      source: 'bundled',
+      enabled: false,
+      capabilities: { requested: [], granted: [] },
+    }], runtimeKey);
+    await clickLink('https://example.com/fallback');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/fallback')).toBe(true);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.filter((tab) => tab.mode === DESKTOP_PANEL_MODE)).toHaveLength(1);
+  });
+
+  test('non-Linux servers and unready Linux desktops skip Remote Desktop synchronously and preserve browser-panel fallback', async () => {
+    const runtimeKey = getRuntimeKey();
+    const desktop = {
+      id: DESKTOP_GUEST_ID,
+      name: 'Remote Desktop',
+      icon: 'computer',
+      entry: 'panel/index.html',
+      source: 'bundled' as const,
+      enabled: true,
+      capabilities: { requested: [], granted: [] },
+    };
+    useUIStore.setState({ workspaceLayout: 'editor', openLinksInBrowserPanel: true });
+
+    // Non-Linux host (macOS/Windows): openLinksInBrowserPanel opens browser panel without flashing Remote Desktop.
+    useGuestsStore.getState().replaceCatalog([desktop], runtimeKey, [], 'darwin');
+    await clickLink('https://example.com/mac');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/mac')).toBe(true);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE)).toBe(false);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
+
+    // Linux host with missing TigerVNC or browser (desktopUrlReady: false): skips Remote Desktop synchronously.
+    useGuestsStore.getState().replaceCatalog([desktop], runtimeKey, [], 'linux');
+    useGuestsStore.getState().setDesktopUrlReady(false, runtimeKey);
+    await clickLink('https://example.com/no-vnc');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/no-vnc')).toBe(true);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE)).toBe(false);
   });
 });

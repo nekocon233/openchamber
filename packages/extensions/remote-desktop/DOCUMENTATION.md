@@ -36,6 +36,13 @@ viewer-selected TCP target.
   only their own files, process group and display reservation.
 - `/status` distinguishes unsupported platforms, missing tools and read
   failures. A failed status read is never treated as a ready status.
+- `POST /session/open-url` validates `http:` / `https:` URLs, starts or reuses
+  the virtual desktop, and spawns a browser inside the virtual display's process
+  group via the supervisor pipe. Chromium-family browsers share the persistent
+  `~/.config/openchamber/remote-desktop-browser` profile with `--start-maximized`
+  and omit `--new-window` so subsequent links open as tabs in the existing window.
+  Non-Linux hosts return `UNSUPPORTED` so the panel hands the URL back to
+  `host.openUrl` and dismisses itself.
 - The panel publishes one `Connect` / `Disconnect` control into the host panel
   or page header through `setStatusControls` and renders no inner toolbar or
   status bar. Loading, empty and error notices render in the centered empty
