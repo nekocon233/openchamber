@@ -7,11 +7,15 @@ declare module '@novnc/novnc' {
     securityfailure: CustomEvent<{ status: number; reason?: string }>;
     credentialsrequired: CustomEvent<{ types: string[] }>;
   };
+  export type RfbScreenSize = { w: number; h: number };
   export default class RFB {
     constructor(target: HTMLElement, channel: GuestServiceSocket, options?: { credentials?: { password: string }; shared?: boolean });
     scaleViewport: boolean;
     resizeSession: boolean;
     focusOnClick: boolean;
+    background: string;
+    protected _requestRemoteResize(): void;
+    protected _screenSize(): RfbScreenSize;
     addEventListener<K extends keyof RfbEvents>(type: K, listener: (event: RfbEvents[K]) => void): void;
     disconnect(): void;
     focus(): void;

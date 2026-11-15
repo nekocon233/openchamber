@@ -69,7 +69,7 @@ export const StatusHeaderControls: React.FC<Props> = ({
               <DropdownMenuContent data-work-status-popup align="end" className="min-w-32">
                 <DropdownMenuRadioGroup value={control.value} onValueChange={(value) => onActivate(control.id, value)}>
                   {control.options.map((option) => (
-                    <DropdownMenuRadioItem key={option.value} value={option.value}>
+                    <DropdownMenuRadioItem key={option.value} value={option.value} closeOnClick>
                       <span className="truncate">{option.label}</span>
                     </DropdownMenuRadioItem>
                   ))}
