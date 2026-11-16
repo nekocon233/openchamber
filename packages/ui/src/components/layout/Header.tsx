@@ -70,6 +70,7 @@ import { Button } from '@/components/ui/button';
 import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
 import { buildSessionTreeMoveMessages, requestSessionTreeMove, useIsSessionWorktreeMovePending } from '@/lib/worktrees/sessionWorktreeMove';
 import { titlebarControlsWidthReaderRef } from './titlebarControlsWidth';
+import { resolveTitlebarInsets } from './titlebarInsets';
 import { useIsEditorWorkspaceLayout, useTitlebarControlsOverSidebar } from './workspaceLayout';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
 import { ChatSessionActions } from './ChatSessionActions';
@@ -701,34 +702,25 @@ export const Header: React.FC = () => {
 
 
   const desktopHeaderIconButtonClass = DESKTOP_HEADER_ICON_BUTTON_CLASS;
+  const isRtl = direction === 'rtl';
   // Clearance for the OS window controls (macOS traffic lights /
   // window-controls-overlay) on each physical edge of the window. Those
   // controls never mirror, while the layout does: in a right-to-left locale the
   // sidebar sits on the right, so the left clearance moves to the header's end.
-  const titlebarLeftInset = React.useMemo(() => {
-    if (isDesktopApp && isMacPlatform && !isDesktopWindowFullscreen) {
-      // Native traffic lights have a fixed physical footprint. Keep this
-      // clearance in pixels so shrinking the interface cannot overlap them.
-      return '88px';
-    }
-    if (isTabletStandalonePwa) {
-      return 'max(calc(0.75rem + var(--oc-wco-left-inset, 0px)), 5.5rem)';
-    }
-    if ((!isDesktopApp || usesFramelessChrome) && !isVSCode) {
-      return 'calc(0.75rem + var(--oc-wco-left-inset, 0px))';
-    }
-    return '0.75rem';
-  }, [isDesktopApp, isDesktopWindowFullscreen, isMacPlatform, isTabletStandalonePwa, isVSCode, usesFramelessChrome]);
-  const titlebarRightInset = (!isDesktopApp || usesFramelessChrome) && !isVSCode
-    ? 'calc(0.75rem + var(--oc-wco-right-inset, 0px))'
-    : '0.75rem';
-  const isRtl = direction === 'rtl';
-  // The edge the persistent TitlebarLeftControls overlay starts from. When the
-  // sidebar is open this space is owned by the sidebar's top strip, so the header
-  // drops back to its normal content padding there. Published as
-  // `--oc-titlebar-start-inset` so the overlay and the sidebar strip share it.
-  const titlebarStartInset = isRtl ? titlebarRightInset : titlebarLeftInset;
-  const titlebarEndInset = isRtl ? titlebarLeftInset : titlebarRightInset;
+  // The start inset is shared via `--oc-titlebar-start-inset` with the overlay
+  // and sidebar strip.
+  const { titlebarStartInset, titlebarEndInset } = React.useMemo(
+    () => resolveTitlebarInsets({
+      direction,
+      isDesktopApp,
+      isMacPlatform,
+      isDesktopWindowFullscreen,
+      isTabletStandalonePwa,
+      usesFramelessChrome,
+      isVSCode,
+    }),
+    [direction, isDesktopApp, isDesktopWindowFullscreen, isMacPlatform, isTabletStandalonePwa, isVSCode, usesFramelessChrome],
+  );
   // Frameless in-window controls render on their physical side: in the overlay
   // cluster when that side is where the line starts, at the header's end otherwise.
   const endEdgeOwnedByInWindowControls = usesFramelessChrome && windowControlsSide !== getInlineStartSide(direction);

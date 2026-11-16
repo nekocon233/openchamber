@@ -90,6 +90,10 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
     expect(useUIStore.getState().guestFullscreen).toEqual({ id: DESKTOP_GUEST_ID, surface: 'panel' });
     expect(overlay.dataset.guestFullscreen).toBe('open');
     expect(overlay.className).not.toContain('hidden');
+    const headerBar = overlay.querySelector<HTMLElement>('header > div');
+    expect(headerBar?.style.paddingInlineStart).toBe('calc(0.75rem + var(--oc-wco-left-inset, 0px))');
+    expect(headerBar?.style.paddingInlineEnd).toBe('calc(0.75rem + var(--oc-wco-right-inset, 0px))');
+    expect(headerBar?.style.height || headerBar?.getAttribute('style')).toContain('max(2.5rem, var(--oc-wco-titlebar-height, 0px))');
 
     // Escape inside a remote desktop iframe must stay inside the iframe.
     const iframe = document.createElement('iframe');
@@ -153,4 +157,65 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
       else Reflect.deleteProperty(globalThis, key);
     }
   }
+});
+
+test('resolveTitlebarInsets clears PWA WCO, tablet standalone PWA, and macOS traffic lights across LTR and RTL', async () => {
+  const { resolveTitlebarInsets } = await import('./titlebarInsets');
+
+  expect(resolveTitlebarInsets({
+    direction: 'ltr',
+    isDesktopApp: false,
+    isMacPlatform: false,
+    isTabletStandalonePwa: false,
+    usesFramelessChrome: false,
+  })).toEqual({
+    titlebarStartInset: 'calc(0.75rem + var(--oc-wco-left-inset, 0px))',
+    titlebarEndInset: 'calc(0.75rem + var(--oc-wco-right-inset, 0px))',
+  });
+
+  expect(resolveTitlebarInsets({
+    direction: 'rtl',
+    isDesktopApp: false,
+    isMacPlatform: false,
+    isTabletStandalonePwa: false,
+    usesFramelessChrome: false,
+  })).toEqual({
+    titlebarStartInset: 'calc(0.75rem + var(--oc-wco-right-inset, 0px))',
+    titlebarEndInset: 'calc(0.75rem + var(--oc-wco-left-inset, 0px))',
+  });
+
+  expect(resolveTitlebarInsets({
+    direction: 'rtl',
+    isDesktopApp: false,
+    isMacPlatform: false,
+    isTabletStandalonePwa: true,
+    usesFramelessChrome: false,
+  })).toEqual({
+    titlebarStartInset: 'calc(0.75rem + var(--oc-wco-right-inset, 0px))',
+    titlebarEndInset: 'max(calc(0.75rem + var(--oc-wco-left-inset, 0px)), 5.5rem)',
+  });
+
+  expect(resolveTitlebarInsets({
+    direction: 'rtl',
+    isDesktopApp: true,
+    isMacPlatform: true,
+    isDesktopWindowFullscreen: false,
+    isTabletStandalonePwa: false,
+    usesFramelessChrome: false,
+  })).toEqual({
+    titlebarStartInset: '0.75rem',
+    titlebarEndInset: '88px',
+  });
+
+  expect(resolveTitlebarInsets({
+    direction: 'ltr',
+    isDesktopApp: true,
+    isMacPlatform: true,
+    isDesktopWindowFullscreen: true,
+    isTabletStandalonePwa: false,
+    usesFramelessChrome: false,
+  })).toEqual({
+    titlebarStartInset: '0.75rem',
+    titlebarEndInset: '0.75rem',
+  });
 });
