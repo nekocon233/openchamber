@@ -5,7 +5,10 @@ import { EditorWorkspaceFit } from './EditorWorkspaceFit';
 import { useWorkspaceOverlay } from './editorWorkspaceSizing';
 import { EditorWorkspaceColumns } from './EditorWorkspaceColumns';
 import { setChatHeaderHost, useWorkspaceHosts } from './workspaceHosts';
-import { StatusHeaderControls } from '@/components/chat/work-status/StatusHeaderControls';
+import { GuestFullscreenOverlay } from './GuestFullscreenOverlay';
+import { GuestHeaderControls } from './GuestHeaderControls';
+import { useGuestFullscreen } from './useGuestFullscreen';
+import { MovablePane } from './MovablePane';
 import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { Sidebar } from './Sidebar';
 import { SidebarTopBar } from './SidebarTopBar';
@@ -49,25 +52,35 @@ const loadSettingsWindow = () => import('@/components/views/SettingsWindow').the
 
 const GuestPagePane: React.FC<{ guestId: string }> = ({ guestId }) => {
     const headerHost = useWorkspaceHosts((state) => state.guestPageHeader);
+    const fullscreenHeader = useWorkspaceHosts((state) => state.fullscreenHeader);
+    const fullscreenBody = useWorkspaceHosts((state) => state.fullscreenBody);
+    const [pageBodyHost, setPageBodyHost] = React.useState<HTMLDivElement | null>(null);
+    const { isFullscreen, toggleFullscreen } = useGuestFullscreen(guestId, 'page');
     const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
+    const toolbarHost = isFullscreen ? fullscreenHeader : headerHost;
+
     return (
         <>
-            {headerHost && controls ? createPortal(
-                <StatusHeaderControls
-                    controls={controls.controls}
-                    layout="inline"
-                    appearance="toolbar"
-                    onActivate={(id, value) => controls.dispatch(value === undefined ? { id } : { id, value })}
+            {toolbarHost && (controls || toggleFullscreen) ? createPortal(
+                <GuestHeaderControls
+                    controls={controls}
+                    fullscreen={isFullscreen}
+                    onToggleFullscreen={toggleFullscreen}
                 />,
-                headerHost,
+                toolbarHost,
             ) : null}
-            <PluginPane
-                mode={`plugin:${guestId}`}
-                surface="page"
-                item={null}
-                onStatusControls={setControls}
-                onDismiss={() => useUIStore.getState().setOpenGuestPage(null)}
-            />
+            <div ref={setPageBodyHost} className="absolute inset-0" />
+            <MovablePane host={isFullscreen && fullscreenBody ? fullscreenBody : pageBodyHost}>
+                <div className="absolute inset-0">
+                    <PluginPane
+                        mode={`plugin:${guestId}`}
+                        surface="page"
+                        item={null}
+                        onStatusControls={setControls}
+                        onDismiss={() => useUIStore.getState().setOpenGuestPage(null)}
+                    />
+                </div>
+            </MovablePane>
         </>
     );
 };
@@ -308,6 +321,7 @@ export const MainLayout: React.FC = () => {
                 </div>
 
                 {/* Settings: windowed dialog with blur */}
+                <GuestFullscreenOverlay />
                 {SettingsWindow ? (
                     <SettingsWindow
                         open={isSettingsDialogOpen}

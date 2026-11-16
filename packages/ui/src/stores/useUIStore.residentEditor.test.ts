@@ -325,3 +325,24 @@ test('closing a background selected file preserves active Remote Desktop, and re
   expect(desktopState()).toBe('closed');
   expect(diffState()).toBe('active');
 });
+
+test('guestFullscreen clears page fullscreen when closing or replacing the guest page without dropping panel fullscreen', () => {
+  const ui = useUIStore.getState();
+  expect(ui.guestFullscreen).toBeNull();
+
+  ui.setOpenGuestPage(DESKTOP_GUEST_ID);
+  ui.setGuestFullscreen({ id: DESKTOP_GUEST_ID, surface: 'page' });
+  expect(useUIStore.getState().guestFullscreen).toEqual({ id: DESKTOP_GUEST_ID, surface: 'page' });
+
+  ui.setOpenGuestPage('other-guest');
+  expect(useUIStore.getState().guestFullscreen).toBeNull();
+
+  ui.setOpenGuestPage(DESKTOP_GUEST_ID);
+  ui.setGuestFullscreen({ id: DESKTOP_GUEST_ID, surface: 'page' });
+  ui.closeMainSurfaces();
+  expect(useUIStore.getState().guestFullscreen).toBeNull();
+
+  ui.setGuestFullscreen({ id: DESKTOP_GUEST_ID, surface: 'panel' });
+  ui.setArchivePageOpen(true);
+  expect(useUIStore.getState().guestFullscreen).toEqual({ id: DESKTOP_GUEST_ID, surface: 'panel' });
+});

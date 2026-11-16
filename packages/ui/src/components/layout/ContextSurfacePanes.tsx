@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import React from 'react';
 import { useDefaultContextZone, useIsEditorWorkspaceLayout } from './workspaceLayout';
 import { FileEditorPane } from './FileEditorPane';
@@ -26,12 +27,14 @@ import {
   type ContextZone,
 } from '@/lib/workspace/zones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
-import { DESKTOP_PANEL_MODE, getEditorDesktopTabState, getEditorDiffTabState } from '@/lib/workspace/editorTabs';
+import { DESKTOP_GUEST_ID, DESKTOP_PANEL_MODE, getEditorDesktopTabState, getEditorDiffTabState } from '@/lib/workspace/editorTabs';
 import { clampContextEditorTreeWidth, normalizeContextPanelDirectoryKey, useUIStore, type PendingDiffScope } from '@/stores/useUIStore';
 import { markSessionViewed } from '@/sync/notification-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
 import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from './contextPanelHeaderSlot';
-import { StatusHeaderControls } from '@/components/chat/work-status/StatusHeaderControls';
+import { GuestHeaderControls } from './GuestHeaderControls';
+import { useGuestFullscreen } from './useGuestFullscreen';
+import { useWorkspaceHosts } from './workspaceHosts';
 import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { getSessionIDFromDedupeKey } from './contextPanelSessionTitles';
 import { MovablePane } from './MovablePane';
@@ -86,21 +89,34 @@ const DockedGuestPage: React.FC<{ mode: PluginContextPanelMode; docking: GuestSu
   );
 };
 
-const GuestPanelPane: React.FC<{ mode: PluginContextPanelMode; headerSlot: HTMLElement | null; onDismiss?: () => void }> = ({ mode, headerSlot, onDismiss }) => {
+const GuestPanelPane: React.FC<{
+  mode: PluginContextPanelMode;
+  headerSlot: HTMLElement | null;
+  active: boolean;
+  onDismiss?: () => void;
+}> = ({ mode, headerSlot, active, onDismiss }) => {
+  const guestId = pluginIdFromMode(mode);
+  const fullscreenHeader = useWorkspaceHosts((state) => state.fullscreenHeader);
+  const { isFullscreen, toggleFullscreen } = useGuestFullscreen(guestId, 'panel', active);
   const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
+
+  const toolbarContent = (
+    <GuestHeaderControls
+      controls={controls}
+      fullscreen={isFullscreen}
+      onToggleFullscreen={toggleFullscreen}
+      className={isFullscreen ? undefined : 'py-1 pe-1'}
+    />
+  );
+
   return (
     <>
-      {headerSlot && controls ? (
+      {isFullscreen ? (
+        fullscreenHeader ? createPortal(toolbarContent, fullscreenHeader) : null
+      ) : headerSlot && (controls || toggleFullscreen) ? (
         <ContextPanelHeaderSlotProvider value={headerSlot}>
           <ContextPanelHeaderToolbar preserveTitle>
-            <div className="flex items-center gap-1 py-1 pe-1">
-              <StatusHeaderControls
-                controls={controls.controls}
-                layout="inline"
-                appearance="toolbar"
-                onActivate={(id, value) => controls.dispatch(value === undefined ? { id } : { id, value })}
-              />
-            </div>
+            {toolbarContent}
           </ContextPanelHeaderToolbar>
         </ContextPanelHeaderSlotProvider>
       ) : null}
@@ -311,6 +327,8 @@ export const ContextSurfacePanes: React.FC = () => {
   const fileTreeSide = useUIStore((state) => state.fileTreeSide);
   const setSelectedFilePath = useFilesViewTabsStore((state) => state.setSelectedPath);
   const headerSlots = useZoneHostsStore((state) => state.headerSlot);
+  const guestFullscreen = useUIStore((state) => state.guestFullscreen);
+  const fullscreenBody = useWorkspaceHosts((state) => state.fullscreenBody);
 
   const tabs = React.useMemo(() => panelState?.tabs ?? [], [panelState?.tabs]);
 
@@ -734,11 +752,12 @@ export const ContextSurfacePanes: React.FC = () => {
           const desktopState = getEditorDesktopTabState(panelState, placement, defaultZone);
           if (desktopState === 'closed') return null;
           const active = desktopState === 'active';
+          const isFullscreen = active && guestFullscreen?.id === DESKTOP_GUEST_ID && guestFullscreen.surface === 'panel';
           return (
             <ZonePane
               key={tab.id}
               zone={zoneFor(tab.mode).zone}
-              host={editorDesktopHost}
+              host={isFullscreen && fullscreenBody ? fullscreenBody : editorDesktopHost}
               isOpen={active}
               directoryKey={directoryKey}
               className={cn('absolute inset-0', !active && 'hidden')}
@@ -746,6 +765,7 @@ export const ContextSurfacePanes: React.FC = () => {
               <React.Suspense fallback={null}>
                 <GuestPanelPane
                   mode={tab.mode}
+                  active={active}
                   headerSlot={active ? editorDesktopHeaderSlot : null}
                   onDismiss={() => {
                     if (directoryKey) useUIStore.getState().setEditorDesktopTabState(directoryKey, 'closed');
@@ -766,11 +786,13 @@ export const ContextSurfacePanes: React.FC = () => {
         const docking = surfaceDockings.get(guestId);
         const shown = pluginZone.activeTab?.id === tab.id;
         const surfaceMounted = shown && pluginZone.isOpen;
+        const isFullscreen = !sharedSurface && guestId === DESKTOP_GUEST_ID && surfaceMounted && guestFullscreen?.id === guestId && guestFullscreen.surface === 'panel';
         if (sharedSurface && !docking && !surfaceMounted) return null;
         return (
           <ZonePane
             key={tab.id}
             zone={pluginZone.zone}
+            host={isFullscreen && fullscreenBody ? fullscreenBody : undefined}
             isOpen={pluginZone.isOpen}
             directoryKey={directoryKey}
             className={cn('absolute inset-0', shown ? 'block' : 'hidden')}
@@ -779,7 +801,8 @@ export const ContextSurfacePanes: React.FC = () => {
               {!sharedSurface ? (
                 <GuestPanelPane
                   mode={tab.mode}
-                  headerSlot={headerSlotFor(pluginZone.zone, shown && pluginZone.isOpen)}
+                  active={surfaceMounted}
+                  headerSlot={headerSlotFor(pluginZone.zone, surfaceMounted)}
                   onDismiss={() => {
                     if (directoryKey) closeContextPanelTab(directoryKey, tab.id);
                   }}

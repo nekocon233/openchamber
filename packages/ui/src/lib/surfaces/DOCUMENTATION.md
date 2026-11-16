@@ -346,7 +346,11 @@ its zone's header slot explicitly. Hidden or inactive lists release
 their titlebar actions, and a host without a slot keeps its inline toolbar.
 Extension panels (`GuestPanelPane`) use the same `preserveTitle` slot for any
 controls published through `setStatusControls`, and full-screen extension pages
-(`GuestPagePane`) portal theirs beside the page title in `Header`.
+(`GuestPagePane`) portal theirs beside the page title in `Header`. Both
+`GuestPanelPane` and `GuestPagePane` share `GuestHeaderControls` and, for
+Remote Desktop, toggle window-filling fullscreen through
+`GuestFullscreenOverlay` (`useUIStore.guestFullscreen`), moving the live
+`MovablePane` host node without reloading the iframe.
 
 No new header buttons: the rail, `openContextSurface`, the composer +
 menu (`contributes.attach`), and New Worktree's guest icons are the entry
