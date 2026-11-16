@@ -82,6 +82,10 @@ const persistedWorkspaceLayoutSchema = z.object({
 }).catch({});
 
 export type PendingDiffScope = 'working' | 'staged' | 'turn' | 'branch' | 'commit' | 'pr';
+export type GuestFullscreenTarget = {
+  id: string;
+  surface: 'panel' | 'page';
+};
 export type { ContextPanelMode };
 
 // The docked column and the tree-only panel share one pixel width.
@@ -1115,6 +1119,7 @@ interface UIStore {
   isSourceBoardOpen: boolean;
   isOverviewOpen: boolean;
   openGuestPageId: string | null;
+  guestFullscreen: GuestFullscreenTarget | null;
   worktreesPageProjectId: string | null;
   /** The project whose isolated spaces fill the main area, opened from its menu in the sidebar. */
   spacesPageProjectId: string | null;
@@ -1480,6 +1485,7 @@ interface UIStore {
   setSourceBoardOpen: (open: boolean) => void;
   setOverviewOpen: (open: boolean) => void;
   setOpenGuestPage: (id: string | null) => void;
+  setGuestFullscreen: (target: GuestFullscreenTarget | null) => void;
   setWorktreesPageProjectId: (projectId: string | null) => void;
   setSpacesPageProjectId: (projectId: string | null) => void;
   /** Close every full-page surface (Scheduled, Archive, Usage, Issues and PRs, Worktrees, Spaces, Multi-run). */
@@ -1685,6 +1691,15 @@ const openFileTab = (state: UIStore, directory: string, filePath: string, previe
   }
 };
 
+const clearPageFullscreen = (
+  state: { guestFullscreen: GuestFullscreenTarget | null },
+  keepGuestPageId: string | null = null,
+) => (
+  state.guestFullscreen?.surface === 'page' && state.guestFullscreen.id !== keepGuestPageId
+    ? { guestFullscreen: null }
+    : {}
+);
+
 export const useUIStore = create<UIStore>()(
   devtools(
     persist(
@@ -1743,6 +1758,7 @@ export const useUIStore = create<UIStore>()(
         isSourceBoardOpen: false,
         isOverviewOpen: false,
         openGuestPageId: null,
+        guestFullscreen: null,
         worktreesPageProjectId: null,
         spacesPageProjectId: null,
         isSettingsDialogOpen: false,
@@ -2915,63 +2931,68 @@ export const useUIStore = create<UIStore>()(
         },
 
         setScheduledTasksDialogOpen: (open) => {
-          set(open
-            ? { isScheduledTasksDialogOpen: true, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isScheduledTasksDialogOpen: false });
+          set((state) => (open
+            ? { isScheduledTasksDialogOpen: true, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isScheduledTasksDialogOpen: false }));
         },
 
         setArchivePageOpen: (open, search = '') => {
-          set(open
-            ? { isArchivePageOpen: true, archivePageSearch: search, archivePageOpenCount: get().archivePageOpenCount + 1, isUsageStatsPageOpen: false, isIntegrationsCatalogOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isArchivePageOpen: false });
+          set((state) => (open
+            ? { isArchivePageOpen: true, archivePageSearch: search, archivePageOpenCount: state.archivePageOpenCount + 1, isUsageStatsPageOpen: false, isIntegrationsCatalogOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isArchivePageOpen: false }));
         },
 
         setIntegrationsCatalogOpen: (open) => {
-          set(open
-            ? { isIntegrationsCatalogOpen: true, isArchivePageOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isIntegrationsCatalogOpen: false });
+          set((state) => (open
+            ? { isIntegrationsCatalogOpen: true, isArchivePageOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isIntegrationsCatalogOpen: false }));
         },
 
         setUsageStatsPageOpen: (open) => {
-          set(open
-            ? { isUsageStatsPageOpen: true, isSourceBoardOpen: false, isOverviewOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isUsageStatsPageOpen: false });
+          set((state) => (open
+            ? { isUsageStatsPageOpen: true, isSourceBoardOpen: false, isOverviewOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isUsageStatsPageOpen: false }));
         },
 
         setSourceBoardOpen: (open) => {
-          set(open
-            ? { isSourceBoardOpen: true, isOverviewOpen: false, isUsageStatsPageOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isSourceBoardOpen: false });
+          set((state) => (open
+            ? { isSourceBoardOpen: true, isOverviewOpen: false, isUsageStatsPageOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isSourceBoardOpen: false }));
         },
 
         setOverviewOpen: (open) => {
           // Without the feature there is no page to open, whatever asks for it.
           if (open && !get().overviewFeatureAvailable) return;
-          set(open
-            ? { isOverviewOpen: true, isSourceBoardOpen: false, isUsageStatsPageOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
-            : { isOverviewOpen: false });
+          set((state) => (open
+            ? { isOverviewOpen: true, isSourceBoardOpen: false, isUsageStatsPageOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { isOverviewOpen: false }));
         },
 
         setWorktreesPageProjectId: (projectId) => {
-          set(projectId
-            ? { worktreesPageProjectId: projectId, spacesPageProjectId: null, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, runOverviewKey: null, openGuestPageId: null }
-            : { worktreesPageProjectId: null });
+          set((state) => (projectId
+            ? { worktreesPageProjectId: projectId, spacesPageProjectId: null, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { worktreesPageProjectId: null }));
         },
 
         setSpacesPageProjectId: (projectId) => {
-          set(projectId
-            ? { spacesPageProjectId: projectId, worktreesPageProjectId: null, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, runOverviewKey: null, openGuestPageId: null }
-            : { spacesPageProjectId: null });
+          set((state) => (projectId
+            ? { spacesPageProjectId: projectId, worktreesPageProjectId: null, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, runOverviewKey: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { spacesPageProjectId: null }));
         },
 
         setOpenGuestPage: (id) => {
-          set(id ? { openGuestPageId: id, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null }
-            : { openGuestPageId: null });
+          set((state) => (id
+            ? { openGuestPageId: id, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, ...clearPageFullscreen(state, id) }
+            : { openGuestPageId: null, ...clearPageFullscreen(state) }));
+        },
+
+        setGuestFullscreen: (target) => {
+          set({ guestFullscreen: target });
         },
 
         closeMainSurfaces: () => {
           const state = get();
-          if (!state.isScheduledTasksDialogOpen && !state.isArchivePageOpen && !state.isIntegrationsCatalogOpen && !state.isUsageStatsPageOpen && !state.isSourceBoardOpen && !state.isOverviewOpen && !state.worktreesPageProjectId && !state.spacesPageProjectId && !state.runOverviewKey && !state.openGuestPageId) {
+          if (!state.isScheduledTasksDialogOpen && !state.isArchivePageOpen && !state.isIntegrationsCatalogOpen && !state.isUsageStatsPageOpen && !state.isSourceBoardOpen && !state.isOverviewOpen && !state.worktreesPageProjectId && !state.spacesPageProjectId && !state.runOverviewKey && !state.openGuestPageId && state.guestFullscreen?.surface !== 'page') {
             return;
           }
           set({
@@ -2985,6 +3006,7 @@ export const useUIStore = create<UIStore>()(
             spacesPageProjectId: null,
             runOverviewKey: null,
             openGuestPageId: null,
+            ...clearPageFullscreen(state),
           });
         },
 
@@ -3662,9 +3684,9 @@ export const useUIStore = create<UIStore>()(
         // The run overview is one of the mutually exclusive full-page surfaces:
         // opening it closes the other surfaces and vice versa.
         setRunOverviewKey: (runKey) => {
-          set(runKey
-            ? { runOverviewKey: runKey, isSessionSwitcherOpen: false, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, openGuestPageId: null }
-            : { runOverviewKey: null });
+          set((state) => (runKey
+            ? { runOverviewKey: runKey, isSessionSwitcherOpen: false, isScheduledTasksDialogOpen: false, isArchivePageOpen: false, isIntegrationsCatalogOpen: false, isUsageStatsPageOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, openGuestPageId: null, ...clearPageFullscreen(state) }
+            : { runOverviewKey: null }));
         },
 
         requestParallelComposer: (prompt = '') => {

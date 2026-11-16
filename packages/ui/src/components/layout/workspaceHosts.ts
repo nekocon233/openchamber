@@ -5,7 +5,15 @@ export const useWorkspaceHosts = create<{
   editor: HTMLElement | null;
   chatHeader: HTMLElement | null;
   guestPageHeader: HTMLElement | null;
-}>(() => ({ editor: null, chatHeader: null, guestPageHeader: null }));
+  fullscreenHeader: HTMLElement | null;
+  fullscreenBody: HTMLElement | null;
+}>(() => ({
+  editor: null,
+  chatHeader: null,
+  guestPageHeader: null,
+  fullscreenHeader: null,
+  fullscreenBody: null,
+}));
 
 export const setEditorHost = (editor: HTMLElement | null): void => {
   useWorkspaceHosts.setState({ editor });
@@ -17,4 +25,12 @@ export const setChatHeaderHost = (chatHeader: HTMLElement | null): void => {
 
 export const setGuestPageHeaderHost = (guestPageHeader: HTMLElement | null): void => {
   useWorkspaceHosts.setState({ guestPageHeader });
+};
+
+export const setFullscreenHeaderHost = (fullscreenHeader: HTMLElement | null): void => {
+  useWorkspaceHosts.setState({ fullscreenHeader });
+};
+
+export const setFullscreenBodyHost = (fullscreenBody: HTMLElement | null): void => {
+  useWorkspaceHosts.setState({ fullscreenBody });
 };
