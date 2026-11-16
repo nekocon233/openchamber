@@ -2,8 +2,10 @@ import React from 'react';
 
 import { WindowsWindowControls } from '@/components/desktop/WindowsWindowControls';
 import { GuestIcon } from '@/components/layout/GuestRailIcon';
+import { resolveTitlebarInsets } from '@/components/layout/titlebarInsets';
 import { setFullscreenBodyHost, setFullscreenHeaderHost } from '@/components/layout/workspaceHosts';
 import { useDesktopWindowControlsLayout } from '@/hooks/useDesktopWindowControlsLayout';
+import { useTabletStandalonePwaRuntime } from '@/lib/device';
 import { isDesktopShell, startDesktopWindowDrag } from '@/lib/desktop';
 import { isGuestActive } from '@/lib/guests/capabilities';
 import { guestPackageIconSrc, resolveGuestIconName } from '@/lib/guests/icon';
@@ -35,9 +37,20 @@ export const GuestFullscreenOverlay: React.FC = () => {
     () => /Macintosh|Mac OS X/.test(globalThis.navigator?.userAgent ?? ''),
     [],
   );
+  const isTabletStandalonePwa = useTabletStandalonePwaRuntime();
   const { usesFramelessChrome, side: windowControlsSide } = useDesktopWindowControlsLayout();
   const startControls = usesFramelessChrome && windowControlsSide === getInlineStartSide(direction);
   const endControls = usesFramelessChrome && !startControls;
+  const { titlebarStartInset, titlebarEndInset } = React.useMemo(
+    () => resolveTitlebarInsets({
+      direction,
+      isDesktopApp,
+      isMacPlatform,
+      isTabletStandalonePwa,
+      usesFramelessChrome,
+    }),
+    [direction, isDesktopApp, isMacPlatform, isTabletStandalonePwa, usesFramelessChrome],
+  );
 
   React.useEffect(() => {
     if (guestFullscreen && (!guestActive && (catalogStatus === 'ready' || guest !== null))) {
@@ -72,16 +85,17 @@ export const GuestFullscreenOverlay: React.FC = () => {
   const title = guestFullscreen?.surface === 'page' ? (guest?.pageTitle ?? guest?.name ?? '') : (guest?.name ?? '');
   const icon = guest ? resolveGuestIconName(guest.icon) : 'computer';
   const iconSrc = guest ? guestPackageIconSrc(guest.id, guest.icon, getRuntimeUrlResolver().authenticatedAsset) : undefined;
-  const headerStyle: React.CSSProperties | undefined = isDesktopApp && (isMacPlatform || usesFramelessChrome)
-    ? {
-        minHeight: 'var(--oc-header-height, 2.75rem)',
-        ...(isMacPlatform
-          ? (direction === 'rtl'
-              ? { paddingInlineEnd: '88px' }
-              : { paddingInlineStart: 'var(--oc-titlebar-start-inset, 0.75rem)' })
-          : null),
-      }
-    : undefined;
+  const titlebarHeight = isDesktopApp && (isMacPlatform || usesFramelessChrome)
+    ? 'var(--oc-header-height, 2.75rem)'
+    : 'max(2.5rem, var(--oc-wco-titlebar-height, 0px))';
+  const headerStyle: React.CSSProperties = {
+    minHeight: titlebarHeight,
+    height: titlebarHeight,
+    paddingInlineStart: isDesktopApp && isMacPlatform && direction !== 'rtl'
+      ? 'var(--oc-titlebar-start-inset, 88px)'
+      : titlebarStartInset,
+    paddingInlineEnd: endControls ? '0px' : titlebarEndInset,
+  };
 
   return (
     <div
@@ -90,22 +104,21 @@ export const GuestFullscreenOverlay: React.FC = () => {
       inert={!isOpen || undefined}
       className={cn('fixed inset-0 z-[45] flex flex-col bg-background', !isOpen && 'hidden')}
     >
-      <header
-        onMouseDown={handleDragStart}
-        style={headerStyle}
-        className={cn(
-          'app-region-drag flex h-10 shrink-0 select-none items-center justify-between gap-2 border-b border-border bg-background ps-3',
-          endControls ? 'pe-0' : 'pe-2.5',
-        )}
-      >
-        <div className="app-region-no-drag flex min-w-0 items-center gap-2">
-          {startControls ? <WindowsWindowControls visible position={windowControlsSide} /> : null}
-          {guest ? <GuestIcon icon={icon} iconSrc={iconSrc} className="size-3.5 shrink-0" /> : null}
-          <span className="truncate typography-ui-label text-foreground">{title}</span>
-        </div>
-        <div className="app-region-no-drag flex shrink-0 items-center gap-2">
-          <div ref={setFullscreenHeaderHost} className="flex shrink-0 items-center gap-1 empty:hidden" />
-          {endControls ? <WindowsWindowControls visible position={windowControlsSide} /> : null}
+      <header className="header-safe-area shrink-0 border-b border-border bg-background">
+        <div
+          onMouseDown={handleDragStart}
+          style={headerStyle}
+          className="app-region-drag flex select-none items-center justify-between gap-2"
+        >
+          <div className="app-region-no-drag flex min-w-0 items-center gap-2">
+            {startControls ? <WindowsWindowControls visible position={windowControlsSide} /> : null}
+            {guest ? <GuestIcon icon={icon} iconSrc={iconSrc} className="size-3.5 shrink-0" /> : null}
+            <span className="truncate typography-ui-label text-foreground">{title}</span>
+          </div>
+          <div className="app-region-no-drag flex shrink-0 items-center gap-2">
+            <div ref={setFullscreenHeaderHost} className="flex shrink-0 items-center gap-1 empty:hidden" />
+            {endControls ? <WindowsWindowControls visible position={windowControlsSide} /> : null}
+          </div>
         </div>
       </header>
       <div ref={setFullscreenBodyHost} data-guest-fullscreen-body="" className="relative min-h-0 flex-1 overflow-hidden bg-background" />
