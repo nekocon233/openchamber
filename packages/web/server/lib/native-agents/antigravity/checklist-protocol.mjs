@@ -24,9 +24,19 @@ export const checklistTool = {
   } },
 };
 
+const jsonText = z.string().transform((text, context) => {
+  try { return JSON.parse(text); } catch {
+    context.addIssue({ code: 'custom', message: 'Invalid JSON text' });
+    return z.NEVER;
+  }
+});
+// agy forwards `call_mcp_tool` arguments as the JSON text the model wrote when
+// its tool declaration types them as a string.
+const checklistArguments = z.union([checklistInput, jsonText.pipe(checklistInput)]);
+
 /** The helper and host use the same validation and canonical input digest. */
 export const parseChecklistInput = (value) => {
-  const parsed = checklistInput.safeParse(value);
+  const parsed = checklistArguments.safeParse(value);
   if (!parsed.success) return null;
   const input = { todos: parsed.data.todos.map(({ id, content, status }) => ({ id, content, status })) };
   return Buffer.byteLength(JSON.stringify(input)) <= AGY_CHECKLIST_MAX_BYTES ? input : null;

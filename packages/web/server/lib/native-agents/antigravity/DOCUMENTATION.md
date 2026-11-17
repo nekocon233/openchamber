@@ -375,6 +375,11 @@ previous list. Incomplete history remains partial or throws when no valid list
 can be recovered; absence of a call is `source_unknown`, never an inferred
 empty list. `manage_task` continues to describe background commands.
 
+The helper and the transcript reader both accept `call_mcp_tool` arguments as
+an object or as JSON text that decodes to one. The reader decodes them for every
+MCP server, so any MCP call with JSON-text arguments shows as its own tool card.
+A rejected list's error shows the expected `{"todos":[...]}` shape.
+
 `checklist.js` owns live/history interpretation. Native step indexes order
 revisions; successful live tool completion publishes the existing
 `session.checklist.updated` event. Reads, reconnect and turn completion recover
@@ -388,6 +393,18 @@ reads honor their retained prefix, and inactive source events stay excluded.
 A stateless MCP receipt makes the CLI's accepted tool record sufficient for
 live updates and restart recovery. A second persisted checklist would require
 ordering and rollback between two stores and could outlive a rewound history.
+
+### Why string arguments are decoded
+
+Observed with Magpie's agy-cli bridge 0.1.64 in November 2026: the model sees
+a `call_mcp_tool` whose `Arguments` is typed as a string, so it writes the
+checklist as JSON text and agy forwards that text as the MCP `arguments`. Before the decode
+every such call failed validation. Changing the bridge's declaration was the
+alternative; it is outside this repository and other bridges can do the same.
+The bridge's inner CLI also loads the global MCP configuration without the
+enabling environment, lists no checklist tool, and empties the shared
+`antigravity-cli/mcp/openchamber_checklist/` schema folder. A model that then
+cannot read the schema learns the shape from the error text.
 
 ### Why the executable and protocol are separate
 
