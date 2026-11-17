@@ -16,7 +16,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     else if (call.method === 'tools/list') send(call.id, { tools: enabled ? [checklistTool] : [] });
     else if (call.method === 'tools/call' && enabled && call.params?.name === AGY_CHECKLIST_TOOL) {
       const input = parseChecklistInput(call.params.arguments);
-      send(call.id, { content: [{ type: 'text', text: input ? checklistReceipt(input) : 'Invalid checklist. Supply unique ids, nonempty content and pending, in_progress or completed statuses within 256 KiB.' }], isError: input === null });
+      send(call.id, { content: [{ type: 'text', text: input ? checklistReceipt(input) : 'Invalid checklist. Send {"todos":[{"id":"1","content":"Step","status":"pending"}]} with unique ids, nonempty content and pending, in_progress or completed statuses within 256 KiB.' }], isError: input === null });
     } else send(call.id, { content: [{ type: 'text', text: 'Checklist tool is unavailable.' }], isError: true });
   } catch {
     if (call?.id !== undefined) send(call.id, { content: [{ type: 'text', text: 'Invalid checklist request.' }], isError: true });

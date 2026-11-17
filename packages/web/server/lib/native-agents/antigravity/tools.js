@@ -5,7 +5,15 @@ import { agyInteractionTruncated } from './interaction-signals.js';
 
 const command = z.object({ CommandLine: z.string() });
 const search = z.object({ query: z.string() });
-const mcp = z.object({ ServerName: z.string().min(1), ToolName: z.string().min(1), Arguments: z.record(z.string(), z.json()) });
+// A `call_mcp_tool` declared with string arguments carries them as JSON text.
+const jsonObject = z.record(z.string(), z.json());
+const mcpArguments = z.union([jsonObject, z.string().transform((text, context) => {
+  try { return JSON.parse(text); } catch {
+    context.addIssue({ code: 'custom', message: 'Invalid JSON text' });
+    return z.NEVER;
+  }
+}).pipe(jsonObject)]);
+const mcp = z.object({ ServerName: z.string().min(1), ToolName: z.string().min(1), Arguments: mcpArguments });
 const read = z.union([
   z.object({ Path: z.string() }).transform((input) => input.Path),
   z.object({ AbsolutePath: z.string() }).transform((input) => input.AbsolutePath),

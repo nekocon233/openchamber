@@ -54,6 +54,13 @@ describe('Antigravity transcript-owned checklist', () => {
     expect(() => snapshot(records)).toThrow('incomplete');
   });
 
+  it('commits a list whose arguments arrive as JSON text', () => {
+    const records = project(JSON.stringify(input()), 1, checklistReceipt(input()));
+    expect(snapshot(records)).toMatchObject({ state: 'ready', complete: true,
+      items: [{ id: 'verify', subject: 'Verify checklist integration', status: 'pending' }] });
+    expect(records[1].parts[0].state.input).toEqual(input());
+  });
+
   it('publishes a completed live update once and isolates another MCP server', async () => {
     const events = [];
     const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -103,6 +110,8 @@ describe('Antigravity transcript-owned checklist', () => {
       { id: 2, method: 'tools/call', params: { name: 'update_checklist', arguments: input() } },
       { id: 3, method: 'tools/call', params: { name: 'update_checklist', arguments: input('unknown') } },
       { id: 4, method: 'tools/call', params: { name: 'update_checklist', arguments: { todos: [{ id: '1', content: 'x'.repeat(270 * 1024), status: 'pending' }] } } },
+      { id: 5, method: 'tools/call', params: { name: 'update_checklist', arguments: JSON.stringify(input()) } },
+      { id: 6, method: 'tools/call', params: { name: 'update_checklist', arguments: '{"todos":' } },
     ].map((request) => JSON.stringify(request)).join('\n') + '\n';
     const run = (enabled) => spawnSync(process.execPath, [fileURLToPath(new URL('./checklist-mcp.mjs', import.meta.url))], {
       input: requests, encoding: 'utf8', env: { OPENCHAMBER_AGY_CHECKLIST: enabled ? '1' : '0' },
@@ -114,6 +123,8 @@ describe('Antigravity transcript-owned checklist', () => {
     expect(responses[1]).toMatchObject({ isError: false, content: [{ text: checklistReceipt(input()) }] });
     expect(responses[2].isError).toBe(true);
     expect(responses[3].isError).toBe(true);
+    expect(responses[4]).toMatchObject({ isError: false, content: [{ text: checklistReceipt(input()) }] });
+    expect(responses[5]).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('{"todos":[') }] });
     expect(JSON.parse(run(false).stdout.split('\n')[0]).result.tools).toEqual([]);
   });
 });
