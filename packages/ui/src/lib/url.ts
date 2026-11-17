@@ -86,23 +86,43 @@ export const getExternalFaviconUrl = (url: string): string | null => {
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 
+const parseHttpHostname = (url: string): string | null => {
+  const parsed = parseUrlSafely(url.trim());
+  if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+    return null;
+  }
+  // WHATWG URL keeps brackets on IPv6 hostnames (`[::1]`), but LOOPBACK_HOSTNAMES
+  // stores the bare form (`::1`). Strip brackets before the membership check.
+  return parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1');
+};
+
+const LAN_192_168_IPV4_RE = /^192\.168\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
 /**
  * Returns true when the URL is an http(s) URL pointing at a loopback host
  * (localhost, 127.0.0.1, 0.0.0.0, ::1). Used to decide whether to offer an in-app
  * preview pane instead of opening the system browser.
  */
 export const isLoopbackHttpUrl = (url: string): boolean => {
-  const parsed = parseUrlSafely(url.trim());
-  if (!parsed) {
+  const hostname = parseHttpHostname(url);
+  return hostname !== null && LOOPBACK_HOSTNAMES.has(hostname);
+};
+
+/**
+ * Returns true when the URL is an http(s) URL pointing at localhost/loopback
+ * or a 192.168.0.0/16 LAN address. Chat links only route into Remote Desktop for
+ * these local targets; public web links stay in the local or built-in browser.
+ */
+export const isRemoteDesktopHttpUrl = (url: string): boolean => {
+  const hostname = parseHttpHostname(url);
+  if (hostname === null) {
     return false;
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return false;
-  }
-  // WHATWG URL keeps brackets on IPv6 hostnames (`[::1]`), but LOOPBACK_HOSTNAMES
-  // stores the bare form (`::1`). Strip brackets before the membership check.
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1');
-  return LOOPBACK_HOSTNAMES.has(hostname);
+  return (
+    LOOPBACK_HOSTNAMES.has(hostname)
+    || hostname.endsWith('.localhost')
+    || LAN_192_168_IPV4_RE.test(hostname)
+  );
 };
 
 const LOOPBACK_URL_PATTERN

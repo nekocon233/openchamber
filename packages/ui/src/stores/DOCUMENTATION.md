@@ -340,7 +340,7 @@ and `setEditorDesktopTabState` select or close those tabs without changing zones
 or deleting their tab records.
 Rail opens and explicit diff links select the Changes document as well as the list;
 background scope updates leave both selections alone. In editor layout,
-clicking the Remote Desktop rail icon or opening an ordinary chat link via
+clicking the Remote Desktop rail icon or opening a localhost/192.168 chat link via
 `openRemoteDesktopUrl` activates `editorDesktopTab` without opening a side zone
 or altering `editorChatSplitRatio`. Closing the selected
 tab returns to the most recently touched remaining file, Changes, or Remote

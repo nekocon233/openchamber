@@ -191,7 +191,7 @@ describe('chat tracker link destinations', () => {
     expect(external).toEqual([url]);
   });
 
-  test('routes ordinary http/https links to Remote Desktop when enabled while keeping PR links on the built-in pane', async () => {
+  test('routes only localhost and 192.168.x.x links to Remote Desktop while keeping public, CI, and PR links out', async () => {
     const runtimeKey = getRuntimeKey();
     useGuestsStore.getState().replaceCatalog([{
       id: DESKTOP_GUEST_ID,
@@ -203,17 +203,52 @@ describe('chat tracker link destinations', () => {
       enabled: true,
       capabilities: { requested: [], granted: [] },
     }], runtimeKey);
-    useUIStore.setState({ workspaceLayout: 'editor', openLinksInBrowserPanel: true });
+    useUIStore.setState({ workspaceLayout: 'editor', openLinksInBrowserPanel: false });
 
+    // Public web links, CI run links, and other non-192.168 private IPs stay out of Remote Desktop.
     await clickLink('https://example.com/docs');
+    await clickLink('https://github.com/org/repo/actions/runs/12345');
+    await clickLink('http://10.0.0.5:3000/internal');
+    expect(external).toEqual([
+      'https://example.com/docs',
+      'https://github.com/org/repo/actions/runs/12345',
+      'http://10.0.0.5:3000/internal',
+    ]);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']).toBeUndefined();
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
+
+    // localhost, loopback, and 192.168.x.x links route to the resident Remote Desktop tab without opening a side zone.
+    external.length = 0;
+    await clickLink('http://localhost:5173/app');
     expect(external).toEqual([]);
     const panel = useUIStore.getState().contextPanelByDirectory['/repo'];
     expect(getEditorDesktopTabState(panel, {}, 'left')).toBe('active');
     expect(panel?.zones.left.isOpen).toBe(false);
     expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toMatchObject({
       providerId: DESKTOP_GUEST_ID,
-      url: 'https://example.com/docs',
+      url: 'http://localhost:5173/app',
     });
+
+    await clickLink('http://127.0.0.1:4173/preview');
+    expect(external).toEqual([]);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toMatchObject({
+      providerId: DESKTOP_GUEST_ID,
+      url: 'http://127.0.0.1:4173/preview',
+    });
+
+    await clickLink('http://192.168.1.50:8080/dashboard');
+    expect(external).toEqual([]);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toMatchObject({
+      providerId: DESKTOP_GUEST_ID,
+      url: 'http://192.168.1.50:8080/dashboard',
+    });
+
+    // Public links still honor openLinksInBrowserPanel on desktop when enabled without overriding Remote Desktop pending items.
+    useGuestItemStore.setState({ pendingItemByGuest: {} });
+    useUIStore.setState({ openLinksInBrowserPanel: true });
+    await clickLink('https://github.com/org/repo/actions/runs/67890');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://github.com/org/repo/actions/runs/67890')).toBe(true);
+    expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
 
     // GitHub PRs still open in the built-in PR pane.
     await clickLink('https://github.com/org/repo/pull/12');
@@ -222,10 +257,10 @@ describe('chat tracker link destinations', () => {
     });
     expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'pr')).toBe(true);
 
-    // Mini chat and VS Code still open links externally.
+    // Mini chat still opens local links externally.
     useGuestItemStore.setState({ pendingItemByGuest: {} });
-    await clickLink('https://example.com/mini', '/repo', 'mini-chat');
-    expect(external).toEqual(['https://example.com/mini']);
+    await clickLink('http://localhost:5173/mini', '/repo', 'mini-chat');
+    expect(external).toEqual(['http://localhost:5173/mini']);
     expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
 
     // Disabling Remote Desktop falls back to the existing link behavior.
@@ -238,8 +273,8 @@ describe('chat tracker link destinations', () => {
       enabled: false,
       capabilities: { requested: [], granted: [] },
     }], runtimeKey);
-    await clickLink('https://example.com/fallback');
-    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/fallback')).toBe(true);
+    await clickLink('http://192.168.1.50:8080/fallback');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'http://192.168.1.50:8080/fallback')).toBe(true);
     expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.filter((tab) => tab.mode === DESKTOP_PANEL_MODE)).toHaveLength(1);
   });
 
@@ -258,16 +293,16 @@ describe('chat tracker link destinations', () => {
 
     // Non-Linux host (macOS/Windows): openLinksInBrowserPanel opens browser panel without flashing Remote Desktop.
     useGuestsStore.getState().replaceCatalog([desktop], runtimeKey, [], 'darwin');
-    await clickLink('https://example.com/mac');
-    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/mac')).toBe(true);
+    await clickLink('http://localhost:3000/mac');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'http://localhost:3000/mac')).toBe(true);
     expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE)).toBe(false);
     expect(useGuestItemStore.getState().pendingItemByGuest[DESKTOP_GUEST_ID]).toBeUndefined();
 
     // Linux host with missing TigerVNC or browser (desktopUrlReady: false): skips Remote Desktop synchronously.
     useGuestsStore.getState().replaceCatalog([desktop], runtimeKey, [], 'linux');
     useGuestsStore.getState().setDesktopUrlReady(false, runtimeKey);
-    await clickLink('https://example.com/no-vnc');
-    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'https://example.com/no-vnc')).toBe(true);
+    await clickLink('http://192.168.1.50:3000/no-vnc');
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'browser' && tab.targetPath === 'http://192.168.1.50:3000/no-vnc')).toBe(true);
     expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === DESKTOP_PANEL_MODE)).toBe(false);
   });
 });
