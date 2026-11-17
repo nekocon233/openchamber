@@ -9,7 +9,7 @@ import { isDesktopShell, isVSCodeRuntime } from '@/lib/desktop';
 import { isGuestActive } from '@/lib/guests/capabilities';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useI18n } from '@/lib/i18n';
-import { isExternalHttpUrl, openExternalUrl } from '@/lib/url';
+import { isRemoteDesktopHttpUrl, openExternalUrl } from '@/lib/url';
 import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 import { useUIStore } from '@/stores/useUIStore';
 import { useChatSurfaceMode } from './useChatSurfaceMode';
@@ -17,12 +17,14 @@ import { useChatSurfaceMode } from './useChatSurfaceMode';
 /**
  * Where a plain click on a web link in chat content goes. With the settings
  * on, a GitHub PR opens in the desktop PR pane; other tracker links open on
- * the issues and PRs board. Ordinary http(s) links open through the built-in
- * Remote Desktop extension when active, falling back to the built-in browser
- * panel on desktop or the system browser. Tracker links explicitly set to
- * external always use the system browser. A tracker that cannot open internally
- * reports the failure with a manual external action. Modified clicks never come
- * here: they keep the browser's own meaning, which is the local browser.
+ * the issues and PRs board. Localhost/loopback and 192.168.x.x http(s) links
+ * open through the built-in Remote Desktop extension when active, falling back
+ * to the built-in browser panel on desktop or the system browser. Public web
+ * links (including CI pages) use the built-in browser panel on desktop when
+ * enabled or the local browser. Tracker links explicitly set to external always
+ * use the system browser. A tracker that cannot open internally reports the
+ * failure with a manual external action. Modified clicks never come here: they
+ * keep the browser's own meaning, which is the local browser.
  */
 export function useOpenChatLink(directory: string) {
   const showOnBoard = useShowOnBoard();
@@ -58,7 +60,7 @@ export function useOpenChatLink(directory: string) {
       && !isMobile
       && !isVSCodeRuntime()
       && directory
-      && isExternalHttpUrl(url)
+      && isRemoteDesktopHttpUrl(url)
       && url.trim().length <= GUEST_ATTACH_URL_MAX
       && desktopHostEligible
       && desktopGuest !== null

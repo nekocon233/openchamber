@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { getUrlScheme, isAppLinkUrl, isLoopbackHttpUrl, extractLoopbackUrls, openConfirmedAppLinkUrl, openExternalUrl } from '@/lib/url';
+import { getUrlScheme, isAppLinkUrl, isLoopbackHttpUrl, isRemoteDesktopHttpUrl, extractLoopbackUrls, openConfirmedAppLinkUrl, openExternalUrl } from '@/lib/url';
 
 describe('confirmed desktop app links', () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -118,6 +118,26 @@ describe('isLoopbackHttpUrl', () => {
     // new URL('http://[::1]:5173/').hostname === '[::1]'
     expect(isLoopbackHttpUrl('http://[::1]:5173/')).toBe(true);
     expect(isLoopbackHttpUrl('https://[::1]:4123/preview')).toBe(true);
+  });
+});
+
+describe('isRemoteDesktopHttpUrl', () => {
+  test('accepts localhost/loopback and 192.168.0.0/16 http(s) URLs only', () => {
+    expect(isRemoteDesktopHttpUrl('http://localhost:5173/')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('https://LOCALHOST/app')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('http://sub.localhost:3000/preview')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('http://127.0.0.1:8080/')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('http://[::1]:5173/')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('http://192.168.0.1:3000/')).toBe(true);
+    expect(isRemoteDesktopHttpUrl('https://192.168.255.254/admin')).toBe(true);
+
+    expect(isRemoteDesktopHttpUrl('https://example.com/docs')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('https://github.com/org/repo/actions/runs/123')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('http://192.168.1.1.example.com/')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('http://localhost.example.com/')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('http://10.0.0.1:3000/')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('ftp://192.168.1.1/file')).toBe(false);
+    expect(isRemoteDesktopHttpUrl('not a url')).toBe(false);
   });
 });
 
