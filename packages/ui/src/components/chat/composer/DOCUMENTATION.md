@@ -42,6 +42,11 @@ mouse distance, touch hold and keyboard sensors. Rows translate without scaling
 and commit order only on drop. Reordering does not apply a model or combination.
 The saved profile orders survive reload and keep the same order on mobile.
 
+The native Codex composer has separate reasoning effort and speed controls.
+The phone model sheet keeps both fields open while a choice is applied.
+Each change preserves the other field. Keyboard effort cycling stays within
+the chosen speed. Starring the model captures the pair shown in the picker.
+
 ExitPlanMode retains its execution model picker. Its initial choice comes from
 the applied combination, otherwise the current composer model; it contains no
 subagent selector. The adjacent thinking-effort picker uses the selected

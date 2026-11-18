@@ -1419,8 +1419,9 @@ Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
 commands write the same config and session selections as the existing pickers.
 The `/fast` and `/ultrafast` commands change the service tier at the composer's
 current effort. An inherited effort prefers max when supported and otherwise
-uses the highest listed level. The native
-catalog's `defaultEffort` applies only when no level resolves at all. Session
+uses the highest listed level. If the user explicitly chooses Default, a supported speed can run with the CLI's
+own effort. Older catalogs use their reported `defaultEffort` for a speed command
+when no level resolves. Session
 actions retain their existing owners. Inspections and reviews
 use `nativeAgents.codexCommand`; no optimistic user message is created for a
 control command. The composer clears only the command text and retains its

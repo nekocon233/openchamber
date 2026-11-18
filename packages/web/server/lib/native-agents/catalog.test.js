@@ -54,6 +54,7 @@ describe('native model catalogs', () => {
         defaultEffort: 'medium',
         fast: true,
         serviceTiers: ['priority', 'ultrafast'],
+        defaultEffortVariants: ['default', 'default-fast', 'default-ultrafast'],
         input: { image: true, pdf: false },
       },
       {
@@ -65,6 +66,7 @@ describe('native model catalogs', () => {
         defaultEffort: null,
         fast: false,
         serviceTiers: [],
+        defaultEffortVariants: ['default'],
         input: { image: false, pdf: false },
       },
     ]);
@@ -72,9 +74,11 @@ describe('native model catalogs', () => {
 
   it('reads the reasoning effort independently of the service tier', () => {
     expect(codexVariantSettings(undefined)).toEqual({ effort: null, serviceTier: 'default' });
+    expect(codexVariantSettings('default')).toEqual({ effort: null, serviceTier: 'default' });
     expect(codexVariantSettings('high')).toEqual({ effort: 'high', serviceTier: 'default' });
     expect(codexVariantSettings('ultra-fast')).toEqual({ effort: 'ultra', serviceTier: 'priority' });
     expect(codexVariantSettings('ultra-ultrafast')).toEqual({ effort: 'ultra', serviceTier: 'ultrafast' });
+    expect(codexVariantSettings('default-ultrafast')).toEqual({ effort: null, serviceTier: 'ultrafast' });
   });
 
   it('accepts a speed variant only for a model offering both its effort and its tier', () => {
@@ -83,5 +87,8 @@ describe('native model catalogs', () => {
     expect(nativeModelSupportsVariant(model, 'ultra-ultrafast')).toBe(false);
     expect(nativeModelSupportsVariant(model, 'high-fast')).toBe(false);
     expect(nativeModelSupportsVariant({ efforts: ['high'], serviceTiers: ['priority'] }, 'high-ultrafast')).toBe(false);
+    const [ultrafastOnly] = codexModels({ data: [{ id: 'example', serviceTiers: [{ id: 'ultrafast' }] }] });
+    expect(nativeModelSupportsVariant(ultrafastOnly, 'default-ultrafast')).toBe(true);
+    expect(nativeModelSupportsVariant(ultrafastOnly, 'default-fast')).toBe(false);
   });
 });

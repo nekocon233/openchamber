@@ -38,7 +38,8 @@ import { getSyncConfig, subscribeToSyncConfigChanges } from "@/sync/sync-refs";
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from "@/lib/runtime-switch";
 import { mergeModelMetadataWithLiveModel } from "@/lib/modelMetadata";
 import { invalidateNativeProviders, loadNativeProviders } from "@/lib/native-agents/catalog";
-import { isNativeProviderId } from "@/lib/native-agents/ids";
+import { isNativeProviderId, NATIVE_PROVIDER_CODEX } from "@/lib/native-agents/ids";
+import { codexEffortCycle } from "@/lib/native-agents/codex-speed";
 import { readCachedCatalog, writeCachedCatalogWhenSettled, type CachedCatalog } from "./configCatalogCache";
 
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
@@ -260,7 +261,7 @@ const modelHasVariant = (model: Model | undefined, variant: string | null | unde
  * the model does not offer stays unset, as before.
  */
 const defaultModelVariant = (model: Model | undefined, modelId: string): string | undefined => (
-    nativeModelAliasVariant(model, modelId) ?? preferredModelVariant(listModelVariantIds(model?.variants))
+    nativeModelAliasVariant(model, modelId) ?? preferredModelVariant(listModelVariantIds(model?.variants), model?.providerID)
 );
 
 const hasProviderModel = (
@@ -2871,14 +2872,11 @@ export const useConfigStore = create<ConfigStore>()(
                     const currentVariant = currentOverride === undefined
                         ? state.currentVariant
                         : currentOverride;
-                    let nextOverride: string | null;
-
-                    if (currentVariant === null || currentVariant === undefined) {
-                        nextOverride = variantKeys[0];
-                    } else {
-                        const index = variantKeys.indexOf(currentVariant);
-                        nextOverride = index >= 0 ? (variantKeys[index + 1] ?? null) : null;
-                    }
+                    const choices = state.currentProviderId === NATIVE_PROVIDER_CODEX
+                        ? codexEffortCycle(variantKeys, currentVariant)
+                        : [undefined, ...variantKeys];
+                    const index = choices.indexOf(currentVariant ?? (choices[0] === 'default' ? 'default' : undefined));
+                    const nextOverride = choices[index + 1] ?? choices[0] ?? null;
 
                     get().setCurrentVariantOverride(nextOverride, inheritedVariant);
                     // Cycling is a picker choice too: it becomes the model's

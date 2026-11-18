@@ -29,7 +29,7 @@ outside enterprise mode. Server authorization still owns tunnel operations.
 ## Invariants
 
 Model favorites retain an optional `variant` snapshot. A string records the
-effort at starring, including Fast variants; `null` records explicit Default.
+effort and, for Codex, speed at starring; `null` records explicit Default.
 An absent variant is a legacy model-only favorite and keeps existing selection
 rules. Membership and ordering remain keyed by provider and model. The
 composer restores the snapshot only when choosing its favorite row or cycling

@@ -2,7 +2,8 @@ import React from 'react';
 
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
-import { isNativeProviderId, NATIVE_AGENT_NAMES } from '@/lib/native-agents/ids';
+import { isNativeProviderId, NATIVE_AGENT_NAMES, NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
+import { CodexVariantFields } from '@/components/model-picker/CodexVariantSelect';
 import { ThinkingPill } from '@/components/session/ThinkingPill';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
@@ -198,19 +199,21 @@ function ReviewFlowDialogView({
               className="max-w-[320px] justify-between"
               dropdownPortalToBody
               allowNativeModels
-              onChange={(providerID, modelID) => {
+              selectedVariant={execution.variant || null}
+              onChange={(providerID, modelID, favoriteVariant) => {
                 setExecution((prev) => ({
                   ...prev,
                   providerID,
                   modelID,
-                  variant: '',
+                  variant: favoriteVariant ?? '',
                   agent: isNativeProviderId(providerID) && !NATIVE_AGENT_NAMES.has(prev.agent) ? 'build' : prev.agent,
                 }));
               }}
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          {execution.providerID === NATIVE_PROVIDER_CODEX ? <CodexVariantFields rows variant={execution.variant || undefined} variants={variantOptions}
+            disabled={!hasVariantOptions || submitting} onChange={(variant) => setExecution((prev) => ({ ...prev, variant: variant ?? '' }))} /> : <div className="flex flex-col gap-1.5">
             <span className="typography-meta font-medium text-muted-foreground">{t('sessions.scheduledTasks.editor.thinkingLevel.label')}</span>
             <ThinkingPill
               value={execution.variant}
@@ -218,7 +221,7 @@ function ReviewFlowDialogView({
               disabled={!hasVariantOptions || submitting}
               onChange={(variant) => setExecution((prev) => ({ ...prev, variant }))}
             />
-          </div>
+          </div>}
 
           <div className="flex flex-col gap-1.5">
             <span className="typography-meta font-medium text-muted-foreground">{t('sessions.scheduledTasks.editor.agent.label')}</span>

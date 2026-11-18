@@ -96,6 +96,7 @@ export const codexModels = (response, contextWindows = new Map()) => {
       efforts: model.data.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
       defaultEffort: model.data.defaultReasoningEffort ?? null,
       serviceTiers,
+      defaultEffortVariants: ['default', ...CODEX_SPEED_TIERS.filter(({ tier }) => serviceTiers.includes(tier)).map(({ suffix }) => `default${suffix}`)],
       fast: serviceTiers.includes('priority'), // Older clients read this flag.
       input: { image: model.data.inputModalities.includes('image'), pdf: false },
     });
@@ -110,13 +111,16 @@ export const codexModels = (response, contextWindows = new Map()) => {
  */
 export const codexVariantSettings = (variant) => {
   const speed = CODEX_SPEED_TIERS.find(({ suffix }) => variant?.endsWith(suffix));
-  if (speed) return { effort: variant.slice(0, -speed.suffix.length) || null, serviceTier: speed.tier };
-  return { effort: variant ?? null, serviceTier: CODEX_STANDARD_SERVICE_TIER };
+  if (speed) {
+    const effort = variant.slice(0, -speed.suffix.length);
+    return { effort: effort === 'default' ? null : effort || null, serviceTier: speed.tier };
+  }
+  return { effort: variant === 'default' ? null : variant ?? null, serviceTier: CODEX_STANDARD_SERVICE_TIER };
 };
 
 /** Catalog check shared by native agent combinations, subagents and plan handoffs. */
 export const nativeModelSupportsVariant = (model, variant) => {
-  if (model.efforts.includes(variant)) return true;
+  if (model.efforts.includes(variant) || model.defaultEffortVariants?.includes(variant)) return true;
   const { effort, serviceTier } = codexVariantSettings(variant);
   return model.efforts.includes(effort) && model.serviceTiers?.includes(serviceTier) === true;
 };

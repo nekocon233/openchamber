@@ -108,6 +108,7 @@ const codexConnectionModels = (connection) => connection.models.map((model) => (
   id: `${CONNECTION_MODEL_PREFIX}${connection.id}:${model.id}`,
   name: `${connection.name} / ${model.name}`,
   defaultEffort: null,
+  defaultEffortVariants: ['default'],
   fast: false,
 }));
 

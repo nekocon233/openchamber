@@ -76,10 +76,14 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
     }
     setLocal({ key, value: next });
   };
-  const choose = (providerId: string, modelId: string) => {
+  const choose = (providerId: string, modelId: string, favoriteVariant?: string | null) => {
     const target = pickable.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
     if (!target) return;
     const variants = listModelVariantIds(target.variants);
+    if (favoriteVariant !== undefined) {
+      saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: favoriteVariant && variants.includes(favoriteVariant) ? favoriteVariant : undefined });
+      return;
+    }
     const preference = useSelectionStore.getState().getAgentModelVariantForSession(form.sessionID, 'build', providerId, modelId);
     const configured = configuredVariantForModel({ defaultModel, defaultVariant, providerId, modelId, model: target });
     const composerModel = current?.model.providerID === providerId && (current.model.modelID === modelId || target.nativeAliases?.some((alias) => alias.id === current.model.modelID));
@@ -88,7 +92,7 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
       ? value.variant
       : composerModel ? current?.variant ?? (aliasVariant && variants.includes(aliasVariant) ? aliasVariant : undefined)
       : preference === null ? undefined : preference && variants.includes(preference) ? preference
-        : configured && variants.includes(configured) ? configured : preferredModelVariant(variants);
+        : configured && variants.includes(configured) ? configured : preferredModelVariant(variants, providerId);
     saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: variant && variants.includes(variant) ? variant : undefined });
   };
   const chooseVariant = (variant: string | undefined) => {

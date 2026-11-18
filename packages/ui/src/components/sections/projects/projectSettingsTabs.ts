@@ -20,6 +20,7 @@ const SEARCH_TARGET_TABS = new Map<string, ProjectSettingsTab>([
   ['projects.default-agent', 'general'],
   ['projects.default-model', 'general'],
   ['projects.default-thinking', 'general'],
+  ['projects.default-speed', 'general'],
   ['projects.shared', 'general'],
   ['projects.shared.plansDir', 'general'],
   ['projects.actions', 'actions'],

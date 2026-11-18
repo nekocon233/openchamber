@@ -91,13 +91,14 @@ export const executeCodexComposerCommand = async (
     case 'fast':
     case 'ultrafast': {
       const current = useConfigStore.getState().providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models.find((entry) => entry.id === model);
+      const variants = listModelVariantIds(current?.variants);
       let effort = variant;
-      if (effort === undefined) {
+      if (effort === undefined && !variants.includes(`default-${name}`)) {
         const catalog = (await api.catalog()).backends.codex;
         if (catalog.status === 'error') throw new Error(catalog.message);
         effort = catalog.models.find((entry) => entry.id === model)?.defaultEffort ?? undefined;
       }
-      const next = codexSpeedVariant(listModelVariantIds(current?.variants), effort, name, argument);
+      const next = codexSpeedVariant(variants, effort, name, argument);
       if (next === null) throw invalid();
       await setSelection(model, next);
       break;

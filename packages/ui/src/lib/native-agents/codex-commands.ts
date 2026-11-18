@@ -1,6 +1,6 @@
 import type { I18nKey } from '@/lib/i18n';
 import type { NativeCodexReviewTarget } from '@/lib/api/types';
-import { codexVariantSettings } from './codex-speed';
+import { codexVariantId, codexVariantSettings } from './codex-speed';
 
 // Commands implemented by the composer. Skills are discovered separately
 // through app-server; both paths keep Codex commands out of ordinary prompts.
@@ -67,13 +67,13 @@ export const codexReviewTarget = (argument: string): NativeCodexReviewTarget | n
 };
 
 /** Repeating the active speed command returns to standard at the same effort. */
-export const codexSpeedVariant = (variants: string[], current: string | undefined, speed: 'fast' | 'ultrafast', argument: string): string | null => {
+export const codexSpeedVariant = (variants: string[], current: string | undefined, speed: 'fast' | 'ultrafast', argument: string): string | null | undefined => {
   if (argument !== '' && argument !== 'on' && argument !== 'off') return null;
   const { effort } = codexVariantSettings(current);
-  if (!current || !effort) return null;
-  const accelerated = `${effort}-${speed}`;
+  const accelerated = codexVariantId(effort, `-${speed}`, variants);
+  const standard = codexVariantId(effort, '', variants);
   let next = accelerated;
-  if (argument === 'off') next = current === accelerated ? effort : current;
-  else if (argument === '' && current === accelerated) next = effort;
-  return variants.includes(next) ? next : null;
+  if (argument === 'off') next = current === accelerated ? standard : current;
+  else if (argument === '' && current === accelerated) next = standard;
+  return next === undefined || variants.includes(next) ? next : null;
 };

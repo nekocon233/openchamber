@@ -17,10 +17,13 @@ const PROVIDER_NAMES = {
 // The picker groups plain efforts first, then one group per supported speed.
 const variantsOf = (model: NativeModelDescriptor): NonNullable<Model['variants']> => {
   const variants: Model['variants'] = [];
+  if (model.defaultEffortVariants?.includes('default')) variants.push({ id: 'default', settings: {} });
   for (const effort of model.efforts) variants.push({ id: effort, settings: { reasoningEffort: effort } });
   const tiers = model.serviceTiers ?? (model.fast ? ['priority'] : []);
   for (const { suffix, serviceTier } of CODEX_SPEED_TIERS) {
     if (!tiers.includes(serviceTier)) continue;
+    const defaultVariant = `default${suffix}`;
+    if (model.defaultEffortVariants?.includes(defaultVariant)) variants.push({ id: defaultVariant, settings: { serviceTier } });
     for (const effort of model.efforts) {
       variants.push({ id: effort + suffix, settings: { reasoningEffort: effort, serviceTier, ...(serviceTier === 'priority' && { fast: true }) } });
     }

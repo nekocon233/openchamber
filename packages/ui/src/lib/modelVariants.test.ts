@@ -44,6 +44,13 @@ describe('preferredModelVariant', () => {
     expect(preferredModelVariant(['ultra', 'max', 'low'])).toBe('max');
     expect(preferredModelVariant(['low-fast', 'max-fast', 'ultra-fast'])).toBe('max-fast');
   });
+
+  test('native speed-only choices never become the inherited effort', () => {
+    expect(preferredModelVariant(['low', 'high', 'default-ultrafast', 'high-ultrafast'], 'codex-native')).toBe('high');
+    expect(preferredModelVariant(['default-fast', 'default-ultrafast'], 'codex-native')).toBeUndefined();
+    expect(preferredModelVariant(['default', 'default-fast', 'default-ultrafast'], 'codex-native')).toBeUndefined();
+    expect(preferredModelVariant(['default-fast'], 'custom')).toBe('default-fast');
+  });
 });
 
 describe('configuredVariantForModel', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { codexSpeedVariant, codexReviewTarget, parseCodexComposerCommand } from './codex-commands';
+import { codexEffortCycle } from './codex-speed';
 
 describe('Codex composer commands', () => {
   test('only intercepts implemented commands at the beginning of the prompt', () => {
@@ -32,5 +33,18 @@ describe('Codex composer commands', () => {
     expect(codexSpeedVariant(variants, 'low-fast', 'ultrafast', 'on')).toBeNull();
     expect(codexSpeedVariant(variants, 'high', 'fast', 'yes')).toBeNull();
     expect(codexSpeedVariant(variants, undefined, 'fast', 'on')).toBeNull();
+  });
+
+  test('keeps an unpinned effort across speed changes and cycles effort within a tier', () => {
+    const ids = ['high', 'ultra', 'default-fast', 'high-fast', 'ultra-fast', 'default-ultrafast', 'high-ultrafast', 'ultra-ultrafast'];
+    expect(codexSpeedVariant(ids, undefined, 'fast', 'on')).toBe('default-fast');
+    expect(codexSpeedVariant(ids, 'default-fast', 'ultrafast', '')).toBe('default-ultrafast');
+    expect(codexSpeedVariant(ids, 'default-ultrafast', 'ultrafast', 'off')).toBeUndefined();
+    expect(codexEffortCycle(ids, 'ultra-fast')).toEqual(['default-fast', 'high-fast', 'ultra-fast']);
+    expect(codexEffortCycle(ids, 'default-ultrafast')).toEqual(['default-ultrafast', 'high-ultrafast', 'ultra-ultrafast']);
+    expect(codexEffortCycle(ids, 'high')).toEqual([undefined, 'high', 'ultra']);
+    const withExplicitDefault = ['default', ...ids];
+    expect(codexSpeedVariant(withExplicitDefault, 'default-ultrafast', 'ultrafast', 'off')).toBe('default');
+    expect(codexEffortCycle(withExplicitDefault, 'default')).toEqual(['default', 'high', 'ultra']);
   });
 });
