@@ -208,6 +208,40 @@ describe("SessionMessageLoader with native sessions", () => {
     loader.dispose()
     childStores.disposeAll()
   })
+
+  test("retries a failed mounted native stale refresh when stream activity resumes", async () => {
+    let fail = false
+    const requests: NativeRequest[] = []
+    const { childStores, loader } = createLoader(async (request) => {
+      requests.push(request)
+      if (fail) throw new NativeAgentsRequestError("Tunnel temporarily unreachable", 429, null)
+      return requests.length === 1
+        ? { records: [userRecord("ncl_u_1", 1)], cursor: null, complete: true, childSessions: [] }
+        : { records: [userRecord("ncl_u_1", 1), userRecord("ncl_u_2", 2)], cursor: null, complete: true, childSessions: [] }
+    })
+    const target = { directory: DIRECTORY, sessionID: SESSION }
+
+    await loader.ensure(target)
+    const unsubscribe = loader.subscribe(target, () => undefined)
+    expect(requests).toHaveLength(1)
+
+    fail = true
+    loader.markHistoryStale()
+    await waitFor(() => loader.getSnapshot(target).status === "error")
+    expect(requests).toHaveLength(2)
+
+    const failedAt = Date.now()
+    expect(loader.revalidateMountedStale(failedAt + 500)).toBe(false)
+
+    fail = false
+    expect(loader.revalidateMountedStale(failedAt + 2_500)).toBe(true)
+    await waitFor(() => loader.getSnapshot(target).status === "ready")
+    expect(childStores.getChild(DIRECTORY)?.getState().message[SESSION]?.map((m) => m.id)).toEqual(["ncl_u_1", "ncl_u_2"])
+
+    unsubscribe()
+    loader.dispose()
+    childStores.disposeAll()
+  })
 })
 
 describe('DeepSeek paged history revisions', () => {
