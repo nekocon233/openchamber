@@ -1,5 +1,4 @@
-import type { Message, Part, ToolPart } from '@/lib/opencode/model';
-import { isConversationRole } from '@/lib/opencode/model';
+import type { AssistantMessage, Message, Part, ToolPart } from '@/lib/opencode/model';
 import { computeCacheHitRate } from '@/stores/utils/tokenUtils';
 import { z } from 'zod';
 
@@ -158,6 +157,9 @@ const tokenRate = (tokens: number, durationMs: number): number | null => {
 const isApplicationInteraction = (part: ToolPart): boolean => part.state.status !== 'pending'
   && part.state.metadata?.openchamberToolSource === 'native-interaction';
 
+const isForwardedSubagentReport = (parts: readonly Part[]): boolean =>
+  parts.some((part) => part.type === 'text' && part.metadata?.nativeSubagentMessage === true);
+
 /** Text delivery rate for the final reply, not throughput of the agent loop. */
 function calculateResponseTokenRate(record: SessionMessageRecord): number | null {
   const { info, parts } = record;
@@ -187,10 +189,7 @@ function calculateResponseTokenRate(record: SessionMessageRecord): number | null
 /**
  * Calculate stats for a single completed assistant step.
  */
-function calculateCompletedStepStats(record: SessionMessageRecord): CompletedStepStats | null {
-  const { info, parts } = record;
-  if (info.role !== 'assistant') return null;
-
+function calculateCompletedStepStats(info: AssistantMessage, parts: readonly Part[]): CompletedStepStats | null {
   const { created } = info.time;
   const completed = info.time.completed;
 
@@ -262,7 +261,8 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
 
 const lastConversationIndex = (records: readonly SessionMessageRecord[], end: number): number => {
   for (let i = end - 1; i >= 0; i -= 1) {
-    if (isConversationRole(records[i].info.role)) return i;
+    const { info, parts } = records[i];
+    if (info.role === 'user' || (info.role === 'assistant' && !isForwardedSubagentReport(parts))) return i;
   }
   return -1;
 };
@@ -287,23 +287,6 @@ function calculateIdleDurationMs(
   return idle;
 }
 
-/** Step windows of one turn, for `calculateIdleDurationMs`. */
-function collectStepActivity(
-  records: readonly SessionMessageRecord[],
-  fromIdx: number,
-  toIdx: number,
-): Array<[number, number]> {
-  const activity: Array<[number, number]> = [];
-  for (let i = fromIdx; i <= toIdx; i += 1) {
-    const record = records[i];
-    if (record.info.role !== 'assistant') continue;
-    const created = nonnegative(record.info.time.created);
-    const completed = nonnegative(record.info.time.completed);
-    if (created !== null && completed !== null && completed >= created) activity.push([created, completed]);
-  }
-  return activity;
-}
-
 /**
  * Calculates telemetry metrics for the latest completed turn in the session.
  * A turn encompasses all assistant steps since the preceding user message up to the final completed assistant step.
@@ -313,8 +296,7 @@ export function getLatestCompletedTurnStats(
 ): CompletedTurnStats | null {
   if (!records || records.length === 0) return null;
 
-  // v2 plumbing roles can trail the final assistant step, so the turn ends at
-  // the newest conversation record rather than the newest record.
+  // Bookkeeping and forwarded reports can follow the final model step.
   const newestIdx = lastConversationIndex(records, records.length);
   if (newestIdx < 0) return null;
   // A prompt that has no reply yet lands before the session reports busy. The
@@ -367,13 +349,17 @@ function calculateTurnStats(
       : null;
 
   const stepStatsList: CompletedStepStats[] = [];
+  const stepActivity: Array<[number, number]> = [];
   for (let i = turnStartIdx; i <= lastCompletedAssistantIdx; i += 1) {
-    const record = records[i];
-    if (record.info.role === 'assistant') {
-      const stepStats = calculateCompletedStepStats(record);
-      if (!stepStats) return null;
-      stepStatsList.push(stepStats);
-    }
+    const { info, parts } = records[i];
+    if (info.role !== 'assistant' || isForwardedSubagentReport(parts)) continue;
+    const stepStats = calculateCompletedStepStats(info, parts);
+    if (!stepStats) return null;
+    stepStatsList.push(stepStats);
+
+    const created = nonnegative(info.time.created);
+    const completed = nonnegative(info.time.completed);
+    if (created !== null && completed !== null && completed >= created) stepActivity.push([created, completed]);
   }
 
   if (stepStatsList.length === 0) return null;
@@ -408,7 +394,7 @@ function calculateTurnStats(
   // Short queue time before each step stays in, which per-step windows would
   // leave out and which made proxy sessions report implausibly high rates.
   const idleDurationMs = turnStartMs !== null && turnEndMs !== null
-    ? calculateIdleDurationMs(collectStepActivity(records, turnStartIdx, lastCompletedAssistantIdx), turnStartMs, turnEndMs)
+    ? calculateIdleDurationMs(stepActivity, turnStartMs, turnEndMs)
     : 0;
   const totalLlmDurationMs = elapsedDurationMs !== null && totalToolWaitDurationMs !== null
     ? nonnegative(elapsedDurationMs - totalToolWaitDurationMs - idleDurationMs)

@@ -215,6 +215,32 @@ describe('turn telemetry', () => {
     expect(getLatestCompletedTurnStats(records)?.lastAssistantMessageId).toBe('a1');
   });
 
+  test('forwarded subagent reports do not affect turn boundaries or measurements', () => {
+    const providerID = 'antigravity-native';
+    const report = (id: string, created: number) => ({
+      info: assistant({ id, providerID, tokens: undefined, cost: undefined, time: { created, completed: created } }),
+      parts: [{ ...text(created), messageID: id, metadata: { nativeSubagentMessage: true } }],
+    });
+    const records = [
+      ...turn(assistant({ providerID }), [text(1500)]),
+      report('child-progress', 185_000),
+      {
+        info: assistant({ id: 'final', providerID, time: { created: 365_000, completed: 369_000 } }),
+        parts: [{ ...text(366_000), messageID: 'final', time: { start: 366_000, end: 368_000 } }],
+      },
+      report('child-finished', 370_000),
+    ];
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats).toMatchObject({
+      lastAssistantMessageId: 'final', stepsCount: 2, elapsedDurationMs: 369_000,
+      totalLlmDurationMs: 9_000, totalGeneratedTokens: 200, tokensPerSecond: 200 / 9, responseTokensPerSecond: 50,
+    });
+
+    const nextUser = { info: { ...user, id: 'u2', time: { created: 371_000 } }, parts: [] };
+    expect(getLatestCompletedTurnStats([...records, nextUser, report('child-update', 372_000)]))
+      .toEqual({ ...stats, previousTurn: true });
+  });
+
   test('a prompt with no reply yet yields the turn before it, flagged as previous', () => {
     const previous = getLatestCompletedTurnStats([...turn(), { info: { ...user, id: 'u2' }, parts: [] }]);
     expect(previous?.lastAssistantMessageId).toBe('a1');

@@ -250,6 +250,10 @@ the most recent completed turn, which needs a preceding user message and
 completed assistant steps. While a new turn runs, the last completed turn stays
 visible. A truncated or unfinished turn is never counted as zero.
 
+Antigravity displays forwarded child reports as assistant text marked
+`nativeSubagentMessage`. Turn boundaries, activity windows and usage count
+only the parent conversation's model steps.
+
 The header and speed row show the same turn's average speed. It divides output
 plus reasoning tokens by the turn's model time. Model time runs from the user
 message through the last completed step, excluding blocking tool waits and gaps
