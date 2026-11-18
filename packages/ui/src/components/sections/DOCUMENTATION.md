@@ -25,7 +25,8 @@ A provider row inherits the preferred effort at standard speed. An explicit
 CLI default is saved as `default`, including when restoring an older favorite
 with a null snapshot. The global
 defaults form submits the model, variant and combination together so quick
-edits to the two fields survive the shared settings debounce.
+edits to the two fields survive the shared settings debounce. Project edits
+persist model and variant together through the revisioned sidebar state.
 
 General's Navigation section offers Workspace layout beside File tree side.
 The Classic and Editor choices apply to desktop web, PWA and Electron;

@@ -337,7 +337,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     [projects, editingProjectDialogId],
   );
 
-  const handleSaveProjectEdit = React.useCallback((data: {
+  const handleSaveProjectEdit = React.useCallback(async (data: {
     label: string;
     icon: string | null;
     color: string | null;
@@ -350,7 +350,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     if (!editingProjectDialogId) {
       return;
     }
-    updateProjectMeta(editingProjectDialogId, {
+    const saved = await updateProjectMeta(editingProjectDialogId, {
       label: data.label,
       icon: data.icon,
       color: data.color,
@@ -360,6 +360,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       defaultAgentCombinationId: data.defaultAgentCombinationId ?? null,
       defaultVariant: data.defaultVariant ?? null,
     });
+    if (!saved) throw new Error('Project settings could not be saved');
   }, [editingProjectDialogId, updateProjectMeta]);
 
   const openNewWorktreeDialog = React.useCallback(() => {

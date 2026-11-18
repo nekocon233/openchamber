@@ -33,6 +33,7 @@ const PROJECT_KEYS = new Set([
   'iconBackground',
   'color',
   'defaultModel',
+  'defaultVariant',
   'defaultAgentCombinationId',
   'addedAt',
 ]);
@@ -45,6 +46,7 @@ const PROJECT_PATCH_KEYS = new Set([
   'iconBackground',
   'color',
   'defaultModel',
+  'defaultVariant',
   'defaultAgentCombinationId',
   'addedAt',
 ]);
@@ -575,6 +577,10 @@ const normalizeProject = (value, options = {}) => {
   if (hasOwn(project, 'defaultModel')) {
     normalized.defaultModel = normalizeDefaultModel(project.defaultModel, `${field}.defaultModel`, { canonical });
   }
+  if (hasOwn(project, 'defaultVariant')) {
+    if (!normalized.defaultModel) throw new SidebarStateValidationError(`${field}.defaultVariant requires a default model`);
+    normalized.defaultVariant = normalizeText(project.defaultVariant, `${field}.defaultVariant`, MAX_MODEL_LENGTH, { canonical });
+  }
   if (hasOwn(project, 'addedAt')) {
     normalized.addedAt = normalizeTimestamp(project.addedAt, `${field}.addedAt`, { canonical });
   }
@@ -631,6 +637,10 @@ const normalizeLegacyProject = (value, field) => {
       `${field}.defaultModel`,
     ));
     if (defaultModel !== undefined) normalized.defaultModel = defaultModel;
+  }
+  if (normalized.defaultModel && hasOwn(value, 'defaultVariant')) {
+    const variant = tryNormalizeLegacyValue(() => normalizeText(value.defaultVariant, `${field}.defaultVariant`, MAX_MODEL_LENGTH));
+    if (variant !== undefined) normalized.defaultVariant = variant;
   }
   if (hasOwn(value, 'addedAt')) {
     const addedAt = tryNormalizeLegacyValue(() => normalizeTimestamp(value.addedAt, `${field}.addedAt`));
@@ -713,6 +723,9 @@ const normalizeProjectPatch = (value) => {
   }
   if (hasOwn(patch, 'defaultModel')) {
     normalized.defaultModel = normalizeDefaultModel(patch.defaultModel, 'operation.patch.defaultModel', { nullable: true });
+  }
+  if (hasOwn(patch, 'defaultVariant')) {
+    normalized.defaultVariant = normalizeText(patch.defaultVariant, 'operation.patch.defaultVariant', MAX_MODEL_LENGTH, { nullable: true });
   }
   if (hasOwn(patch, 'addedAt')) {
     normalized.addedAt = normalizeTimestamp(patch.addedAt, 'operation.patch.addedAt', { nullable: true });
@@ -1092,6 +1105,7 @@ export const applySidebarOperation = (snapshot, operation) => {
         throw new SidebarStateValidationError('project.update uses an existing normalized path');
       }
       const updated = { ...current };
+      if (hasOwn(operation.patch, 'defaultModel') && operation.patch.defaultModel !== current.defaultModel) delete updated.defaultVariant;
       for (const [key, value] of Object.entries(operation.patch)) {
         if (value === null) {
           delete updated[key];
@@ -1099,6 +1113,7 @@ export const applySidebarOperation = (snapshot, operation) => {
           updated[key] = value;
         }
       }
+      if (updated.defaultVariant && !updated.defaultModel) throw new SidebarStateValidationError('project.defaultVariant requires a default model');
       next.projects[index] = updated;
       break;
     }

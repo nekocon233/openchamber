@@ -41,7 +41,7 @@ export const ProjectsPage: React.FC = () => {
 
   const handleIdentitySave = React.useCallback(async (data: ProjectIdentitySaveData) => {
     if (!selectedProject) return;
-    updateProjectMeta(selectedProject.id, {
+    const saved = await updateProjectMeta(selectedProject.id, {
       label: data.label,
       icon: data.icon,
       color: data.color,
@@ -51,6 +51,7 @@ export const ProjectsPage: React.FC = () => {
       defaultAgentCombinationId: data.defaultAgentCombinationId ?? null,
       defaultVariant: data.defaultVariant ?? null,
     });
+    if (!saved) throw new Error('Project settings could not be saved');
   }, [selectedProject, updateProjectMeta]);
 
   const selectedProjectId = selectedProject?.id ?? null;
