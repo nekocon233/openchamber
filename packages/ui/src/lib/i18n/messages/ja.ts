@@ -189,6 +189,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.codexCommand.mention': "ファイルやフォルダーを指定する",
   'chat.codexCommand.agents': "サブエージェントのセッションを参照する",
   'chat.codexCommand.fast': "高速モードを切り替える",
+  'chat.codexCommand.ultrafast': "超高速モードを切り替える",
   'chat.codexCommand.plan': "プランモードに切り替える。指示も指定できます",
   'chat.codexCommand.resume': "保存済みのセッションを再開する",
   'chat.codexCommand.fork': "現在のセッションを分岐する",

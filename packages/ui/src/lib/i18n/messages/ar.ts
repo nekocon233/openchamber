@@ -4015,6 +4015,7 @@ export const dict = {
   'chat.codexCommand.empty': 'No entries.',
   'chat.codexCommand.failed': 'Could not run the Codex command.',
   'chat.codexCommand.fast': 'Toggle Fast mode',
+  'chat.codexCommand.ultrafast': 'تشغيل الوضع فائق السرعة أو إيقافه',
   'chat.codexCommand.fork': 'Fork the current session',
   'chat.codexCommand.invalid': 'Invalid arguments or unavailable option for {command}.',
   'chat.codexCommand.mcp': 'Show Codex MCP servers and tools',

@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useChatSessionSelection } from './chatColumnSession';
 import { selectCommandsForDirectory, useCommandsStore } from '@/stores/useCommandsStore';
+import { useConfigStore } from '@/stores/useConfigStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Icon } from "@/components/icon/Icon";
@@ -13,7 +14,7 @@ import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight
 import { mergeCommandAutocompleteItems, orderNativeCommandItems, rankCommandAutocompleteItems } from './commandAutocompleteItems';
 import { useGuestCommands } from '@/hooks/useGuestSurfaces';
 import { AutocompleteRowTooltip } from './composer/ui/AutocompleteRowTooltip';
-import { isUnifiedNativeSessionId, type NativeBackend } from '@/lib/native-agents/ids';
+import { isUnifiedNativeSessionId, NATIVE_PROVIDER_CODEX, type NativeBackend } from '@/lib/native-agents/ids';
 import { useNativeCommands } from '@/lib/native-agents/useNativeCommands';
 import { CODEX_COMMAND_USAGE, CODEX_COMPOSER_COMMANDS } from '@/lib/native-agents/codex-commands';
 
@@ -79,6 +80,7 @@ interface CommandAutocompleteProps {
    * OpenCode's, and `/compact` runs the CLI's compaction.
    */
   nativeBackend?: NativeBackend | null;
+  nativeModelId?: string | null;
 }
 
 export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, CommandAutocompleteProps>(({
@@ -87,8 +89,12 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   onClose,
   style,
   nativeBackend = null,
+  nativeModelId,
 }, ref) => {
   const { t } = useI18n();
+  const codexVariants = useConfigStore((state) => nativeBackend === 'codex'
+    ? state.providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models.find((model) => model.id === nativeModelId)?.variants
+    : undefined);
   const currentSessionId = useChatSessionSelection().sessionId;
   const hasSession = Boolean(currentSessionId);
   const unified = Boolean(currentSessionId && isUnifiedNativeSessionId(currentSessionId));
@@ -110,7 +116,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   const keyboardNavigationRef = React.useRef(false);
   const itemRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const mobileMaxHeight = useMobileAutocompleteMaxHeight(containerRef, true);
+  const mobileMaxHeight = useMobileAutocompleteMaxHeight(containerRef, style?.maxHeight === undefined);
   const ignoreClickRef = React.useRef(false);
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = React.useRef(false);
@@ -243,7 +249,9 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
     if (!nativeBackend) return null;
     const cliName = CLI_NAMES[nativeBackend];
     const localCommands: CommandInfo[] = [
-      ...(nativeBackend === 'codex' ? CODEX_COMPOSER_COMMANDS.map((command): CommandInfo => ({
+      ...(nativeBackend === 'codex' ? CODEX_COMPOSER_COMMANDS.filter(({ name }) =>
+        (name !== 'fast' && name !== 'ultrafast') || codexVariants?.some((variant) => variant.id.endsWith(`-${name}`))
+      ).map((command): CommandInfo => ({
         id: `native:${command.name}`, name: command.name, source: 'native', cliName,
         description: [t(command.descriptionKey), CODEX_COMMAND_USAGE.get(command.name)].filter(Boolean).join('\n'),
       })) : []),
@@ -270,7 +278,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
     const availableLocal = nativeBackend === 'antigravity' && !unified ? []
       : nativeBackend === 'deepseek' && !unified ? localCommands.filter((command) => !['undo', 'redo', 'timeline'].includes(command.name)) : localCommands;
     return { localCommands: availableLocal, cliCommands };
-  }, [nativeBackend, nativeCommands, hasSession, unified, canUseReviewHandoffFlow, t]);
+  }, [nativeBackend, codexVariants, nativeCommands, hasSession, unified, canUseReviewHandoffFlow, t]);
 
   const commands = React.useMemo(
     () => nativeCommandLists

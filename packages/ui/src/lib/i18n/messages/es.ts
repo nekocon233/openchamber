@@ -189,6 +189,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.codexCommand.mention': "Mencionar un archivo o carpeta",
   'chat.codexCommand.agents': "Explorar sesiones de subagentes",
   'chat.codexCommand.fast': "Activar o desactivar el modo rápido",
+  'chat.codexCommand.ultrafast': "Activar o desactivar el modo ultrarrápido",
   'chat.codexCommand.plan': "Cambiar al modo de planificación, con una instrucción opcional",
   'chat.codexCommand.resume': "Reanudar una sesión guardada",
   'chat.codexCommand.fork': "Crear una rama de la sesión actual",

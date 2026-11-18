@@ -1415,10 +1415,11 @@ own commands (`useNativeCommands`) except those a composer command shadows;
 picking one inserts it as typed, and `/btw` opens the btw composer.
 
 Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
-`composer/submit/codexCommands.ts` executes them. Model, effort, Fast and plan
+`composer/submit/codexCommands.ts` executes them. Model, effort, speed and plan
 commands write the same config and session selections as the existing pickers.
-Fast toggles the effort the composer carries: an explicit pick, otherwise the
-inherited level, which prefers max when supported and otherwise the highest listed level. The native
+The `/fast` and `/ultrafast` commands change the service tier at the composer's
+current effort. An inherited effort prefers max when supported and otherwise
+uses the highest listed level. The native
 catalog's `defaultEffort` applies only when no level resolves at all. Session
 actions retain their existing owners. Inspections and reviews
 use `nativeAgents.codexCommand`; no optimistic user message is created for a

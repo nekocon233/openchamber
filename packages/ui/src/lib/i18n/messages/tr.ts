@@ -188,6 +188,7 @@ export const dict = {
   'chat.codexCommand.mention': "Bir dosya veya klasörden bahset",
   'chat.codexCommand.agents': "Alt ajan oturumlarına göz at",
   'chat.codexCommand.fast': "Hızlı modu aç veya kapat",
+  'chat.codexCommand.ultrafast': "Ultra hızlı modu aç veya kapat",
   'chat.codexCommand.plan': "İsteğe bağlı bir istemle plan moduna geç",
   'chat.codexCommand.resume': "Kaydedilmiş bir oturumu sürdür",
   'chat.codexCommand.fork': "Geçerli oturumdan yeni bir dal oluştur",

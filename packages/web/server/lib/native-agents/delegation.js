@@ -5,6 +5,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { isEnterpriseMode } from '../enterprise-mode.js';
+import { nativeModelSupportsVariant } from './catalog.js';
 import { NativeAgentError, invalidRequestError } from './errors.js';
 import { nativeBackendOfProviderId, newNativeClientUserMessageId } from './ids.js';
 import { agentModelSchema } from './agent-configuration.js';
@@ -103,7 +104,7 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
     const partition = (await native.catalog()).backends[backend];
     const model = partition?.status === 'ok' && partition.models.find((candidate) => candidate.id === selected.model.modelID || candidate.aliases?.some((alias) => alias.id === selected.model.modelID));
     if (!model) throw failure('The selected native model is unavailable. Select another model and retry.', 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE');
-    if (selected.variant && !model.efforts.includes(selected.variant) && !(model.fast && selected.variant.endsWith('-fast') && model.efforts.includes(selected.variant.slice(0, -5)))) throw invalidRequestError('The selected model does not support this thinking effort');
+    if (selected.variant && !nativeModelSupportsVariant(model, selected.variant)) throw invalidRequestError('The selected model does not support this thinking effort');
     return backend;
   };
   const assertActive = (context) => {

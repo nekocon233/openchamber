@@ -59,6 +59,7 @@ interface ComposerAutocompletePopupsProps {
     commandRef: React.RefObject<CommandAutocompleteHandle | null>;
     /** The native CLI the composer sends to, whose commands the command picker offers. */
     nativeBackend: NativeBackend | null;
+    nativeModelId: string | null | undefined;
     skillRef: React.RefObject<SkillAutocompleteHandle | null>;
     snippetRef: React.RefObject<SnippetAutocompleteHandle | null>;
     mentionRef: React.RefObject<FileMentionHandle | null>;
@@ -110,6 +111,7 @@ function AutocompletePopup(props: ComposerAutocompletePopupsProps & { open: Auto
                     onClose={onClose}
                     style={style}
                     nativeBackend={props.nativeBackend}
+                    nativeModelId={props.nativeModelId}
                 />
             );
         case 'skill':

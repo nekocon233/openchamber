@@ -14,7 +14,7 @@
 
 import { z } from 'zod';
 
-import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog.js';
+import { CODEX_STANDARD_SERVICE_TIER } from '../catalog.js';
 import { invalidRequestError, sessionBusyError } from '../errors.js';
 import { codexPartId, decodeNativeSessionId, encodeCodexSessionId, isNativeClientUserMessageId } from '../ids.js';
 import { buildSessionRecord, stoppedError, unknownError } from '../records.js';
@@ -116,7 +116,7 @@ const appendAt = (list, index, delta) => {
 };
 
 /**
- * @typedef {{ model: string | null, effort: string | null, fast: boolean, mode: 'default' | 'plan' }} LiveConfig
+ * @typedef {{ model: string | null, effort: string | null, serviceTier: string, mode: 'default' | 'plan' }} LiveConfig
  */
 
 /**
@@ -245,7 +245,7 @@ export const createCodexLiveThreads = ({
         directory,
         loaded: false,
         // The tier the loaded thread runs on as Codex last reported or a turn
-        // set it; null for the standard tier.
+        // set it. Codex may omit the standard tier.
         serviceTier: null,
         // The provider the loaded thread runs on; null until the thread loads.
         modelProvider: null,
@@ -397,7 +397,7 @@ export const createCodexLiveThreads = ({
         title: thread.name || thread.agentNickname || thread.preview?.split('\n')[0] || 'Subagent',
         created: thread.createdAt * 1000, updated: thread.updatedAt * 1000,
       });
-      live.config ??= { model: thread.model ?? null, effort: null, fast: false, mode: 'default' };
+      live.config ??= { model: thread.model ?? null, effort: null, serviceTier: CODEX_STANDARD_SERVICE_TIER, mode: 'default' };
       live.loaded = thread.status.type !== 'notLoaded';
       publisher.session(live.directory, live.childSession, { created: true });
       if (thread.status.type === 'active') setBusy(live, true);
@@ -623,14 +623,12 @@ export const createCodexLiveThreads = ({
       // A turn's tier stays with the thread for the turns after it, and Codex's
       // own settings may load a thread on another tier, so the tier is named
       // whenever the variant asks for a different one than the thread runs on.
-      const tier = config.fast ? CODEX_FAST_SERVICE_TIER : null;
-      const threadTier = live.serviceTier === CODEX_STANDARD_SERVICE_TIER ? null : live.serviceTier;
-      const changesTier = tier !== threadTier;
-      if (changesTier) params.serviceTier = tier ?? CODEX_STANDARD_SERVICE_TIER;
+      const changesTier = config.serviceTier !== (live.serviceTier ?? CODEX_STANDARD_SERVICE_TIER);
+      if (changesTier) params.serviceTier = config.serviceTier;
       live.pendingPlanningSend = config.mode === 'plan' ? { ...send } : null;
       try {
         const started = startedTurn.safeParse(await request('turn/start', params));
-        if (changesTier) live.serviceTier = tier;
+        if (changesTier) live.serviceTier = config.serviceTier;
         if (started.success) {
           startTurn(live, { id: started.data.turn.id });
           if (signal?.aborted && live.turn?.id === started.data.turn.id) {
@@ -664,12 +662,12 @@ export const createCodexLiveThreads = ({
         model: config.model,
         effort: config.effort,
         summary: 'auto',
-        serviceTier: config.fast ? CODEX_FAST_SERVICE_TIER : CODEX_STANDARD_SERVICE_TIER,
+        serviceTier: config.serviceTier,
         approvalPolicy: APPROVAL_POLICY,
         sandboxPolicy: { type: 'dangerFullAccess' },
       });
       // Settings are already authoritative even if starting the review fails.
-      live.serviceTier = config.fast ? CODEX_FAST_SERVICE_TIER : null;
+      live.serviceTier = config.serviceTier;
       const response = startedTurn.parse(await request('review/start', {
         threadId: live.threadId, delivery: 'inline', target,
       }));
