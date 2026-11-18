@@ -189,6 +189,7 @@ export const dict = {
   'chat.codexCommand.mention': "Mention a file or folder",
   'chat.codexCommand.agents': "Browse subagent sessions",
   'chat.codexCommand.fast': "Toggle Fast mode",
+  'chat.codexCommand.ultrafast': "Toggle Ultrafast mode",
   'chat.codexCommand.plan': "Switch to plan mode, optionally with a prompt",
   'chat.codexCommand.resume': "Resume a saved session",
   'chat.codexCommand.fork': "Fork the current session",

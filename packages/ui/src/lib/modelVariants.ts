@@ -1,4 +1,5 @@
 import { parseModelIdentifier } from '@/lib/modelIdentifier';
+import { codexVariantSettings } from '@/lib/native-agents/codex-speed';
 import type { Model } from '@/lib/opencode/model';
 
 /**
@@ -46,16 +47,17 @@ export const configuredVariantForModel = ({ defaultModel, defaultVariant, provid
 
 /**
  * The inherited thinking level when nothing names one: max when supported,
- * otherwise the highest listed level. A `<level>-fast` id is the same effort
- * on Codex's Fast tier and never outranks its plain twin.
+ * otherwise the highest listed level. A Codex speed suffix never outranks
+ * the same effort on the standard tier.
  */
 export const preferredModelVariant = (variantIds: readonly string[]): string | undefined => {
   if (variantIds.includes('max')) return 'max';
   if (variantIds.includes('max-fast')) return 'max-fast';
-  const fastSuffix = '-fast';
+  if (variantIds.includes('max-ultrafast')) return 'max-ultrafast';
   let highest: string | undefined;
   for (const id of variantIds) {
-    if (id.endsWith(fastSuffix) && variantIds.includes(id.slice(0, -fastSuffix.length))) continue;
+    const { effort } = codexVariantSettings(id);
+    if (effort && effort !== id && variantIds.includes(effort)) continue;
     highest = id;
   }
   return highest;

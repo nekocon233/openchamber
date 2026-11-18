@@ -1,5 +1,6 @@
 import type { Model, Provider } from '@/lib/opencode/model';
 
+import { CODEX_SPEED_TIERS } from './codex-speed';
 import { nativeProviderIdOf, type NativeBackend } from './ids';
 import type { NativeModelDescriptor } from './schemas';
 
@@ -13,14 +14,16 @@ const PROVIDER_NAMES = {
   antigravity: 'Antigravity CLI',
 } satisfies Record<NativeBackend, string>;
 
-// Effort levels are the picker's variants for these models. A model with
-// Codex's Fast tier offers each effort again as `<effort>-fast`, which the
-// server runs on that tier.
+// The picker groups plain efforts first, then one group per supported speed.
 const variantsOf = (model: NativeModelDescriptor): NonNullable<Model['variants']> => {
   const variants: Model['variants'] = [];
   for (const effort of model.efforts) variants.push({ id: effort, settings: { reasoningEffort: effort } });
-  if (model.fast) {
-    for (const effort of model.efforts) variants.push({ id: `${effort}-fast`, settings: { reasoningEffort: effort, fast: true } });
+  const tiers = model.serviceTiers ?? (model.fast ? ['priority'] : []);
+  for (const { suffix, serviceTier } of CODEX_SPEED_TIERS) {
+    if (!tiers.includes(serviceTier)) continue;
+    for (const effort of model.efforts) {
+      variants.push({ id: effort + suffix, settings: { reasoningEffort: effort, serviceTier, ...(serviceTier === 'priority' && { fast: true }) } });
+    }
   }
   return variants;
 };

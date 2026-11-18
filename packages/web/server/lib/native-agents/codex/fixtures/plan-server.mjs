@@ -20,7 +20,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (thread.cwd) fs.appendFileSync(path.join(thread.cwd, 'requests.jsonl'), `${JSON.stringify({ method, params: captured })}\n`);
   const reply = (result) => send({ id, result });
   if (method === 'config/read') return reply({ config: {} });
-  if (method === 'model/list') return reply({ data: [{ id: 'gpt-5.5', supportedReasoningEfforts: [{ reasoningEffort: 'high' }], serviceTiers: [{ id: 'priority' }] }] });
+  if (method === 'model/list') return reply({ data: [{ id: 'gpt-5.5', supportedReasoningEfforts: [{ reasoningEffort: 'high' }], serviceTiers: [{ id: 'priority' }, { id: 'ultrafast' }] }] });
   if (method === 'thread/resume') {
     if (!turns.length) return send({ id, error: { code: -32600, message: 'no rollout found for thread id' } });
     return reply({ thread });

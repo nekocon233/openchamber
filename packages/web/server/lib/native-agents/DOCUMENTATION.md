@@ -569,15 +569,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
   reasoning parts. The UI's reasoning setting controls their visibility.
   Encrypted reasoning alone has no displayable text; old turns without a
   returned summary cannot be filled in retrospectively.
-- Fast: `model/list` names a model's service tiers, and a model with the
-  `priority` tier (Codex calls it Fast) gets `fast: true` in the catalog. The
-  UI then offers each effort again as `<effort>-fast`; `codexVariantSettings`
-  (`catalog.js`) reads a variant back as its effort and whether it runs fast.
-  A turn's `serviceTier` stays with the thread for later turns, and Codex's
-  own settings may load a thread on Fast, so the live thread keeps the tier
-  that `thread/start` and `thread/resume` report and sets `serviceTier` on
-  `turn/start` only when the variant asks for another one: `priority`, or
-  `default` to leave Fast. A variant without `-fast` never runs fast.
+- The Codex catalog carries the service tier IDs from each model's `model/list`
+  entry. The UI offers `<effort>-fast` for `priority` and `<effort>-ultrafast`
+  for `ultrafast`. For example, `ultra-fast` still selects the `ultra` effort
+  on `priority`. Older clients read the catalog's `fast` flag.
+  A thread inherits its last service tier. OpenChamber compares the requested
+  tier with the one reported at start or resume, or applied by its last turn
+  or review. It sends a new `serviceTier` when that tier changes and uses
+  `default` to return to standard speed.
 - A compaction starts a new assistant segment keyed by the compaction item id.
   Replies before and after it keep distinct message ids across live updates
   and history reads, so reconciliation cannot merge them across the marker.
@@ -930,7 +929,11 @@ adapter's owning document describes discovery settings and failure behavior.
 
 Codex parses built-in slash commands in its terminal, not in `turn/start`.
 The composer therefore owns their dispatch. Model, effort and plan commands
-update its existing selections. Session commands reuse the session actions.
+update its existing selections. The speed commands `/fast` and `/ultrafast`
+keep the current reasoning effort. Repeating the active command restores
+standard speed. A plain effort passed to `/reasoning` keeps the current
+speed when the model offers that combination. Session commands reuse the
+session actions.
 `/status` reports the composer's next-turn settings, not token or account usage.
 `/diff` opens the workspace Git view, `/mention` opens file completion, and
 `/copy` copies the latest completed assistant text loaded in the session.
@@ -958,7 +961,7 @@ resume the thread when needed; history reads still never resume it.
 MCP and terminal listings consume all pages and expose only their display
 fields. `/stop` cleans the selected thread's background terminals.
 `/review` calls `review/start` with inline delivery after applying the selected
-model and effort. It accepts an uncommitted-changes target, a base branch, a
+model, effort and service tier. It accepts an uncommitted-changes target, a base branch, a
 commit, or custom instructions, and refuses a busy session. Its streamed
 events use the same projector as other turns.
 

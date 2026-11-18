@@ -93,10 +93,17 @@ describe('loadNativeProviders', () => {
     useRuntime(async () => ({
       backends: {
         claude: { status: 'ok', models: [model('opus')] },
-        codex: { status: 'ok', models: [{ ...model('gpt-5.5'), fast: true }, model('gpt-5.3-codex-spark')] },
+        codex: { status: 'ok', models: [
+          { ...model('gpt-6.2-sol'), fast: true, serviceTiers: ['priority', 'ultrafast'] },
+          { ...model('gpt-6.2-astra'), serviceTiers: ['priority'] },
+          { ...model('gpt-5.5'), fast: true }, // Older OpenChamber server.
+          model('gpt-5.3-codex-spark'),
+        ] },
       },
     }));
     const codex = (await loadNativeProviders()).find((provider) => provider.id === 'codex-native');
+    expect(codex?.models.find((entry) => entry.id === 'gpt-6.2-sol')?.variants.map((entry) => entry.id)).toEqual(['low', 'high', 'low-fast', 'high-fast', 'low-ultrafast', 'high-ultrafast']);
+    expect(codex?.models.find((entry) => entry.id === 'gpt-6.2-astra')?.variants.map((entry) => entry.id)).toEqual(['low', 'high', 'low-fast', 'high-fast']);
     expect(codex?.models.find((entry) => entry.id === 'gpt-5.5')?.variants.map((entry) => entry.id)).toEqual(['low', 'high', 'low-fast', 'high-fast']);
     expect(codex?.models.find((entry) => entry.id === 'gpt-5.3-codex-spark')?.variants.map((entry) => entry.id)).toEqual(['low', 'high']);
   });

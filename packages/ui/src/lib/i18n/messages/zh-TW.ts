@@ -189,6 +189,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.codexCommand.mention': "引用檔案或資料夾",
   'chat.codexCommand.agents': "瀏覽子代理工作階段",
   'chat.codexCommand.fast': "切換快速模式",
+  'chat.codexCommand.ultrafast': "切換超快速模式",
   'chat.codexCommand.plan': "切換至計畫模式，可附帶任務描述",
   'chat.codexCommand.resume': "繼續既有工作階段",
   'chat.codexCommand.fork': "從目前工作階段建立分支",

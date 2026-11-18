@@ -189,6 +189,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.codexCommand.mention': "Згадати файл або папку",
   'chat.codexCommand.agents': "Переглянути сеанси підагентів",
   'chat.codexCommand.fast': "Увімкнути або вимкнути швидкий режим",
+  'chat.codexCommand.ultrafast': "Увімкнути або вимкнути надшвидкий режим",
   'chat.codexCommand.plan': "Перейти до режиму планування з необов’язковим запитом",
   'chat.codexCommand.resume': "Продовжити збережений сеанс",
   'chat.codexCommand.fork': "Створити відгалуження поточного сеансу",

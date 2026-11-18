@@ -4747,6 +4747,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         overlayPosition={isDesktopExpanded ? autocompleteOverlayPosition : null}
                         commandRef={commandRef}
                         nativeBackend={nativeTargetBackend}
+                        nativeModelId={currentModelId}
                         skillRef={skillRef}
                         snippetRef={snippetRef}
                         mentionRef={mentionRef}

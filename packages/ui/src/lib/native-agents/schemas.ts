@@ -205,8 +205,9 @@ const nativeModelSchema = z.object({
   defaultEffort: z.string().nullable(),
   // Concrete native slugs retained for selections made before family grouping.
   aliases: z.array(z.object({ id: z.string().min(1), variant: z.string().min(1).optional() })).optional(),
-  // Whether the model offers Codex's Fast tier; a server from before it has no field.
+  // Older servers report only whether Codex offers the priority tier.
   fast: z.boolean().catch(false),
+  serviceTiers: z.array(z.string()).optional(),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
 });
 

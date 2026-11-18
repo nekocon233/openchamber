@@ -188,6 +188,7 @@ export const dict = {
   'chat.codexCommand.mention': "Eine Datei oder einen Ordner erwähnen",
   'chat.codexCommand.agents': "Unteragent-Sitzungen durchsuchen",
   'chat.codexCommand.fast': "Fast-Modus umschalten",
+  'chat.codexCommand.ultrafast': "Ultraschnellen Modus ein- oder ausschalten",
   'chat.codexCommand.plan': "Zum Planmodus wechseln, optional mit einer Eingabe",
   'chat.codexCommand.resume': "Eine gespeicherte Sitzung fortsetzen",
   'chat.codexCommand.fork': "Die aktuelle Sitzung verzweigen",

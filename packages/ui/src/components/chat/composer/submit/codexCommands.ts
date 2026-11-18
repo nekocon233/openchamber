@@ -2,7 +2,8 @@ import { listModelVariantIds } from '@/lib/modelVariants';
 import type { NativeAgentsAPI, NativeCodexCommandResult } from '@/lib/api/types';
 import type { useI18n } from '@/lib/i18n';
 import { copyTextToClipboard } from '@/lib/clipboard';
-import { CODEX_COMMAND_USAGE, codexFastVariant, codexReviewTarget, type CodexComposerCommand } from '@/lib/native-agents/codex-commands';
+import { CODEX_COMMAND_USAGE, codexSpeedVariant, codexReviewTarget, type CodexComposerCommand } from '@/lib/native-agents/codex-commands';
+import { codexVariantSettings } from '@/lib/native-agents/codex-speed';
 import { NATIVE_PROVIDER_CODEX, isUnifiedNativeSessionId } from '@/lib/native-agents/ids';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
@@ -77,12 +78,18 @@ export const executeCodexComposerCommand = async (
       if (extra || (name === 'reasoning' && effort)) throw invalid();
       const nextModel = models.find((entry) => entry.id === (name === 'model' ? requestedModel : model));
       if (!nextModel) throw invalid();
-      const nextVariant = name === 'reasoning' ? requestedModel : effort;
-      if (nextVariant && !listModelVariantIds(nextModel.variants).includes(nextVariant)) throw invalid();
+      const variants = listModelVariantIds(nextModel.variants);
+      let nextVariant = name === 'reasoning' ? requestedModel : effort;
+      if (name === 'reasoning') {
+        const atCurrentSpeed = requestedModel + codexVariantSettings(variant).suffix;
+        if (variants.includes(atCurrentSpeed)) nextVariant = atCurrentSpeed;
+      }
+      if (nextVariant && !variants.includes(nextVariant)) throw invalid();
       await setSelection(nextModel.id, nextVariant);
       break;
     }
-    case 'fast': {
+    case 'fast':
+    case 'ultrafast': {
       const current = useConfigStore.getState().providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models.find((entry) => entry.id === model);
       let effort = variant;
       if (effort === undefined) {
@@ -90,7 +97,7 @@ export const executeCodexComposerCommand = async (
         if (catalog.status === 'error') throw new Error(catalog.message);
         effort = catalog.models.find((entry) => entry.id === model)?.defaultEffort ?? undefined;
       }
-      const next = codexFastVariant(listModelVariantIds(current?.variants), effort, argument);
+      const next = codexSpeedVariant(listModelVariantIds(current?.variants), effort, name, argument);
       if (next === null) throw invalid();
       await setSelection(model, next);
       break;
@@ -155,21 +162,23 @@ export const executeCodexComposerCommand = async (
       if (!argument || argument.length > 200) throw invalid();
       await useSessionUIStore.getState().updateSessionTitle(requireSession(), argument);
       break;
-    case 'status':
+    case 'status': {
       noArguments();
+      const { effort, serviceTier } = codexVariantSettings(variant);
       return {
         kind: 'output', notices: [],
         entries: [
           { label: 'threadId', detail: sessionId?.replace(/^ncx_/, '') ?? '—' },
           { label: 'cwd', detail: directory },
           { label: 'model', detail: model },
-          { label: 'effort', detail: variant?.replace(/-fast$/, '') ?? t('chat.modelControls.default') },
-          { label: 'serviceTier', detail: variant?.endsWith('-fast') ? 'priority' : 'default' },
+          { label: 'effort', detail: effort ?? t('chat.modelControls.default') },
+          { label: 'serviceTier', detail: serviceTier },
           { label: 'mode', detail: agent },
           { label: 'approvalPolicy', detail: 'never' },
           { label: 'sandbox', detail: 'danger-full-access' },
         ],
       };
+    }
     case 'skills':
       noArguments();
       return api.codexCommand({ name, directory, sessionId: sessionId ?? undefined }).then((result) => result.kind === 'accepted' ? { kind: 'done' } : result);

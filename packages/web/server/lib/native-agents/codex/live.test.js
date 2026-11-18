@@ -16,7 +16,7 @@ const THREAD_ID = '01a0d2a6-b55b-7162-a837-c62053537e00';
 const SESSION_ID = `ncx_${THREAD_ID}`;
 const TURN_ID = '01a0d2a6-b5a1-7672-908a-eedff3ad5fa9';
 const MESSAGE_ID = 'ncx_u_5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
-const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' };
+const CONFIG = { model: 'gpt-5.5', effort: 'low', serviceTier: 'default', mode: 'default' };
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
@@ -380,7 +380,8 @@ describe('Codex live threads', () => {
 
   it('remembers an applied review tier even when starting that review fails', async () => {
     const { live, requests } = createHarness({ replay: false, failures: { 'review/start': new Error('review unavailable') } });
-    await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target: { type: 'uncommittedChanges' }, config: { ...CONFIG, fast: true } })).rejects.toThrow('review unavailable');
+    await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target: { type: 'uncommittedChanges' }, config: { ...CONFIG, serviceTier: 'ultrafast' } })).rejects.toThrow('review unavailable');
+    expect(requests.find((entry) => entry.method === 'thread/settings/update').params.serviceTier).toBe('ultrafast');
     await sendPrompt(live);
     expect(requests.at(-1)).toMatchObject({ method: 'turn/start', params: { serviceTier: 'default' } });
   });
@@ -551,25 +552,24 @@ describe('Codex live threads', () => {
     expect(live.busySessionIds(DIRECTORY)).toEqual([]);
   });
 
-  it('runs a fast variant on the Fast tier and names the standard tier again only when a turn leaves it', async () => {
+  it('changes between Fast, Ultrafast and standard only when the requested tier changes', async () => {
     const { live, requests } = createHarness({ replay: false });
     const complete = () => live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', startedAt: 1, completedAt: 2 } });
-    await sendPrompt(live, { config: { ...CONFIG, fast: true } });
-    complete();
-    await sendPrompt(live, { messageId: 'ncx_u_6c1f2d63-3a2a-4d5b-8e9f-1b2c3d4e5f60' });
-    complete();
-    await sendPrompt(live, { messageId: 'ncx_u_7d2f3e74-4b3b-4e6c-9f0a-2c3d4e5f6071' });
+    for (const serviceTier of ['priority', 'ultrafast', 'ultrafast', 'default', 'default']) {
+      await sendPrompt(live, { messageId: `ncx_u_${crypto.randomUUID()}`, config: { ...CONFIG, serviceTier } });
+      complete();
+    }
     const tiers = requests.filter((entry) => entry.method === 'turn/start').map((entry) => entry.params.serviceTier);
-    expect(tiers).toEqual(['priority', 'default', undefined]);
+    expect(tiers).toEqual(['priority', 'ultrafast', undefined, 'default', undefined]);
   });
 
-  it('moves a thread that loads on Fast off it for a standard variant, and keeps it there for a fast one', async () => {
-    const standard = createHarness({ replay: false, resumeResponse: { serviceTier: 'priority' } });
+  it.each(['priority', 'ultrafast'])('resumes a thread on %s and changes tiers only when needed', async (serviceTier) => {
+    const standard = createHarness({ replay: false, resumeResponse: { serviceTier } });
     await sendPrompt(standard.live);
     expect(standard.requests.at(-1).params.serviceTier).toBe('default');
 
-    const fast = createHarness({ replay: false, resumeResponse: { serviceTier: 'priority' } });
-    await sendPrompt(fast.live, { config: { ...CONFIG, fast: true } });
+    const fast = createHarness({ replay: false, resumeResponse: { serviceTier } });
+    await sendPrompt(fast.live, { config: { ...CONFIG, serviceTier } });
     expect(fast.requests.at(-1).params).not.toHaveProperty('serviceTier');
   });
 

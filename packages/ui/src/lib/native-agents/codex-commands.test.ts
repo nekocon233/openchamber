@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { codexFastVariant, codexReviewTarget, parseCodexComposerCommand } from './codex-commands';
+import { codexSpeedVariant, codexReviewTarget, parseCodexComposerCommand } from './codex-commands';
 
 describe('Codex composer commands', () => {
   test('only intercepts implemented commands at the beginning of the prompt', () => {
@@ -18,13 +18,19 @@ describe('Codex composer commands', () => {
   });
 
   test('toggles Fast without changing effort and rejects tiers absent from the model catalog', () => {
-    const variants = ['low', 'high', 'low-fast', 'high-fast'];
-    expect(codexFastVariant(variants, 'high', '')).toBe('high-fast');
-    expect(codexFastVariant(variants, 'high-fast', '')).toBe('high');
-    expect(codexFastVariant(variants, 'high-fast', 'on')).toBe('high-fast');
-    expect(codexFastVariant(variants, 'low', 'off')).toBe('low');
-    expect(codexFastVariant(['high'], 'high', 'on')).toBeNull();
-    expect(codexFastVariant(variants, 'high', 'yes')).toBeNull();
-    expect(codexFastVariant(variants, undefined, 'on')).toBeNull();
+    const variants = ['low', 'high', 'low-fast', 'high-fast', 'high-ultrafast'];
+    expect(codexSpeedVariant(variants, 'high', 'fast', '')).toBe('high-fast');
+    expect(codexSpeedVariant(variants, 'high-fast', 'fast', '')).toBe('high');
+    expect(codexSpeedVariant(variants, 'high-fast', 'fast', 'on')).toBe('high-fast');
+    expect(codexSpeedVariant(variants, 'low', 'fast', 'off')).toBe('low');
+    expect(codexSpeedVariant(['high'], 'high', 'fast', 'on')).toBeNull();
+    expect(codexSpeedVariant(variants, 'high-fast', 'ultrafast', '')).toBe('high-ultrafast');
+    expect(codexSpeedVariant(variants, 'high-ultrafast', 'ultrafast', '')).toBe('high');
+    expect(codexSpeedVariant(variants, 'high-ultrafast', 'fast', '')).toBe('high-fast');
+    expect(codexSpeedVariant(variants, 'high-ultrafast', 'fast', 'off')).toBe('high-ultrafast');
+    expect(codexSpeedVariant(variants, 'low-fast', 'ultrafast', 'off')).toBe('low-fast');
+    expect(codexSpeedVariant(variants, 'low-fast', 'ultrafast', 'on')).toBeNull();
+    expect(codexSpeedVariant(variants, 'high', 'fast', 'yes')).toBeNull();
+    expect(codexSpeedVariant(variants, undefined, 'fast', 'on')).toBeNull();
   });
 });

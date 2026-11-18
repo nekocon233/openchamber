@@ -7,7 +7,7 @@ import { useSelectionStore } from '@/sync/selection-store';
 import { executeCodexComposerCommand } from '../codexCommands';
 
 const sessionId = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
-const models = [{ id: 'test-model', name: 'Test model', efforts: ['low', 'high'], defaultEffort: 'high', fast: true, contextWindow: 100000, outputLimit: 10000, input: { image: true, pdf: false } }];
+const models = [{ id: 'test-model', name: 'Test model', efforts: ['low', 'high'], defaultEffort: 'high', fast: true, serviceTiers: ['priority', 'ultrafast'], contextWindow: 100000, outputLimit: 10000, input: { image: true, pdf: false } }];
 const native = buildNativeProvider('codex', models);
 
 beforeEach(() => {
@@ -50,6 +50,19 @@ describe('Codex command execution', () => {
     await executeCodexComposerCommand({ name: 'fast', argument: 'on' }, { ...context(api), variant: undefined });
     expect(useConfigStore.getState().currentVariant).toBe('high-fast');
     await executeCodexComposerCommand({ name: 'fast', argument: 'off' }, { ...context(api), variant: 'high-fast', isCurrent: () => false });
+    expect(useConfigStore.getState().currentVariant).toBe('high-fast');
+  });
+
+  test('changing effort preserves Ultrafast and status reports both selections', async () => {
+    await executeCodexComposerCommand({ name: 'ultrafast', argument: '' }, context());
+    expect(useConfigStore.getState().currentVariant).toBe('high-ultrafast');
+    await executeCodexComposerCommand({ name: 'reasoning', argument: 'low' }, { ...context(), variant: 'high-ultrafast' });
+    expect(useSelectionStore.getState().getAgentModelVariantForSession(sessionId, 'build', native.id, 'test-model')).toBe('low-ultrafast');
+    const status = await executeCodexComposerCommand({ name: 'status', argument: '' }, { ...context(), variant: 'low-ultrafast' });
+    expect(status.kind === 'output' && status.entries.filter((entry) => entry.label === 'effort' || entry.label === 'serviceTier')).toEqual([
+      { label: 'effort', detail: 'low' }, { label: 'serviceTier', detail: 'ultrafast' },
+    ]);
+    await executeCodexComposerCommand({ name: 'reasoning', argument: 'high-fast' }, { ...context(), variant: 'low-ultrafast' });
     expect(useConfigStore.getState().currentVariant).toBe('high-fast');
   });
 

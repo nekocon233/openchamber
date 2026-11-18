@@ -188,6 +188,7 @@ export const dict = {
   'chat.codexCommand.mention': "Mentionner un fichier ou dossier",
   'chat.codexCommand.agents': "Parcourir les sessions des sous-agents",
   'chat.codexCommand.fast': "Activer ou désactiver le mode rapide",
+  'chat.codexCommand.ultrafast': "Activer ou désactiver le mode ultrarapide",
   'chat.codexCommand.plan': "Passer en mode plan, avec une consigne facultative",
   'chat.codexCommand.resume': "Reprendre une session enregistrée",
   'chat.codexCommand.fork': "Créer une branche de la session actuelle",

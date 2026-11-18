@@ -4,6 +4,9 @@ import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { Window, type HTMLElement as HappyHTMLElement } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
 
+import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
+import { buildNativeProvider } from '@/lib/native-agents/providers';
+import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from '@/lib/native-agents/test-utils/runtime';
 import type { CommandAutocompleteHandle } from './CommandAutocomplete';
 
 let CommandAutocomplete: typeof import('./CommandAutocomplete')['CommandAutocomplete'];
@@ -20,6 +23,7 @@ const globals = new Map<string, PropertyDescriptor | undefined>();
 const directory = '/autocomplete-test';
 const draft = 'https://example.com/a/b';
 const sdk = OpenCode.make({ baseUrl: 'http://autocomplete.test', fetch: () => new Promise<Response>(() => undefined) });
+const apis = createTestRuntimeAPIs(createTestNativeAgentsAPI({ commands: async () => ({ commands: [] }) }));
 
 beforeEach(async () => {
   dom = new Window({ url: 'http://localhost' });
@@ -92,6 +96,11 @@ afterEach(async () => {
 });
 
 const details = () => document.querySelector('[data-slot="tooltip-content"]');
+const renderPicker = (picker: React.ReactNode) => act(async () => root.render(
+  <RuntimeAPIContext.Provider value={apis}>
+    <SyncProvider sdk={sdk} directory=""><I18nProvider>{picker}</I18nProvider></SyncProvider>
+  </RuntimeAPIContext.Provider>,
+));
 const row = (index = 0) => {
   const result = host.querySelectorAll<HTMLElement>('.cursor-pointer')[index];
   if (!result) throw new Error(`Missing autocomplete row ${index}`);
@@ -108,9 +117,7 @@ async function mountPicker(kind: 'command' | 'skill') {
         : <SkillAutocomplete ref={handle} searchQuery="oc-scroll" onClose={() => undefined} onSkillSelect={(name) => selections.push(name)} />}
     </>;
   }
-  await act(async () => root.render(
-    <SyncProvider sdk={sdk} directory=""><I18nProvider><Picker /></I18nProvider></SyncProvider>,
-  ));
+  await renderPicker(<Picker />);
   const input = host.querySelector('input');
   if (!input) throw new Error('Missing draft');
   const press = (key: string) => act(async () => {
@@ -120,18 +127,22 @@ async function mountPicker(kind: 'command' | 'skill') {
 }
 
 for (const kind of ['command', 'skill'] as const) {
-  test(`${kind}: the row reads name, description, then its scope; nothing pops up on selection`, async () => {
+  test(`${kind}: shows the selected row's scope and description and accepts Enter`, async () => {
     const { press } = await mountPicker(kind);
     const item = row();
-    expect(Array.from(item.querySelectorAll('.uppercase')).map((badge) => badge.textContent)).toEqual(['project']);
-    expect(item.querySelector('.font-normal')?.textContent).toBe('First details');
+    expect(Array.from(item.querySelectorAll('.uppercase')).map((badge) => badge.textContent)).toEqual(kind === 'command' ? ['command', 'project'] : ['project']);
 
     await act(async () => {
       item.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 30, clientY: 30 }));
       await new Promise((resolve) => setTimeout(resolve, 260));
     });
     await press('ArrowDown');
-    expect(details()).toBeNull();
+    if (kind === 'command') {
+      expect(details()?.textContent).toBe('First details');
+    } else {
+      expect(item.querySelector('.font-normal')?.textContent).toBe('First details');
+      expect(details()).toBeNull();
+    }
     await press('Enter');
     expect(selections).toEqual(['oc-scroll']);
   });
@@ -146,27 +157,38 @@ for (const kind of ['command', 'skill'] as const) {
       return new dom.DOMRect(0, top, 378, height);
     });
     const placed = { top: '48px', bottom: 'auto', maxHeight: '120px' };
-    await act(async () => root.render(
-      <SyncProvider sdk={sdk} directory="">
-        <I18nProvider>
-          <main>
-            {kind === 'command'
-              ? <CommandAutocomplete searchQuery="" onClose={() => undefined} onCommandSelect={() => undefined} style={placed} />
-              : <SkillAutocomplete searchQuery="" onClose={() => undefined} onSkillSelect={() => undefined} style={placed} />}
-          </main>
-        </I18nProvider>
-      </SyncProvider>,
-    ));
+    await renderPicker(
+      <main>
+        {kind === 'command'
+          ? <CommandAutocomplete searchQuery="" onClose={() => undefined} onCommandSelect={() => undefined} style={placed} />
+          : <SkillAutocomplete searchQuery="" onClose={() => undefined} onSkillSelect={() => undefined} style={placed} />}
+      </main>,
+    );
     rect.mockRestore();
     expect(host.querySelector<HTMLElement>('.oc-glass-popover')?.style.maxHeight).toBe('120px');
   });
 }
 
+test('the Codex command menu offers Ultrafast only for the selected model that advertises it', async () => {
+  const { useConfigStore } = await import('@/stores/useConfigStore');
+  const previous = useConfigStore.getState().providers;
+  restoreStores.push(() => useConfigStore.setState({ providers: previous }));
+  const model = { name: 'Model', efforts: ['high'], defaultEffort: 'high', fast: true, contextWindow: null, outputLimit: null, input: { image: false, pdf: false } };
+  useConfigStore.setState({ providers: [buildNativeProvider('codex', [
+    { ...model, id: 'sol', serviceTiers: ['priority', 'ultrafast'] },
+    { ...model, id: 'astra', serviceTiers: ['priority'] },
+  ])] });
+  const menu = (nativeModelId: string) => <CommandAutocomplete nativeBackend="codex" nativeModelId={nativeModelId} searchQuery="ultrafast" onClose={() => undefined} onCommandSelect={() => undefined} />;
+  await renderPicker(menu('sol'));
+  expect(host.textContent).toContain('/ultrafast');
+  await renderPicker(menu('astra'));
+  expect(host.textContent).not.toContain('/ultrafast');
+});
+
 test('skill: loads in one row until the project\'s skills are read, then says there are none at the same height', async () => {
   const { useSkillsStore } = await import('@/stores/useSkillsStore');
   useSkillsStore.setState({ skillsByDirectory: {} });
-  const picker = <SyncProvider sdk={sdk} directory=""><I18nProvider><SkillAutocomplete searchQuery="" onClose={() => undefined} onSkillSelect={() => undefined} /></I18nProvider></SyncProvider>;
-  await act(async () => root.render(picker));
+  await renderPicker(<SkillAutocomplete searchQuery="" onClose={() => undefined} onSkillSelect={() => undefined} />);
   const loadingRow = host.querySelector('[data-spinner]')?.closest('div');
   expect(loadingRow).not.toBeNull();
   expect(host.textContent).not.toContain('No skills found');

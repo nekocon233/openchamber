@@ -22,12 +22,11 @@ const CODEX_CONTEXT_WINDOW = 272_000;
 /** Codex models cap output at 128k. */
 const CODEX_OUTPUT_LIMIT = 128_000;
 
-// The service tier Codex calls Fast. On a model that offers it, each effort
-// has a `<effort>-fast` variant that runs the turn on this tier.
-export const CODEX_FAST_SERVICE_TIER = 'priority';
-// What Codex takes for its standard tier when a thread leaves Fast.
 export const CODEX_STANDARD_SERVICE_TIER = 'default';
-const CODEX_FAST_VARIANT_SUFFIX = '-fast';
+const CODEX_SPEED_TIERS = [
+  { suffix: '-fast', tier: 'priority' },
+  { suffix: '-ultrafast', tier: 'ultrafast' },
+];
 
 export const claudeModels = () => CLAUDE_MODELS.map((model) => ({
   ...model,
@@ -88,6 +87,7 @@ export const codexModels = (response, contextWindows = new Map()) => {
   for (const raw of codexModelListSchema.parse(response).data) {
     const model = codexModelSchema.safeParse(raw);
     if (!model.success || model.data.hidden) continue;
+    const serviceTiers = model.data.serviceTiers.map((tier) => tier.id);
     models.push({
       id: model.data.id,
       name: model.data.displayName || model.data.id,
@@ -95,7 +95,8 @@ export const codexModels = (response, contextWindows = new Map()) => {
       outputLimit: CODEX_OUTPUT_LIMIT,
       efforts: model.data.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
       defaultEffort: model.data.defaultReasoningEffort ?? null,
-      fast: model.data.serviceTiers.some((tier) => tier.id === CODEX_FAST_SERVICE_TIER),
+      serviceTiers,
+      fast: serviceTiers.includes('priority'), // Older clients read this flag.
       input: { image: model.data.inputModalities.includes('image'), pdf: false },
     });
   }
@@ -103,14 +104,19 @@ export const codexModels = (response, contextWindows = new Map()) => {
 };
 
 /**
- * The effort and tier a Codex variant asks for: an effort, or `<effort>-fast`
- * for that effort on the Fast tier. Without a variant the thread keeps its own
- * effort.
+ * Plain efforts use the standard tier. A speed suffix selects the tier for
+ * that effort, including when the effort itself is named "ultra".
  * @param {string | undefined} variant
- * @returns {{ effort: string | null, fast: boolean }}
  */
 export const codexVariantSettings = (variant) => {
-  if (variant === undefined) return { effort: null, fast: false };
-  if (!variant.endsWith(CODEX_FAST_VARIANT_SUFFIX)) return { effort: variant, fast: false };
-  return { effort: variant.slice(0, -CODEX_FAST_VARIANT_SUFFIX.length) || null, fast: true };
+  const speed = CODEX_SPEED_TIERS.find(({ suffix }) => variant?.endsWith(suffix));
+  if (speed) return { effort: variant.slice(0, -speed.suffix.length) || null, serviceTier: speed.tier };
+  return { effort: variant ?? null, serviceTier: CODEX_STANDARD_SERVICE_TIER };
+};
+
+/** Catalog check shared by native agent combinations, subagents and plan handoffs. */
+export const nativeModelSupportsVariant = (model, variant) => {
+  if (model.efforts.includes(variant)) return true;
+  const { effort, serviceTier } = codexVariantSettings(variant);
+  return model.efforts.includes(effort) && model.serviceTiers?.includes(serviceTier) === true;
 };

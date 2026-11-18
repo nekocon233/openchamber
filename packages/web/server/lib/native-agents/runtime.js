@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { codexVariantSettings } from './catalog.js';
+import { codexVariantSettings, nativeModelSupportsVariant } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
 import { createAntigravityDecisions } from './antigravity/decisions.js';
 import { resolveAgyCommand } from './antigravity/command.js';
@@ -1547,8 +1547,7 @@ export const createNativeAgentsRuntime = ({
       const partition = (await native.catalog()).backends[backend];
       const model = partition?.status === 'ok' ? partition.models.find((model) => model.id === execution.model.modelID || model.aliases?.some((alias) => alias.id === execution.model.modelID)) : null;
       if (!model) throw new NativeAgentError('The selected execution model is unavailable. Select another model and retry.', { status: 409, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE' });
-      const variants = new Set([...model.efforts, ...(model.fast ? model.efforts.map((effort) => `${effort}-fast`) : [])]);
-      if (execution.variant && !variants.has(execution.variant)) throw invalidRequestError('The execution model does not support this thinking effort');
+      if (execution.variant && !nativeModelSupportsVariant(model, execution.variant)) throw invalidRequestError('The execution model does not support this thinking effort');
       if (!unified) {
         const tasks = await native.backgroundTasks();
         if (tasks[sessionId]?.tasks.length || questions.list(directory).some((question) => question.sessionID === sessionId && question.id !== requestId)) throw sessionBusyError();

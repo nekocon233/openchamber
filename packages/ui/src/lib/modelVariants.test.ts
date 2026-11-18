@@ -34,6 +34,7 @@ describe('preferredModelVariant', () => {
 
   test('never lets a Fast twin outrank its plain level', () => {
     expect(preferredModelVariant(['low', 'high', 'low-fast', 'high-fast'])).toBe('high');
+    expect(preferredModelVariant(['low', 'ultra', 'ultra-fast', 'low-ultrafast', 'ultra-ultrafast'])).toBe('ultra');
     expect(preferredModelVariant(['low', 'max', 'ultra', 'low-fast', 'max-fast', 'ultra-fast'])).toBe('max');
     // Without a plain twin the id is its own level, not a duplicate.
     expect(preferredModelVariant(['low', 'high-fast'])).toBe('high-fast');

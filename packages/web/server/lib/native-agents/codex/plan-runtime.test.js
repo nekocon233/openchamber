@@ -80,7 +80,7 @@ describe('Codex plan decisions through the native runtime', () => {
     const { runtime, root, directory, session, selection, question, registry, sends } = await createHarness({ withCombination: true });
     const marker = path.join(directory, 'fail-build');
     fs.writeFileSync(marker, '');
-    const execution = { model: selection.model, variant: 'high', expectedRevision: 0 };
+    const execution = { model: selection.model, variant: 'high-ultrafast', expectedRevision: 0 };
     await expect(runtime.replyQuestion(question.id, [['build']], execution)).rejects.toMatchObject({ kind: 'response' });
     const source = Object.values(registry().sessions).find((entry) => entry.conversationId === session.id);
     expect(source.planExecution.phase).toBe('open');
@@ -90,7 +90,8 @@ describe('Codex plan decisions through the native runtime', () => {
     await runtime.replyQuestion(question.id, [['build']], execution);
     await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
     expect(sends()).toHaveLength(3);
-    expect((await runtime.getSession(session.id, directory)).model.variant).toBe('high');
+    expect(sends().at(-1)).toMatchObject({ effort: 'high', serviceTier: 'ultrafast' });
+    expect((await runtime.getSession(session.id, directory)).model.variant).toBe('high-ultrafast');
     expect(await runtime.questions(directory)).toEqual([]);
   });
   it('continues with an ordinary recorded prompt and preserves file-revert snapshots', async () => {

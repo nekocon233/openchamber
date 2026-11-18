@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeLaunchModel, claudeModelContextWindow, claudeModels, codexModels, codexVariantSettings } from './catalog.js';
+import { claudeLaunchModel, claudeModelContextWindow, claudeModels, codexModels, codexVariantSettings, nativeModelSupportsVariant } from './catalog.js';
 
 describe('native model catalogs', () => {
   it('offers every Claude effort level on each alias', () => {
@@ -36,7 +36,7 @@ describe('native model catalogs', () => {
           hidden: false,
           defaultReasoningEffort: 'medium',
           supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'ultra' }],
-          serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Faster responses at a higher price.' }],
+          serviceTiers: [{ id: 'priority', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }],
           inputModalities: ['text', 'image'],
         },
         { id: 'internal-reviewer', displayName: 'Reviewer', hidden: true, supportedReasoningEfforts: [], inputModalities: ['text'] },
@@ -53,6 +53,7 @@ describe('native model catalogs', () => {
         efforts: ['low', 'ultra'],
         defaultEffort: 'medium',
         fast: true,
+        serviceTiers: ['priority', 'ultrafast'],
         input: { image: true, pdf: false },
       },
       {
@@ -63,14 +64,24 @@ describe('native model catalogs', () => {
         efforts: ['high'],
         defaultEffort: null,
         fast: false,
+        serviceTiers: [],
         input: { image: false, pdf: false },
       },
     ]);
   });
 
-  it('reads a Codex variant as its effort and whether it runs on the Fast tier', () => {
-    expect(codexVariantSettings(undefined)).toEqual({ effort: null, fast: false });
-    expect(codexVariantSettings('high')).toEqual({ effort: 'high', fast: false });
-    expect(codexVariantSettings('xhigh-fast')).toEqual({ effort: 'xhigh', fast: true });
+  it('reads the reasoning effort independently of the service tier', () => {
+    expect(codexVariantSettings(undefined)).toEqual({ effort: null, serviceTier: 'default' });
+    expect(codexVariantSettings('high')).toEqual({ effort: 'high', serviceTier: 'default' });
+    expect(codexVariantSettings('ultra-fast')).toEqual({ effort: 'ultra', serviceTier: 'priority' });
+    expect(codexVariantSettings('ultra-ultrafast')).toEqual({ effort: 'ultra', serviceTier: 'ultrafast' });
+  });
+
+  it('accepts a speed variant only for a model offering both its effort and its tier', () => {
+    const model = { efforts: ['high'], serviceTiers: ['ultrafast'] };
+    expect(nativeModelSupportsVariant(model, 'high-ultrafast')).toBe(true);
+    expect(nativeModelSupportsVariant(model, 'ultra-ultrafast')).toBe(false);
+    expect(nativeModelSupportsVariant(model, 'high-fast')).toBe(false);
+    expect(nativeModelSupportsVariant({ efforts: ['high'], serviceTiers: ['priority'] }, 'high-ultrafast')).toBe(false);
   });
 });

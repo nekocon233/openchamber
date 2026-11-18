@@ -45,7 +45,7 @@ The saved profile orders survive reload and keep the same order on mobile.
 ExitPlanMode retains its execution model picker. Its initial choice comes from
 the applied combination, otherwise the current composer model; it contains no
 subagent selector. The adjacent thinking-effort picker uses the selected
-model's catalog variants, including supported Fast variants and explicit CLI
+model's catalog variants, including supported Fast and Ultrafast tiers and explicit CLI
 defaults. Manual model and effort edits belong to this approval and survive
 failed submissions and remounts; the next approval starts from the combination
 again. Unsupported captured efforts require another choice before approval.
@@ -920,7 +920,7 @@ command can leave the queue untouched and delivery can take only part of it.
 
 ## Autocomplete rows
 
-A command, skill or `@` agent row reads as its name, then its description,
+A skill or `@` agent row reads as its name, then its description,
 muted on one line and cut where it runs out of room, then at the end edge the
 item's scope (`ui/AutocompleteRowParts.tsx`). The scope is the one badge a row
 carries: `user`, `project`, `opencode` (OpenCode's own commands),
@@ -929,8 +929,11 @@ hover or selection: a tooltip over the list covered the transcript, and an
 info mark on every row read as noise. `ui/useAutocompleteSelectionScroll.ts`
 keeps the keyboard's selection in view.
 
-`../AutocompleteRows.test.tsx` mounts the command and skill pickers and covers
-the row's parts, the absent popup on selection, and the list height below.
+Command rows show their type and source, including the CLI name for native
+commands. On desktop, the highlighted command shows its description and usage
+in a tooltip. The Codex menu lists the speed commands its selected model supports.
+
+`../AutocompleteRows.test.tsx` covers both row formats and the list height below.
 
 ### Why a list placed at the caret skips the phone's height clamp
 

@@ -1,5 +1,6 @@
 import type { I18nKey } from '@/lib/i18n';
 import type { NativeCodexReviewTarget } from '@/lib/api/types';
+import { codexVariantSettings } from './codex-speed';
 
 // Commands implemented by the composer. Skills are discovered separately
 // through app-server; both paths keep Codex commands out of ordinary prompts.
@@ -7,6 +8,7 @@ export const CODEX_COMPOSER_COMMANDS = [
   { name: 'model', descriptionKey: 'chat.modelControls.selectModel' },
   { name: 'reasoning', descriptionKey: 'chat.modelControls.thinking' },
   { name: 'fast', descriptionKey: 'chat.codexCommand.fast' },
+  { name: 'ultrafast', descriptionKey: 'chat.codexCommand.ultrafast' },
   { name: 'plan', descriptionKey: 'chat.codexCommand.plan' },
   { name: 'new', descriptionKey: 'sessions.sidebar.header.actions.newSession' },
   { name: 'clear', descriptionKey: 'sessions.sidebar.header.actions.newSession' },
@@ -38,6 +40,7 @@ export const CODEX_COMMAND_USAGE = new Map<CodexComposerCommandName, string>([
   ['model', '/model [model-id] [effort]'],
   ['reasoning', '/reasoning [effort]'],
   ['fast', '/fast [on|off]'],
+  ['ultrafast', '/ultrafast [on|off]'],
   ['plan', '/plan [prompt]'],
   ['rename', '/rename <title>'],
   ['resume', '/resume [thread-id]'],
@@ -63,12 +66,14 @@ export const codexReviewTarget = (argument: string): NativeCodexReviewTarget | n
   return { type: 'custom', instructions: argument };
 };
 
-/** Fast is a service tier, independent of the reasoning effort. */
-export const codexFastVariant = (variants: string[], current: string | undefined, argument: string): string | null => {
+/** Repeating the active speed command returns to standard at the same effort. */
+export const codexSpeedVariant = (variants: string[], current: string | undefined, speed: 'fast' | 'ultrafast', argument: string): string | null => {
   if (argument !== '' && argument !== 'on' && argument !== 'off') return null;
-  const enabled = argument === 'on' || (argument === '' && !current?.endsWith('-fast'));
-  const effort = current?.replace(/-fast$/, '');
-  if (!effort) return null;
-  const next = enabled ? `${effort}-fast` : effort;
+  const { effort } = codexVariantSettings(current);
+  if (!current || !effort) return null;
+  const accelerated = `${effort}-${speed}`;
+  let next = accelerated;
+  if (argument === 'off') next = current === accelerated ? effort : current;
+  else if (argument === '' && current === accelerated) next = effort;
   return variants.includes(next) ? next : null;
 };
