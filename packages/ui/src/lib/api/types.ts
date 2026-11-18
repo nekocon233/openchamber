@@ -1875,7 +1875,7 @@ export type GitHubReferenceKind = 'issue' | 'pull';
 /** A repository list's state; `merged` applies to change requests, `unanswered` to discussions. */
 export type RepositoryReferenceState = 'open' | 'closed' | 'merged' | 'all' | 'unanswered';
 /** Whose items a repository list shows; review requests apply to change requests. */
-export type RepositoryReferencePeople = 'any' | 'assigned' | 'created' | 'reviewRequested';
+export type RepositoryReferencePeople = 'any' | 'assigned' | 'created' | 'reviewRequested' | 'mine';
 export type RepositoryReferenceFilter = { state: RepositoryReferenceState; people: RepositoryReferencePeople };
 
 export type RepositoryReferenceQuery = {

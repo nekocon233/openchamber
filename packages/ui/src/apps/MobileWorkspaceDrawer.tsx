@@ -35,9 +35,10 @@ const ENTER_DELAY_MS = 16;
 const ENTER_DURATION_MS = 320;
 const DRAWER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'desktop';
+export type MobileWorkspaceTab = 'changes' | 'pr' | 'ci' | 'files' | 'terminal' | 'notes' | 'desktop';
 
 const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
+const loadCiRunsView = () => import('@/components/views/CiRunsView').then((module) => module.CiRunsView);
 const loadPluginPane = () => import('@/components/layout/PluginPane').then((module) => module.PluginPane);
 
 const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
@@ -45,6 +46,19 @@ const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void 
   const directory = normalizePath(panelContentDirectory(draftSpace, useEffectiveDirectory())) ?? '';
   const runtimeKey = useGitStore((state) => state.runtimeKey);
   const View = useOnDemandComponent(visible, loadPullRequestView, onFailure);
+  return (
+    <PauseClock paused={!visible}>
+      {draftSpace?.kind === 'preparing' ? <SpacePreparing />
+        : View ? <View key={JSON.stringify([runtimeKey, directory])} directory={directory} visible={visible} /> : null}
+    </PauseClock>
+  );
+};
+
+const MobileCiRunsPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
+  const draftSpace = useDraftSpaceTarget();
+  const directory = normalizePath(panelContentDirectory(draftSpace, useEffectiveDirectory())) ?? '';
+  const runtimeKey = useGitStore((state) => state.runtimeKey);
+  const View = useOnDemandComponent(visible, loadCiRunsView, onFailure);
   return (
     <PauseClock paused={!visible}>
       {draftSpace?.kind === 'preparing' ? <SpacePreparing />
@@ -202,6 +216,7 @@ export const MobileWorkspaceDrawer: React.FC<{
   const tabItems: SortableTabsStripItem[] = [
     { id: 'changes', label: t('mobile.menu.git'), icon: <Icon name="git-branch" className="h-3.5 w-3.5" /> },
     { id: 'pr', label: t('contextPanel.mode.pr'), icon: <Icon name="git-pull-request" className="h-3.5 w-3.5" /> },
+    { id: 'ci', label: t('gitView.pullRequest.tab.ci'), icon: <Icon name="play-circle" className="h-3.5 w-3.5" /> },
     { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
     { id: 'notes', label: t('contextRail.surface.notes'), icon: <Icon name="sticky-note" className="h-3.5 w-3.5" /> },
@@ -268,6 +283,13 @@ export const MobileWorkspaceDrawer: React.FC<{
           <div className={cn('h-full', tab !== 'pr' && 'hidden')}>
             <ErrorBoundary>
               <MobilePullRequestPane visible={open && tab === 'pr'} onFailure={onClose} />
+            </ErrorBoundary>
+          </div>
+        ) : null}
+        {visitedTabs.has('ci') ? (
+          <div className={cn('h-full', tab !== 'ci' && 'hidden')}>
+            <ErrorBoundary>
+              <MobileCiRunsPane visible={open && tab === 'ci'} onFailure={onClose} />
             </ErrorBoundary>
           </div>
         ) : null}

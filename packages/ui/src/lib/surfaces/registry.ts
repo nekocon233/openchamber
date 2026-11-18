@@ -9,6 +9,7 @@ type BuiltInContextSurfaceId =
   | 'editor'
   | 'git'
   | 'pr'
+  | 'ci'
   | 'diff'
   | 'walkthrough'
   | 'terminal'
@@ -76,6 +77,15 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     availability: 'always',
   },
   {
+    id: 'ci',
+    descriptionKey: 'contextRail.surface.ci.description',
+    defaultWidth: 540,
+    mode: 'ci',
+    icon: 'play-circle',
+    labelKey: 'gitView.pullRequest.tab.ci',
+    availability: 'always',
+  },
+  {
     id: 'diff',
     descriptionKey: 'contextRail.surface.diff.description',
     defaultWidth: 640,
@@ -112,6 +122,15 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     availability: 'always',
   },
   {
+    id: 'browser',
+    descriptionKey: 'contextRail.surface.browser.description',
+    defaultWidth: 540,
+    mode: 'browser',
+    icon: 'global',
+    labelKey: 'contextPanel.mode.browser',
+    availability: 'always',
+  },
+  {
     id: 'notes',
     descriptionKey: 'contextRail.surface.notes.description',
     // As wide as the files surface: this panel carries a sidebar and a
@@ -121,15 +140,6 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     mode: 'notes',
     icon: 'book-marked',
     labelKey: 'contextRail.surface.notes',
-    availability: 'always',
-  },
-  {
-    id: 'browser',
-    descriptionKey: 'contextRail.surface.browser.description',
-    defaultWidth: 540,
-    mode: 'browser',
-    icon: 'global',
-    labelKey: 'contextPanel.mode.browser',
     availability: 'always',
   },
   {
@@ -177,6 +187,7 @@ const BUILT_IN_SURFACE_GROUPS = {
   context: 'context',
   git: 'changes',
   pr: 'changes',
+  ci: 'changes',
   diff: 'changes',
   walkthrough: 'changes',
   editor: 'tools',
@@ -254,6 +265,10 @@ type VisibleRailSurfacesOptions = {
       such as a Linear issue is open in it. Accounts are connected from
       Settings, so hiding the surface removes no entry point. */
   sourceControlConnected: boolean;
+  /** GitHub Actions CI runs shows on desktop only when a GitHub account is
+      connected and the checkout is not a GitLab repository. */
+  githubConnected?: boolean;
+  repositoryProvider?: string | null;
   /** The Workflows icon shows while the session on screen has a workflow run,
       or a Workflows tab is open, and never in a build without workflows. Runs
       start from the chat, so hiding it removes no entry point. */
@@ -294,6 +309,13 @@ export const getVisibleContextRailSurfaces = (options: VisibleRailSurfacesOption
     }
     if (surface.id === 'pr' && !options.sourceControlConnected
       && !options.tabs.some((tab) => tab.mode === 'pr' && tab.targetPath)) {
+      return false;
+    }
+    if (surface.id === 'ci' && (
+      options.isVSCode
+      || !options.githubConnected
+      || options.repositoryProvider === 'gitlab'
+    )) {
       return false;
     }
     if (surface.id === 'workflows' && (options.isVSCode || !options.workflowsShown)) {

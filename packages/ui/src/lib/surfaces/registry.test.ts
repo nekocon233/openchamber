@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { getSourceControlAuthKey, isProviderAuthSettled } from '@/stores/useSourceControlAuthStore';
 
 import {
   CONTEXT_SURFACES,
@@ -12,6 +13,8 @@ const baseOptions = {
   screenWidth: 1200,
   tabs: [],
   sourceControlConnected: true,
+  githubConnected: true,
+  repositoryProvider: 'github',
   workflowsShown: false,
 } as const;
 
@@ -62,7 +65,7 @@ describe('getVisibleContextRailSurfaces', () => {
     });
     expect(surfaces.map((surface) => surface.id)).toEqual([
       'notes',
-      'git', 'pr', 'diff', 'walkthrough',
+      'git', 'pr', 'ci', 'diff', 'walkthrough',
       'editor', 'terminal', 'browser',
       'context',
     ]);
@@ -73,6 +76,30 @@ describe('getVisibleContextRailSurfaces', () => {
     expect(getVisibleContextRailSurfaces({ ...baseOptions, sourceControlConnected: true }).some((s) => s.id === 'pr')).toBe(true);
     const tabs: { mode: 'pr'; targetPath: string }[] = [{ mode: 'pr', targetPath: 'https://linear.app/acme/issue/ENG-7' }];
     expect(getVisibleContextRailSurfaces({ ...baseOptions, sourceControlConnected: false, tabs }).some((s) => s.id === 'pr')).toBe(true);
+  });
+
+  test('shows CI runs on desktop only when GitHub is connected and the repository is not GitLab', () => {
+    expect(getVisibleContextRailSurfaces(baseOptions).some((s) => s.id === 'ci')).toBe(true);
+    expect(getVisibleContextRailSurfaces({ ...baseOptions, githubConnected: false }).some((s) => s.id === 'ci')).toBe(false);
+    expect(getVisibleContextRailSurfaces({ ...baseOptions, repositoryProvider: 'gitlab' }).some((s) => s.id === 'ci')).toBe(false);
+    expect(getVisibleContextRailSurfaces({ ...baseOptions, isVSCode: true }).some((s) => s.id === 'ci')).toBe(false);
+  });
+
+  test('waits for every configured GitHub instance before considering GitHub auth settled', () => {
+    const githubCom = { provider: 'github' as const, instance: 'github.com' };
+    const enterprise = { provider: 'github' as const, instance: 'ghe.example.com' };
+    const entries = {
+      [getSourceControlAuthKey(githubCom)]: { status: null, isLoading: false, hasChecked: true },
+      [getSourceControlAuthKey(enterprise)]: { status: null, isLoading: true, hasChecked: false },
+    };
+    expect(isProviderAuthSettled({ identities: [githubCom, enterprise], entries }, 'github')).toBe(false);
+    expect(isProviderAuthSettled({
+      identities: [githubCom, enterprise],
+      entries: {
+        ...entries,
+        [getSourceControlAuthKey(enterprise)]: { status: null, isLoading: false, hasChecked: true },
+      },
+    }, 'github')).toBe(true);
   });
 
   test('offers Workflows only while the caller says so, and never in VS Code', () => {

@@ -265,7 +265,7 @@ that page, so callers cannot mistake a partial page for a complete one.
   searches keep the search path and its total, used by the PR panel's limit notice.
 
 - `GET /api/source-control/github/references?<read context>&kind=issue|pull&state=&people=&query=&cursor=` takes the same bound read context as every canonical read and answers one page (30) of the project's issues or PRs across its repo network, read with that context's account (origin plus fork parent/source): `{ connected, repo, items, cursor, hasMore, total }`. `repo: null` means the project has no GitHub remote.
-- One GraphQL `search` document per page, newest activity first. `state` (`open`, the default, `closed`, `merged`, `all`) and `people` (`any`, the default, `assigned` → `assignee:@me`, `created` → `author:@me`, `reviewRequested` → `review-requested:@me`) combine; an issue list reads `merged` as closed and ignores review requests. User text is appended as is, so GitHub qualifiers work; state and sort are added only when the text sets none.
+- One GraphQL `search` document per page, newest activity first. `state` (`open`, the default, `closed`, `merged`, `all`) and `people` (`any`, the default, `assigned` → `assignee:@me`, `created` → `author:@me`, `reviewRequested` → `review-requested:@me`, `mine` for PRs combining `reviewRequested` and `created`) combine; an issue list reads `merged` as closed and ignores review requests. User text is appended as is, so GitHub qualifiers work; state and sort are added only when the text sets none.
 - Repository-scoped PR lists with `people=reviewRequested` verify current user
   and team review requests in the same document, including number and URL
   lookups. A result whose complete request connection no longer names the viewer
@@ -276,6 +276,14 @@ that page, so callers cannot mistake a partial page for a complete one.
   a direct lookup. Search cursors, ordering and the indexed total remain unchanged, so a
   page can be shorter while GitHub updates its search index. Other filters and
   network lookups do not request these fields.
+- PR lists with `people=mine` execute both `reviewRequested` (`review-requested:@me`,
+  with the same live review-request verification when `scope=repository`) and
+  `created` (`author:@me`) search aliases in one GraphQL document, merge them
+  newest-first within the safe raw-page oldest `updatedAt` bound, and paginate
+  with a composite `base64url` cursor (`version: 1`, `scope` digest, per-stream
+  cursor/offset/done/total, and `seen` deduplication; malformed or mismatched
+  cursors return `400`). Repository-scoped `#number` and URL lookups with `people=mine`
+  match PRs authored by the viewer or carrying a live viewer or team review request.
 - A review thread's comments carry `excerpt` (`{ startLine, lines }`): the new-side lines the comment sits on, cut from the end of its `diffHunk` (`reviewCommentExcerpt`; an outdated comment reads its original range). The UI draws a ```` ```suggestion ```` in the comment against them. A hunk that does not cover the range, or a range over 200 lines, leaves it out.
 - A pasted `#123`, `123` or github.com issue/PR link skips search and reads that number with `issueOrPullRequest` in every network repo (a link: only its own repo), whichever of the two the tab lists. The discussions list reads a number or a discussion link with `discussion(number:)` instead, and a link of the other family is searched as text on both, so a discussion never lands in an issues answer an older client would fail to parse.
 - Each item carries what a row and the preview show: state (issues `open` / `completed` / `not_planned`, PRs `open` / `closed` / `merged`), author, labels, comment count, the body cut at 20 000 characters (`bodyTruncated`), and for a PR draft, head/base and head repo (with `cloneUrl` for fork worktrees).

@@ -40,16 +40,14 @@ starts a new reading generation. The shared background gate admits at most two
 statistics reads; a row removed before admission asks nothing. Runtime changes
 retire the cache. Loading, failed and unknown counts stay distinct from zero.
 
-On GitHub projects, `PullRequestView` remembers Project PRs or CI runs
-per project, defaulting to Project PRs. Saved Current branch selections restore
-Project PRs. Project PRs
-uses the bound primary repository alone, across all branches, and only lists
-open PRs ordered by latest update. Its category tabs are Awaiting my review,
-Created by me, and All, using the bound GitHub account. The project's saved category is selected, with Awaiting my review as the default;
+On GitHub projects, `PullRequestView` renders `ProjectPullRequestList` directly
+without an outer sub-surface tab strip. It uses the bound primary repository alone, across all branches, and only lists
+open PRs ordered by latest update. Its category tabs are Mine (combining PRs
+awaiting the viewer's review and PRs created by the viewer) and All, using the bound GitHub account. The project's saved category is selected, with Mine as the default (migrating legacy `reviewRequested` and `created` values);
 the existing search applies within that category. It needs no checkout branch or comparison base.
-`ProjectCiList` on the CI runs tab queries workflow runs of that same bound primary repository across `All runs`, `Running`, `Failed`, and `Current branch`, with text/qualifier/URL search, 20-second polling while visible runs are active, and persisted filter, query, loaded depth, scroll position, and selected run ID in `useWorkspaceViewStateStore`. Selecting a run opens `CiRunDetail` in place with `Back to list`, 15-second active polling, live step counts, failure annotations, on-demand bounded job log inspection, linked PR handoff, and failed-job attachment into `useInlineCommentDraftStore`. `useCiRunsStore` keys list, detail, and log entries by runtime and exact repository binding, retains loaded data across failed refreshes, pins mounted subscribers against idle eviction, and clears on runtime switch. GitLab keeps
-its existing branch view; VS Code reports repository browsing and CI reads as unsupported.
-Hosted and native mobile expose this view through the workspace PR tab. The
+`CiRunsView` (`mode: 'ci'`) hosts `ProjectCiList` on its own standalone surface, querying workflow runs of that same bound primary repository across `All runs`, `Running`, `Failed`, and `Current branch`, with text/qualifier/URL search, 20-second polling while visible runs are active, and persisted filter, query, loaded depth, scroll position, and selected run ID in `useWorkspaceViewStateStore`. Selecting a run opens `CiRunDetail` in place with `Back to list`, 15-second active polling, live step counts, failure annotations, on-demand bounded job log inspection, linked PR handoff that reveals the PR surface (`mode: 'pr'` on desktop or workspace tab `'pr'` on mobile), and failed-job attachment into `useInlineCommentDraftStore`. `useCiRunsStore` keys list, detail, and log entries by runtime and exact repository binding, retains loaded data across failed refreshes, pins mounted subscribers against idle eviction, and clears on runtime switch. GitLab keeps
+its existing branch view in `PullRequestView` and shows an unsupported notice inside `ProjectCiList` when opened on mobile; VS Code reports repository browsing and CI reads as unsupported.
+Hosted and native mobile expose `PullRequestView` and `CiRunsView` through adjacent `PR` and `CI` workspace tabs. The
 existing comparison picker remains in Changes.
 
 Desktop GitHub PR links from chat, reference chips, sidebar badges and work
@@ -62,7 +60,7 @@ and number, accepts closed and merged PRs, and shares `PullRequestDetail` with
 the ordinary project list. URL suffixes and anchors do not create another
 preview of the same PR.
 
-The linked preview keeps the project PR and CI views hidden in Activity.
+The linked preview keeps the project PR view hidden in Activity.
 Back restores their selection, filters, scroll and reply draft. Hiding, moving,
 closing and reopening the pane also retains the linked preview; its effects
 disconnect while hidden. A binding or account change replaces only the affected

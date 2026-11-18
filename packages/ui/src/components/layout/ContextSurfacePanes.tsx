@@ -5,6 +5,7 @@ import { FileEditorPane } from './FileEditorPane';
 
 import { TerminalView } from '@/components/views/TerminalView';
 import { PullRequestView } from '@/components/views/PullRequestView';
+import { CiRunsView } from '@/components/views/CiRunsView';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import { BrowserPane } from '@/components/browser/BrowserPane';
 import { ChatView } from '@/components/views/ChatView';
@@ -400,6 +401,30 @@ export const ContextSurfacePanes: React.FC = () => {
   const retainedPullRequestTabs = openPullRequestTabs.filter((tab) => tab.key === activePullRequestKey
     || (visitedPullRequests.runtimeKey === runtimeKey && visitedPullRequests.keys.has(tab.key)));
 
+  const ciRunsZone = zoneFor('ci');
+  const ciRunsVisible = ciRunsZone.isOpen && ciRunsZone.activeTab?.mode === 'ci';
+  const activeCiRunsKey = ciRunsVisible && ciRunsZone.activeTab
+    ? JSON.stringify([directoryKey, ciRunsZone.activeTab.id])
+    : null;
+  const [visitedCiRuns, setVisitedCiRuns] = React.useState(() => ({ runtimeKey, keys: new Set<string>() }));
+  const openCiRunsTabs = React.useMemo(() => Object.entries(contextPanelByDirectory)
+    .flatMap(([directory, panel]) => panel.tabs
+      .filter((tab) => tab.mode === 'ci')
+      .map((tab) => ({ directory, key: JSON.stringify([directory, tab.id]) })))
+    .sort((a, b) => a.key.localeCompare(b.key)), [contextPanelByDirectory]);
+
+  React.useEffect(() => {
+    setVisitedCiRuns((previous) => {
+      const keys = new Set(openCiRunsTabs
+        .filter((tab) => tab.key === activeCiRunsKey || (previous.runtimeKey === runtimeKey && previous.keys.has(tab.key)))
+        .map((tab) => tab.key));
+      if (previous.runtimeKey === runtimeKey && previous.keys.size === keys.size && [...keys].every((key) => previous.keys.has(key))) return previous;
+      return { runtimeKey, keys };
+    });
+  }, [activeCiRunsKey, openCiRunsTabs, runtimeKey]);
+  const retainedCiRunsTabs = openCiRunsTabs.filter((tab) => tab.key === activeCiRunsKey
+    || (visitedCiRuns.runtimeKey === runtimeKey && visitedCiRuns.keys.has(tab.key)));
+
   // A browser tab loads its page only once it is needed: shown in an open
   // zone, opened by the agent, or woken by an agent action. Tabs restored
   // from a previous run otherwise stay asleep, since every loaded tab costs a
@@ -729,6 +754,20 @@ export const ContextSurfacePanes: React.FC = () => {
             className={cn('absolute inset-0', !shown && 'hidden')}
           >
             <PullRequestView directory={tab.directory} visible={shown} />
+          </ZonePane>
+        );
+      })}
+      {retainedCiRunsTabs.map((tab) => {
+        const shown = tab.key === activeCiRunsKey;
+        return (
+          <ZonePane
+            key={`${runtimeKey}\u0000${tab.key}`}
+            zone={ciRunsZone.zone}
+            isOpen={shown}
+            directoryKey={tab.directory}
+            className={cn('absolute inset-0', !shown && 'hidden')}
+          >
+            <CiRunsView directory={tab.directory} visible={shown} />
           </ZonePane>
         );
       })}

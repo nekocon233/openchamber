@@ -300,6 +300,15 @@ test('ProjectCiList queries CI runs, opens detail, views logs, attaches failed c
   expect(drafts[0]?.source).toBe('pr-check');
   expect(drafts[0]?.code).toContain('FAIL src/index.ts:19');
 
+  // Clicking a linked PR in CI detail opens the standalone PR surface with that PR queued.
+  const { useUIStore } = await import('@/stores/useUIStore');
+  const prLinkBtn = [...container.querySelectorAll('button')].find((btn) => btn.textContent?.includes('#12'));
+  expect(prLinkBtn).toBeTruthy();
+  await act(async () => {
+    prLinkBtn?.click();
+  });
+  expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'pr')).toBe(true);
+
   // Back to list restores the list view.
   const backBtn = [...container.querySelectorAll('button')].find((btn) => btn.textContent?.includes('Back to list'));
   expect(backBtn).toBeTruthy();
@@ -398,7 +407,7 @@ test('ProjectCiList holds requestCiRun until cold repository binding finishes re
   const { createWebAPIs } = await import('../../../../../web/src/api/index');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { usePullRequestSelectionStore } = await import('@/stores/usePullRequestSelectionStore');
-  const { PullRequestView } = await import('@/components/views/PullRequestView');
+  const { CiRunsView } = await import('@/components/views/CiRunsView');
 
   useSourceControlAuthStore.setState({
     entries: {
@@ -423,7 +432,7 @@ test('ProjectCiList holds requestCiRun until cold repository binding finishes re
     root.render(
       <RuntimeAPIContext.Provider value={apis}>
         <I18nProvider>
-          <PullRequestView directory="/repo-cold" visible />
+          <CiRunsView directory="/repo-cold" visible />
         </I18nProvider>
       </RuntimeAPIContext.Provider>,
     );
@@ -539,6 +548,89 @@ test('useBranchLatestCiRun loads branch CI when no PR is open and stays idle whe
     });
   }
   expect(host.querySelector('[data-run]')?.getAttribute('data-run')).toBe('CI#88:3/3');
+
+  await act(async () => {
+    root.unmount();
+  });
+  registerRuntimeAPIs(null);
+});
+
+test('CiRunsView renders GitLab unsupported notice when bound repository is GitLab', async () => {
+  const gitlabEndpoint = { displayUrl: 'https://gitlab.com/acme/app', fingerprint: 'gitlab-origin' };
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
+    if (url.pathname === '/api/source-control/binding') {
+      return Response.json({
+        status: 'bound',
+        revision: 1,
+        repository: {
+          supported: true,
+          repositoryId: 'repo-gitlab',
+          configRevision: 'rev',
+          bare: false,
+          remotes: [{ name: 'origin', fetch: gitlabEndpoint, push: gitlabEndpoint }],
+        },
+        binding: {
+          repositoryId: 'repo-gitlab',
+          configRevision: 'rev',
+          revision: 1,
+          state: 'bound',
+          providers: [{
+            provider: 'gitlab',
+            instance: 'https://gitlab.com',
+            accountId: 'gitlab#1',
+            primaryRemote: 'origin',
+            readiness: 'ready',
+            endpoint: gitlabEndpoint,
+          }],
+          remotes: [],
+          auxiliary: [],
+        },
+      });
+    }
+    return Response.json({});
+  }, originalFetch);
+
+  const { createRoot } = await import('react-dom/client');
+  const { I18nProvider } = await import('@/lib/i18n');
+  const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
+  const { registerRuntimeAPIs } = await import('@/contexts/runtimeAPIRegistry');
+  const { createWebAPIs } = await import('../../../../../web/src/api/index');
+  const { useGitStore } = await import('@/stores/useGitStore');
+  const { CiRunsView } = await import('../CiRunsView');
+
+  useGitStore.getState().setActiveDirectory('/repo-gitlab');
+  const existingGitLabState = useGitStore.getState().getDirectoryState('/repo-gitlab');
+  if (existingGitLabState) {
+    const directories = new Map(useGitStore.getState().directories);
+    directories.set('/repo-gitlab', {
+      ...existingGitLabState,
+      isGitRepo: true,
+      status: { current: 'main', tracking: null, ahead: 0, behind: 0, files: [], isClean: true, diffStats: { staged: {}, working: {} } },
+    });
+    useGitStore.setState({ directories });
+  }
+
+  const apis = createWebAPIs();
+  registerRuntimeAPIs(apis);
+
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <RuntimeAPIContext.Provider value={apis}>
+        <I18nProvider>
+          <CiRunsView directory="/repo-gitlab" visible />
+        </I18nProvider>
+      </RuntimeAPIContext.Provider>,
+    );
+  });
+  for (let i = 0; i < 6; i += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  expect(host.textContent).toContain('GitHub repositories only');
 
   await act(async () => {
     root.unmount();

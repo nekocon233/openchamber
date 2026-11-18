@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { ChecksSummaryLine, StatePill } from '@/components/references/ReferencePreview';
 import { REFERENCE_META_TEXT, relativeTimeOf } from '@/components/references/referencePickerItems';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,7 @@ import type { CIRun, CiWorkflowRun, SourceControlReadContext } from '@/lib/api/t
 import { useI18n } from '@/lib/i18n';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { formatDateTimeForPreference } from '@/lib/timeFormat';
+import { openExternalUrl } from '@/lib/url';
 import { cn } from '@/lib/utils';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
@@ -79,6 +81,7 @@ export const CiRunDetail: React.FC<{
   active: boolean;
 }> = ({ runId, initialRun, context, workspaceDirectory, active }) => {
   const { t } = useI18n();
+  const mobileActions = useMobileAppActions();
   const { sourceControl } = useRuntimeAPIs();
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const expansion = useCheckRunExpansion();
@@ -355,12 +358,21 @@ export const CiRunDetail: React.FC<{
                       size="xs"
                       className="-ms-1.5 px-1.5 font-mono text-foreground"
                       onClick={() => {
-                        usePullRequestSelectionStore.getState().requestOpen({
+                        const opened = usePullRequestSelectionStore.getState().requestOpen({
                           workspaceDirectory,
                           sourceDirectory: context.directory,
                           url: pr.url,
                           failureBehavior: 'manual',
                         });
+                        if (!opened) {
+                          void openExternalUrl(pr.url);
+                          return;
+                        }
+                        if (mobileActions) {
+                          mobileActions.openWorkspaceTab('pr');
+                        } else {
+                          useUIStore.getState().openContextPanelTab(workspaceDirectory, { mode: 'pr' });
+                        }
                       }}
                     >
                       <Icon name="git-pull-request" className="size-3.5 text-muted-foreground" />

@@ -36,7 +36,8 @@ import { useGuestsStore } from '@/lib/guests/store';
 import { getVisibleContextRailSurfaces } from '@/lib/surfaces/registry';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
+import { hasConnectedProviderInAuthEntries, useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
+import { currentRepositoryReferenceProvider } from '@/components/references/referenceSources';
 import { isWorkflowsSurfaceShown } from '@/lib/workflows/panel';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { getCycledPrimaryAgentName } from '@/components/chat/mobileControlsUtils';
@@ -566,13 +567,16 @@ export const useKeyboardShortcuts = () => {
         if (!state.isMobile && effectiveDirectory) {
           const directory = normalizeContextPanelDirectoryKey(effectiveDirectory);
           const panel = state.contextPanelByDirectory[directory];
+          const authEntries = useSourceControlAuthStore.getState().entries;
           const visibleSurfaces = getVisibleContextRailSurfaces({
             railOrder: state.contextRailOrder,
             hiddenSurfaces: state.contextRailHiddenSurfaces,
             isVSCode: isVSCodeRuntime(),
             screenWidth: window.innerWidth,
             tabs: panel?.tabs ?? [],
-            sourceControlConnected: Object.values(useSourceControlAuthStore.getState().entries).some((entry) => entry.status?.status === 'connected'),
+            sourceControlConnected: Object.values(authEntries).some((entry) => entry.status?.status === 'connected'),
+            githubConnected: hasConnectedProviderInAuthEntries(authEntries, 'github'),
+            repositoryProvider: currentRepositoryReferenceProvider(directory),
             workflowsShown: isWorkflowsSurfaceShown(panel?.tabs ?? [], effectiveDirectory),
             extras: enabledGuestSurfaces(useGuestsStore.getState().guests, getRuntimeUrlResolver().authenticatedAsset),
           });

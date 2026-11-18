@@ -23,8 +23,10 @@ const pullSourceSchema = z.object({
 });
 const schemas = {
   pullRequest: z.object({
-    tab: z.enum(['project', 'ci']).catch('project'),
-    people: z.enum(['reviewRequested', 'created', 'any']).catch('reviewRequested'),
+    people: z.preprocess(
+      (value) => (value === 'reviewRequested' || value === 'created' ? 'mine' : value),
+      z.enum(['mine', 'any']).catch('mine'),
+    ),
     query: text,
     selectedUrl: nullableText,
     loadedCount: z.number().int().nonnegative().catch(0),

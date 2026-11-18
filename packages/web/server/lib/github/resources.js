@@ -330,6 +330,7 @@ export function createGitHubResources({
       return await operation();
     } catch (error) {
       if (error?.sourceControlResponse || error?.sourceControlAccountUnavailable) throw error;
+      if (error?.code === 'INVALID_REFERENCES_CURSOR') throw responseError(400, { error: error.message });
       if ((error?.status ?? error?.response?.status) === 401) {
         // The bound account's refusal is the shell's to answer: it writes the
         // account off. A host's current credential refused answers `connected: false`.

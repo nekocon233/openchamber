@@ -121,7 +121,7 @@ native task summaries request their session snapshot once and follow live events
 | Branch, ahead/behind, attention | `useGitStore` directory state | warmed via `runBackgroundNetworkTask(ensureStatus)` and refreshed from Git mutation hints |
 | Changed files | `useGitStore` status `files` + `diffStats` | working tree, not session-authored edits |
 | PR + checks | `useFreshestSourceControlVisualSummaryForBranch` | **read-only**; follows the freshest bound-identity entry for the branch |
-| Branch CI without PR | `useBranchLatestCiRun` in `views/git/ciRunsStore.ts` | mounted only while the panel is visible and `prSummary` is null; shares the CI tab's bound cache and opens `CiRunDetail` via `usePullRequestSelectionStore.requestCiRun` |
+| Branch CI without PR | `useBranchLatestCiRun` in `views/git/ciRunsStore.ts` | mounted only while the panel is visible and `prSummary` is null; shares the CI surface's bound cache and opens `CiRunDetail` on the standalone `ci` surface/workspace tab via `usePullRequestSelectionStore.requestCiRun` |
 | Subagents | child sessions from `useAllLiveSessions` (`parentID`) + `useAllSessionStatuses`; per-row cost from `computeRollup`'s `perChildCost` (each child's own subtree total, so nested subagent-of-subagent cost rolls up under its immediate parent row) | |
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | same provider grouping in desktop and mobile work status |
@@ -660,6 +660,7 @@ Rows that name something the app can already show are buttons:
 | Changes | working-tree diff (`openContextPanelTab`, `diffScope: 'working'`, no target path) |
 | Branch | git surface (`openContextSurface(dir, 'git')`) |
 | Pull request, Checks | The Tracker's branch tab (`openContextPanelTab(dir, { mode: 'pr' })`) |
+| Branch CI (no PR) | The standalone CI runs surface (`openContextPanelTab(dir, { mode: 'ci' })`, or the mobile `ci` workspace tab) |
 | Subagent | that child session's chat tab, read-only |
 | Goal (row) | the composer's own `SessionGoalDialog` |
 | Goal (pause/resume) | `setSessionGoalStatus(sessionId, directory, status)` |
