@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type {
   SidebarProjectEntry,
   SidebarSessionFolder,
@@ -69,11 +70,16 @@ export const normalizeSidebarFolderScope = (value: string): string => {
   return archived ? `${ARCHIVED_SCOPE_PREFIX}${path}` : path;
 };
 
+const sidebarProjectSchema = z.object({
+  id: z.string(), path: z.string(),
+  defaultModel: z.string().optional(),
+  defaultVariant: z.string().trim().min(1).optional(),
+}).passthrough().refine((project) => !project.defaultVariant || Boolean(project.defaultModel));
+
 const parseProject = (value: unknown): SidebarProjectEntry => {
-  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.path !== 'string') {
-    throw new Error('Invalid sidebar project');
-  }
-  return { ...value } as SidebarProjectEntry;
+  const project = sidebarProjectSchema.safeParse(value);
+  if (!project.success) throw new Error('Invalid sidebar project');
+  return project.data;
 };
 
 const parseFolder = (value: unknown): SidebarSessionFolder => {
@@ -188,10 +194,12 @@ export const applySidebarStateOperation = (
       const index = next.projects.findIndex((project) => project.id === operation.projectId);
       if (index < 0) throw new Error('Unknown project');
       const project = { ...next.projects[index] } as Record<string, unknown>;
+      if (operation.patch.defaultModel !== undefined && operation.patch.defaultModel !== project.defaultModel) delete project.defaultVariant;
       for (const [key, value] of Object.entries(operation.patch)) {
         if (value === null) delete project[key];
         else project[key] = value;
       }
+      if (project.defaultVariant && !project.defaultModel) throw new Error('A project default variant requires a default model');
       next.projects[index] = project as SidebarProjectEntry;
       return next;
     }

@@ -4,16 +4,16 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   SettingsFieldRow,
   SettingsSection,
   SETTINGS_CUSTOM_TRIGGER_CLASS,
   SETTINGS_HELPER_CLASS,
-  SETTINGS_SELECT_ROW_TRIGGER_CLASS,
 } from '@/components/sections/shared/SettingsSection';
+import { DefaultModelVariantFields } from '../shared/DefaultModelVariantFields';
 import { selectProvidersForDirectory, useConfigStore } from '@/stores/useConfigStore';
-import { modelVariantNames } from '@/lib/modelVariants';
+import { modelVariantNames, preferredModelVariant } from '@/lib/modelVariants';
+import { NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
 import { isPrimaryMode } from '@/components/chat/mobileControlsUtils';
 import { updateSharedProjectSetup, type ProjectRef } from '@/lib/openchamberConfig';
 import { ensureSharedSetupTrusted, resetSharedSetupTrust } from '@/lib/sharedTrustConfirmation';
@@ -26,10 +26,6 @@ import type { ProjectSetupState } from './useProjectSetup';
 import { ProjectSetupUnavailable } from './ProjectSettingsBits';
 
 type ProjectIdentityFormState = ReturnType<typeof useProjectIdentityForm>;
-
-const NO_VARIANT_VALUE = '__default__';
-
-const formatVariantLabel = (variant: string): string => variant.charAt(0).toUpperCase() + variant.slice(1);
 
 const ChatDefaultsSection: React.FC<{ form: ProjectIdentityFormState }> = ({ form }) => {
   const { t } = useI18n();
@@ -46,6 +42,8 @@ const ChatDefaultsSection: React.FC<{ form: ProjectIdentityFormState }> = ({ for
   }, [parsedDefaultModel, providers]);
 
   if (!form.project) return null;
+  const displayedVariant = defaultVariant ?? (parsedDefaultModel.providerId === NATIVE_PROVIDER_CODEX
+    ? preferredModelVariant(availableVariants, parsedDefaultModel.providerId) : undefined);
 
   return (
     <SettingsSection
@@ -70,6 +68,7 @@ const ChatDefaultsSection: React.FC<{ form: ProjectIdentityFormState }> = ({ for
           providerId={parsedDefaultModel.providerId}
           modelId={parsedDefaultModel.modelId}
           onChange={form.handleDefaultModelChange}
+          selectedVariant={displayedVariant ?? null}
           className={SETTINGS_CUSTOM_TRIGGER_CLASS}
           allowNativeModels
           agentCombination={isVSCodeRuntime() ? undefined : { id: form.defaultAgentCombinationId, onSelect: form.handleDefaultCombinationChange }}
@@ -77,25 +76,8 @@ const ChatDefaultsSection: React.FC<{ form: ProjectIdentityFormState }> = ({ for
       </SettingsFieldRow>
 
       {availableVariants.length > 0 || form.defaultAgentCombinationId ? (
-        <SettingsFieldRow settingsItem="projects.default-thinking" label={t('settings.projects.page.field.projectThinking')}>
-          <Select
-            disabled={Boolean(form.defaultAgentCombinationId)}
-            value={defaultVariant ?? NO_VARIANT_VALUE}
-            onValueChange={(value) => form.handleDefaultVariantChange(value === NO_VARIANT_VALUE ? undefined : value)}
-          >
-            <SelectTrigger className={SETTINGS_SELECT_ROW_TRIGGER_CLASS} aria-label={t('settings.projects.page.field.projectThinking')}>
-              <SelectValue>
-                {form.defaultAgentCombinationId ? t('agents.combinations.defaultThinking') : defaultVariant ? formatVariantLabel(defaultVariant) : t('settings.projects.page.option.thinkingDefault')}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_VARIANT_VALUE}>{t('settings.projects.page.option.thinkingDefault')}</SelectItem>
-              {availableVariants.map((variant) => (
-                <SelectItem key={variant} value={variant}>{formatVariantLabel(variant)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsFieldRow>
+        <DefaultModelVariantFields scope="projects" providerId={parsedDefaultModel.providerId} variants={availableVariants}
+          value={displayedVariant} onChange={form.handleDefaultVariantChange} combination={Boolean(form.defaultAgentCombinationId)} />
       ) : null}
     </SettingsSection>
   );

@@ -86,7 +86,7 @@ interface ProjectsStore {
     defaultModel?: string | null;
     defaultAgentCombinationId?: string | null;
     defaultVariant?: string | null;
-  }) => void;
+  }) => Promise<boolean>;
   uploadProjectIcon: (id: string, file: File) => Promise<{ ok: boolean; error?: string }>;
   removeProjectIcon: (id: string) => Promise<{ ok: boolean; error?: string }>;
   discoverProjectIcon: (id: string, options?: { force?: boolean }) => Promise<{ ok: boolean; skipped?: boolean; reason?: string; error?: string }>;
@@ -923,7 +923,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       void submitSidebarOperation({ type: 'project.update', projectId: id, patch: { label: trimmed } }).catch(() => {});
     },
 
-    updateProjectMeta: (id: string, meta: {
+    updateProjectMeta: async (id: string, meta: {
       label?: string;
       icon?: string | null;
       color?: string | null;
@@ -934,9 +934,11 @@ export const useProjectsStore = create<ProjectsStore>()(
       defaultVariant?: string | null;
     }) => {
       if (isVSCodeProjectsRuntime) {
-        return;
+        return false;
       }
       const { projects, activeProjectId } = get();
+      const previous = projects.find((project) => project.id === id);
+      if (!previous) return false;
       const nextProjects = projects.map((project) => {
         if (project.id !== id) return project;
         const updated = { ...project };
@@ -966,6 +968,7 @@ export const useProjectsStore = create<ProjectsStore>()(
         }
         if (meta.defaultModel !== undefined) {
           const normalized = normalizeDefaultModel(meta.defaultModel);
+          if (normalized !== project.defaultModel) delete updated.defaultVariant;
           if (normalized) {
             updated.defaultModel = normalized;
           } else {
@@ -995,10 +998,13 @@ export const useProjectsStore = create<ProjectsStore>()(
       if (meta.color !== undefined) patch.color = meta.color;
       if (meta.iconBackground !== undefined) patch.iconBackground = normalizeIconBackground(meta.iconBackground);
       if (meta.defaultModel !== undefined) patch.defaultModel = normalizeDefaultModel(meta.defaultModel) ?? null;
-      if (meta.defaultAgentCombinationId !== undefined) patch.defaultAgentCombinationId = meta.defaultAgentCombinationId || null;
-      if (Object.keys(patch).length > 0) {
-        void submitSidebarOperation({ type: 'project.update', projectId: id, patch }).catch(() => {});
+      if (meta.defaultVariant !== undefined) {
+        if (meta.defaultModel === undefined) patch.defaultModel = previous.defaultModel ?? null;
+        patch.defaultVariant = meta.defaultVariant?.trim() || null;
       }
+      if (meta.defaultAgentCombinationId !== undefined) patch.defaultAgentCombinationId = meta.defaultAgentCombinationId || null;
+      if (!Object.keys(patch).length) return true;
+      return submitSidebarOperation({ type: 'project.update', projectId: id, patch }).then(() => true, () => false);
     },
 
     uploadProjectIcon: async (id: string, file: File) => {
@@ -1276,6 +1282,7 @@ const sidebarProjectMatchesLocal = (local: ProjectEntry, shared: SidebarProjectE
   && local.iconBackground === shared.iconBackground
   && local.color === shared.color
   && local.defaultModel === shared.defaultModel
+  && local.defaultVariant === shared.defaultVariant
   && local.defaultAgentCombinationId === shared.defaultAgentCombinationId
   && local.addedAt === shared.addedAt
   && local.iconImage?.mime === shared.iconImage?.mime
@@ -1291,12 +1298,13 @@ const synchronizeProjectsFromSidebarState = (): void => {
   const localById = new Map(current.projects.map((project) => [project.id, project]));
   const projects: ProjectEntry[] = snapshot.projects.map((project) => {
     const local = localById.get(project.id);
-    const projected = {
-      ...project,
-      ...(local?.lastOpenedAt !== undefined ? { lastOpenedAt: local.lastOpenedAt } : {}),
-      ...(local?.sidebarCollapsed !== undefined ? { sidebarCollapsed: local.sidebarCollapsed } : {}),
-    };
-    return local && sidebarProjectMatchesLocal(local, project) ? local : projected;
+    if (local && sidebarProjectMatchesLocal(local, project)) return local;
+    const projected: ProjectEntry = { ...project };
+    if (local?.defaultAgent && !project.defaultAgent) projected.defaultAgent = local.defaultAgent;
+    if (local?.labelSource && local.label === project.label && !project.labelSource) projected.labelSource = local.labelSource;
+    if (local?.lastOpenedAt !== undefined) projected.lastOpenedAt = local.lastOpenedAt;
+    if (local?.sidebarCollapsed !== undefined) projected.sidebarCollapsed = local.sidebarCollapsed;
+    return projected;
   });
   const activeProjectId = projects.some((project) => project.id === current.activeProjectId)
     ? current.activeProjectId

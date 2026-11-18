@@ -46,7 +46,15 @@ The public snapshot is:
 }
 ```
 
-Project array position is authoritative project order. Shared project fields are `id`, normalized absolute `path`, `label`, `icon`, `iconImage`, `iconBackground`, `color`, `defaultModel`, `defaultAgentCombinationId`, and `addedAt`. Optional fields are omitted or use their documented nullable form.
+Project array position is authoritative project order. Shared project fields are `id`, normalized absolute `path`, `label`, `icon`, `iconImage`, `iconBackground`, `color`, `defaultModel`, `defaultVariant`, `defaultAgentCombinationId`, and `addedAt`. Optional fields are omitted or use their documented nullable form.
+
+A project variant belongs to its default model. Clients submit the pair in
+one mutation. Replacing or clearing a model clears the old variant unless
+the patch supplies another one. A variant without a model is rejected.
+Clients send an explicit clear even when their cached project has no variant.
+An older host rejects this field before applying the patch. For a null variant
+only, the web adapter retries that rejection with the same revision and mutation
+ID and the remaining project fields.
 
 The snapshot intentionally excludes:
 

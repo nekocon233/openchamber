@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import type { ProjectEntry } from "@/lib/api/types"
 import type { DesktopSettings } from "@/lib/desktop"
 import { parseSettingsDocument } from "@/lib/settings/registry"
 import { useProjectsStore } from "./useProjectsStore"
+import { useSidebarStateStore } from "./useSidebarStateStore"
 import { useDirectoryStore } from "./useDirectoryStore"
 import { opencodeClient } from "../lib/opencode/client"
 
@@ -141,6 +142,35 @@ describe("useProjectsStore default model and thinking level", () => {
     const project = useProjectsStore.getState().projects[0]
     expect(project?.defaultModel).toBe("anthropic/claude-opus-5")
     expect(project?.defaultVariant).toBe("high")
+  })
+
+  test("writes the selected speed with its model and reports an unconfirmed project update", async () => {
+    seed({ id: "project-a", path: "/repo", defaultModel: "codex-native/sol", defaultVariant: "high-fast" })
+    const mutate = spyOn(useSidebarStateStore.getState(), "mutate").mockRejectedValue(new Error("offline"))
+    try {
+      const saved = await useProjectsStore.getState().updateProjectMeta("project-a", { defaultVariant: "high-ultrafast" })
+      expect(mutate.mock.calls.at(-1)?.[0]).toEqual({ type: "project.update", projectId: "project-a", patch: { defaultModel: "codex-native/sol", defaultVariant: "high-ultrafast" } })
+      expect(saved).toBe(false)
+      seed({ id: "project-a", path: "/repo", defaultModel: "codex-native/sol" })
+      await useProjectsStore.getState().updateProjectMeta("project-a", { defaultVariant: null })
+      expect(mutate.mock.calls.at(-1)?.[0]).toEqual({ type: "project.update", projectId: "project-a", patch: { defaultModel: "codex-native/sol", defaultVariant: null } })
+    } finally {
+      mutate.mockRestore()
+    }
+  })
+
+  test("a remote speed change preserves device-local project metadata", () => {
+    const previous = useSidebarStateStore.getState()
+    const projects = useProjectsStore.getState()
+    const shared = { id: "project-a", path: "/repo", label: "App", defaultModel: "codex-native/sol", defaultVariant: "high-ultrafast" }
+    try {
+      seed({ ...shared, labelSource: "manual", defaultVariant: "high-fast", defaultAgent: "plan", lastOpenedAt: 123 })
+      useSidebarStateStore.setState({ snapshot: { schemaVersion: 1, revision: 8, projects: [shared], pinnedSessionIds: [], worktreeOrderByProject: {}, sessionFoldersByScope: {} } })
+      expect(useProjectsStore.getState().projects[0]).toMatchObject({ ...shared, labelSource: "manual", defaultAgent: "plan", lastOpenedAt: 123 })
+    } finally {
+      useSidebarStateStore.setState(previous, true)
+      useProjectsStore.setState(projects, true)
+    }
   })
 
   test("drops the thinking level when the model is cleared", () => {

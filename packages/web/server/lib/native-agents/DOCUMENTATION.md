@@ -570,9 +570,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
   Encrypted reasoning alone has no displayable text; old turns without a
   returned summary cannot be filled in retrospectively.
 - The Codex catalog carries the service tier IDs from each model's `model/list`
-  entry. The UI offers `<effort>-fast` for `priority` and `<effort>-ultrafast`
+  entry. The UI stores `<effort>-fast` for `priority` and `<effort>-ultrafast`
   for `ultrafast`. For example, `ultra-fast` still selects the `ultra` effort
   on `priority`. Older clients read the catalog's `fast` flag.
+  The catalog's `defaultEffortVariants` lists the supported speeds that can
+  run without an explicit effort. Both `default` and `default-ultrafast` leave
+  the effort to Codex, at standard and Ultrafast speed respectively. An absent
+  session default can still inherit the preferred effort. Older servers omit this
+  field, so a client offers only the concrete effort and speed pairs they accept.
   A thread inherits its last service tier. OpenChamber compares the requested
   tier with the one reported at start or resume, or applied by its last turn
   or review. It sends a new `serviceTier` when that tier changes and uses

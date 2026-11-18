@@ -3,6 +3,9 @@ import { getCustomizableShortcutActions } from '@/lib/shortcuts';
 import { isIsolatedSpacesPageVisible } from '@/lib/spaces/release';
 import { useUIStore } from '@/stores/useUIStore';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useProjectsStore } from '@/stores/useProjectsStore';
+import { NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
+import { parseModelIdentifier } from '@/lib/modelIdentifier';
 import { trackerPresentation } from '@/lib/trackers/presentation';
 import type { TrackerDescriptor } from '@/lib/trackers/types';
 import type { ChangeRequestTerm, SourceControlProviderDescriptor } from '@/lib/source-control/providers/descriptor';
@@ -649,7 +652,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'sessions.default-model',
     page: 'sessions',
     titleKey: 'settings.openchamber.defaults.field.defaultModel',
-    keywords: ['model', 'provider', 'new sessions', 'thinking', 'reasoning', 'variant', 'combination', 'preset'],
+    keywords: ['model', 'provider', 'new sessions', 'thinking', 'reasoning', 'variant', 'combination', 'preset', 'codex', 'speed', 'fast', 'ultrafast'],
   },
   {
     id: 'sessions.agent-combinations', page: 'sessions', titleKey: 'agents.combinations.title',
@@ -659,10 +662,16 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
     id: 'sessions.default-thinking',
     page: 'sessions',
-    titleKey: 'settings.openchamber.defaults.field.fallbackModel',
-    descriptionKey: 'settings.openchamber.defaults.field.fallbackModelInfo',
-    keywords: ['fallback', 'backup', 'usage limit', 'quota', 'rate limit', 'model', 'thinking'],
-    isAvailable: (ctx) => !ctx.isVSCode,
+    titleKey: 'settings.openchamber.defaults.field.defaultThinking',
+    keywords: ['thinking', 'reasoning', 'effort', 'new sessions'],
+  },
+  {
+    id: 'sessions.default-speed', page: 'sessions', titleKey: 'chat.modelControls.speed',
+    keywords: ['codex', 'speed', 'fast', 'ultrafast', 'new sessions'],
+    isAvailable: (ctx) => {
+      const config = useConfigStore.getState();
+      return !ctx.isVSCode && !config.settingsDefaultAgentCombinationId && parseModelIdentifier(config.settingsDefaultModel)?.providerId === NATIVE_PROVIDER_CODEX;
+    },
   },
   {
     id: 'sessions.default-agent',
@@ -1142,13 +1151,23 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'projects.default-model',
     page: 'projects',
     titleKey: 'settings.projects.page.field.projectModel',
-    keywords: ['model', 'default', 'new chat', 'project metadata', 'combination', 'preset'],
+    keywords: ['model', 'default', 'new chat', 'project metadata', 'combination', 'preset', 'codex', 'speed', 'fast', 'ultrafast'],
   },
   {
     id: 'projects.default-thinking',
     page: 'projects',
     titleKey: 'settings.projects.page.field.projectThinking',
     keywords: ['thinking', 'variant', 'reasoning', 'effort', 'model', 'project metadata'],
+  },
+  {
+    id: 'projects.default-speed', page: 'projects', titleKey: 'chat.modelControls.speed',
+    keywords: ['codex', 'speed', 'fast', 'ultrafast', 'project defaults'],
+    isAvailable: (ctx) => {
+      const projects = useProjectsStore.getState().projects;
+      const selectedId = useUIStore.getState().settingsProjectsSelectedId;
+      const project = projects.find((entry) => entry.id === selectedId) ?? projects[0];
+      return !ctx.isVSCode && !project?.defaultAgentCombinationId && parseModelIdentifier(project?.defaultModel)?.providerId === NATIVE_PROVIDER_CODEX;
+    },
   },
   {
     id: 'projects.icon',

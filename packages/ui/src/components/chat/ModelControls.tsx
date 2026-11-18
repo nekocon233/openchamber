@@ -26,6 +26,8 @@ import { Icon } from "@/components/icon/Icon";
 import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
 import type { IconName } from "@/components/icon/icons";
 import { ModelPickerList, type ModelPickerEntry, type ModelPickerAction } from '@/components/model-picker/ModelPickerList';
+import { CodexVariantFields } from '@/components/model-picker/CodexVariantSelect';
+import { codexEffortCycle, codexVariantLabel } from '@/lib/native-agents/codex-speed';
 import { SortablePickerRows } from '@/components/model-picker/SortablePickerRows';
 import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
 import { arrayMove } from '@dnd-kit/sortable';
@@ -46,6 +48,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import {
     isProviderPickableForSession,
     NATIVE_AGENT_NAMES,
+    NATIVE_PROVIDER_CODEX,
     nativeBackendOfProviderId,
     nativeBackendOfSessionId,
     isUnifiedNativeSessionId,
@@ -541,9 +544,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const modelID = selection ? saved?.modelId ?? selection.model?.modelId : config.currentModelId;
         const agent = selection?.agent ?? config.currentAgentName;
         if (!providerID || !modelID) return;
-        const variant = selection
-            ? useSelectionStore.getState().getAgentModelVariantForSession(pickerSessionId, agent || 'build', providerID, modelID) ?? selection.variant ?? undefined
-            : config.currentVariant;
+        const savedVariant = selection ? useSelectionStore.getState().getAgentModelVariantForSession(pickerSessionId, agent || 'build', providerID, modelID) : undefined;
+        const variant = selection ? (savedVariant === undefined ? selection.variant : savedVariant) : config.currentVariant;
         void selectNativeConversationModel(pickerSessionId, directory, {
             model: { providerID, modelID }, agent: agent === 'plan' ? 'plan' : 'build', variant: variant ?? undefined,
         }, clearCombination).catch(() => toast.error(t('chat.unified.selectionFailed')));
@@ -654,8 +656,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         if (activeMobilePanel !== 'model') {
             setMobileModelQuery('');
             setExpandedMobileModelKey(null);
+            if (isCompact) setPendingThinkingVariants((current) => current.size ? new Map() : current);
         }
-    }, [activeMobilePanel]);
+    }, [activeMobilePanel, isCompact]);
 
     // Handle model selector close behavior (separate from agent selector)
     const prevModelSelectorOpenRef = React.useRef(isModelSelectorOpen);
@@ -959,7 +962,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         // (no level) instead of being replaced with a different one.
         return configured.some((candidate) => candidate !== undefined)
             ? undefined
-            : preferredModelVariant(variantOptions);
+            : preferredModelVariant(variantOptions, providerId);
     }, [agents, currentAgentName, currentModelId, currentProviderId, currentSessionId, currentVariantSelection, effectiveCurrentVariant, getModelVariantOptions, providers, settingsDefaultModel, settingsDefaultVariant, uiAgentName]);
 
     /**
@@ -1029,7 +1032,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return currentVariant ?? null;
         }
         const recorded = resolveModelVariantSelection(entry.providerID, entry.modelID);
-        return recorded === undefined && !selection ? preferredModelVariant(variantOptions) ?? null : recorded ?? null;
+        return recorded === undefined && !selection ? preferredModelVariant(variantOptions, entry.providerID) ?? null : recorded ?? null;
     };
 
     /**
@@ -2033,6 +2036,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         );
     };
 
+    const pickerVariantLabel = (providerId: string, variant: string | null | undefined) => {
+        if (providerId === NATIVE_PROVIDER_CODEX) return codexVariantLabel(variant, t('chat.modelControls.default'), t('chat.modelControls.standardSpeed'));
+        return variant ? formatEffortLabel(variant) : t('chat.modelControls.default');
+    };
+
     const renderMobileModelPanel = () => {
         if (!isCompact) return null;
 
@@ -2078,7 +2086,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
         }
 
-        const handleMobileModelApply = (providerId: string, modelId: string, variant: string | null | undefined) => {
+        const handleMobileModelApply = (providerId: string, modelId: string, variant: string | null | undefined, keepOpen = false) => {
             // Chosen in the mobile model sheet, and the row already showed this
             // effort: no effort there means the user is applying "Default".
             const result = applyModelSelectionWithVariant(providerId, modelId, variant ?? null);
@@ -2095,6 +2103,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             agentCombinations.clearDraftSelection();
             persistUnifiedSelection(true);
 
+            if (keepOpen) {
+                setPendingThinkingVariants((previous) => new Map(previous).set(buildModelRefKey(providerId, modelId), variant ?? undefined));
+                return;
+            }
             setExpandedMobileModelKey(null);
             closeMobilePanel();
             requestAnimationFrame(focusColumnInput);
@@ -2108,16 +2120,18 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const renderMobileModelRow = (entry: ModelPickerEntry, showProviderLogo: boolean) => {
             const { model, providerID: providerId, modelID: modelId } = entry;
             const rowKey = buildModelRefKey(providerId, modelId);
+            const expansionKey = `${showProviderLogo ? 'shortcut' : 'provider'}:${rowKey}`;
             const isSelected = !agentCombinations.selectedCombination && providerId === currentProviderId && modelId === currentCatalogModelId;
             const metadata = entry.kind === 'auto'
                 ? undefined
                 : mergeModelMetadataWithLiveModel(providerId, entry.model, getModelMetadata(providerId, modelId));
             const variantOptions = getModelVariantOptions(providerId, modelId);
             const hasVariants = variantOptions.length > 0;
-            const rowVariant = resolvePickerVariant(entry);
+            const previewVariant = resolvePickerVariant(entry);
+            const rowVariant = entry.variant === undefined ? previewVariant : entry.variant;
             // Both an explicit "Default" and no level at all read as "Default".
-            const variantLabel = hasVariants ? formatEffortLabel(rowVariant ?? undefined) : null;
-            const isExpanded = expandedMobileModelKey === rowKey;
+            const variantLabel = hasVariants ? pickerVariantLabel(providerId, rowVariant) : null;
+            const isExpanded = expandedMobileModelKey === expansionKey;
             const inlineVariantOptions = [undefined, ...variantOptions].slice(0, MAX_INLINE_MOBILE_VARIANT_OPTIONS);
             const hasVariantOverflow = inlineVariantOptions.length < variantOptions.length + 1;
             const capabilityIcons = getCapabilityIcons(metadata).map((icon) => ({
@@ -2193,10 +2207,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         {hasVariants ? (
                             <button
                                 type="button"
-                                onClick={() => setExpandedMobileModelKey((prev) => prev === rowKey ? null : rowKey)}
+                                onClick={() => setExpandedMobileModelKey((prev) => prev === expansionKey ? null : expansionKey)}
                                 className="flex items-center gap-0.5 typography-micro font-medium text-muted-foreground hover:text-foreground flex-shrink-0"
                                 aria-expanded={isExpanded}
-                                aria-label={isExpanded ? t('chat.modelControls.hideThinkingModes') : t('chat.modelControls.showThinkingModes')}
+                                aria-label={providerId === NATIVE_PROVIDER_CODEX ? t('chat.modelControls.thinkingAndSpeed')
+                                    : t(isExpanded ? 'chat.modelControls.hideThinkingModes' : 'chat.modelControls.showThinkingModes')}
                             >
                                 <span className="whitespace-nowrap">{variantLabel}</span>
                                 {isExpanded ? <Icon name="arrow-down-s" className="size-3.5" /> : <Icon name="arrow-right-s" className="size-3.5" />}
@@ -2231,7 +2246,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     </div>
                     {isExpanded && hasVariants ? (
                         <div className="border-t border-border/30 p-2">
-                            <div className="flex flex-wrap gap-2">
+                            {providerId === NATIVE_PROVIDER_CODEX ? <CodexVariantFields rows variants={variantOptions} variant={previewVariant}
+                                onChange={(next) => handleMobileModelApply(providerId, modelId, next, true)} /> : <div className="flex flex-wrap gap-2">
                                 {inlineVariantOptions.map((variantOption) => {
                                     const isVariantSelected = variantOption === rowVariant || (!variantOption && !rowVariant);
                                     return (
@@ -2261,7 +2277,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                         {t('inlineComment.actions.showMore')}
                                     </button>
                                 ) : null}
-                            </div>
+                            </div>}
                         </div>
                     ) : null}
                 </div>
@@ -2452,7 +2468,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         // otherwise the main composer's preferred level. A controlled selection
         // keeps its own semantics.
         const selectedVariant = !selection && recordedVariant === undefined
-            ? preferredModelVariant(targetVariants)
+            ? preferredModelVariant(targetVariants, targetProviderId)
             : recordedVariant;
         const isDefault = !selectedVariant;
 
@@ -2467,6 +2483,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 return;
             }
 
+            persistUnifiedSelection();
+            if (targetProviderId === NATIVE_PROVIDER_CODEX) return;
             closeMobilePanel();
             requestAnimationFrame(focusColumnInput);
         };
@@ -2475,7 +2493,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             <MobileOverlayPanel
                 open={activeMobilePanel === 'variant'}
                 onClose={closeMobilePanel}
-                title={t('chat.modelControls.thinking')}
+                title={t(targetProviderId === NATIVE_PROVIDER_CODEX ? 'chat.modelControls.thinkingAndSpeed' : 'chat.modelControls.thinking')}
                 renderHeader={mobileVariantTarget ? ((closeButton) => (
                     <div className="flex items-center justify-between px-3 py-2 border-b border-border/40">
                         <button
@@ -2486,12 +2504,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             <Icon name="arrow-go-back" className="size-4" />
                             <span>{t('onboarding.common.actions.back')}</span>
                         </button>
-                        <h2 className="typography-ui-label font-semibold text-foreground">{t('chat.modelControls.thinking')}</h2>
+                        <h2 className="typography-ui-label font-semibold text-foreground">{t(targetProviderId === NATIVE_PROVIDER_CODEX ? 'chat.modelControls.thinkingAndSpeed' : 'chat.modelControls.thinking')}</h2>
                         {closeButton}
                     </div>
                 )) : undefined}
             >
-                <div className="flex flex-col gap-1.5">
+                {targetProviderId === NATIVE_PROVIDER_CODEX ? <CodexVariantFields rows variants={targetVariants} variant={selectedVariant} onChange={handleSelect} /> : <div className="flex flex-col gap-1.5">
                     <button
                         type="button"
                         className={cn(
@@ -2525,7 +2543,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             </button>
                         );
                     })}
-                </div>
+                </div>}
             </MobileOverlayPanel>
         );
     };
@@ -2697,8 +2715,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const mapKey = buildModelRefKey(providerID, modelID);
             const activeModelVariant = resolvePickerVariant(selectedItem) ?? undefined;
 
-            const variantsWithDefault: Array<string | undefined> = [undefined, ...variantKeys];
-            const currentVariantIndex = variantsWithDefault.indexOf(activeModelVariant);
+            const variantsWithDefault = providerID === NATIVE_PROVIDER_CODEX
+                ? codexEffortCycle(variantKeys, activeModelVariant)
+                : [undefined, ...variantKeys];
+            if (variantsWithDefault.length === 0) return true;
+            const currentVariantIndex = variantsWithDefault.indexOf(activeModelVariant ?? (variantsWithDefault[0] === 'default' ? 'default' : undefined));
             const safeCurrentIndex = currentVariantIndex >= 0 ? currentVariantIndex : 0;
             // The next level lies toward the end of the line: right in LTR, left in RTL.
             const forwardKey = isRightToLeft(e.currentTarget) ? 'ArrowLeft' : 'ArrowRight';
@@ -2782,9 +2803,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             if (!hasThinkingVariants || (!isHighlighted && !isSelected)) return null;
 
             const effectiveVariant = resolvePickerVariant(entry);
-            const displayLabel = effectiveVariant
-                ? effectiveVariant.charAt(0).toUpperCase() + effectiveVariant.slice(1)
-                : 'Default';
+            const displayLabel = pickerVariantLabel(entry.providerID, effectiveVariant);
 
             return (
                 <span className={cn(
@@ -2793,7 +2812,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         ? (wasAdjusted ? 'text-interactive-selection-foreground' : 'text-interactive-selection-foreground/70')
                         : (wasAdjusted ? 'text-foreground' : 'text-muted-foreground'),
                 )}>
-                    Thinking: {displayLabel}
+                    {entry.providerID === NATIVE_PROVIDER_CODEX ? displayLabel : `${t('chat.modelControls.thinking')}: ${displayLabel}`}
                 </span>
             );
         };
@@ -3119,7 +3138,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return null;
         }
 
-        const displayVariant = currentVariant ?? t('chat.modelControls.default');
+        if (!isCompact && currentProviderId === NATIVE_PROVIDER_CODEX) {
+            return <CodexVariantFields toolbar variants={displayVariants} variant={currentVariant} onChange={handleVariantSelect} />;
+        }
+        const displayVariant = currentProviderId === NATIVE_PROVIDER_CODEX ? pickerVariantLabel(currentProviderId, currentVariant) : currentVariant ?? t('chat.modelControls.default');
         const isDefault = !currentVariant;
         const colorClass = isDefault ? 'text-muted-foreground' : 'text-[color:var(--status-info)]';
 

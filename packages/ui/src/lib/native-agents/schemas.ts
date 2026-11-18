@@ -208,6 +208,8 @@ const nativeModelSchema = z.object({
   // Older servers report only whether Codex offers the priority tier.
   fast: z.boolean().catch(false),
   serviceTiers: z.array(z.string()).optional(),
+  // A server lists these only when prompts and plan handoffs accept a speed without a pinned effort.
+  defaultEffortVariants: z.array(z.string()).optional(),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
 });
 

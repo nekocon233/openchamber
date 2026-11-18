@@ -4,7 +4,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { nativeAgentModelSchema, type NativeAgentModel } from '@/lib/native-agents/combinations';
-import { isNativeProviderId } from '@/lib/native-agents/ids';
+import { isNativeProviderId, NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
+import { CodexVariantFields } from './CodexVariantSelect';
 import { listModelVariantIds, preferredModelVariant } from '@/lib/modelVariants';
 import { useI18n } from '@/lib/i18n';
 
@@ -19,16 +20,20 @@ export const NativeAgentModelPicker = ({ label, value, onChange, nullable = fals
     <div className={disabled ? 'pointer-events-none opacity-50' : ''}>
       <ModelSelector providerId={value?.model.providerID ?? ''} modelId={value?.model.modelID ?? ''} allowNativeModels
         disabled={disabled}
+        selectedVariant={value?.variant ?? null}
         isModelAllowed={isNativeProviderId}
         allowedProviderIds={providers.filter((provider) => isNativeProviderId(provider.id)).map((provider) => provider.id)}
         placeholder={nullable ? t('agents.combinations.nativeDefault') : undefined}
-        onChange={(providerID, modelID) => {
+        onChange={(providerID, modelID, favoriteVariant) => {
           if (!providerID || !modelID) { onChange(null); return; }
           const target = providers.find((provider) => provider.id === providerID)?.models.find((model) => model.id === modelID);
-          onChange(nativeAgentModelSchema.parse({ model: { providerID, modelID }, variant: preferredModelVariant(listModelVariantIds(target?.variants)) }));
+          const variant = favoriteVariant === undefined ? preferredModelVariant(listModelVariantIds(target?.variants), providerID) : favoriteVariant ?? undefined;
+          onChange(nativeAgentModelSchema.parse({ model: { providerID, modelID }, variant }));
         }} />
     </div>
-    {value && variants.length ? <Select value={value.variant ?? '__default__'} onValueChange={(variant) => onChange({ ...value, variant: variant === '__default__' ? undefined : variant })} disabled={disabled}>
+    {value?.model.providerID === NATIVE_PROVIDER_CODEX && variants.length > 0
+      ? <CodexVariantFields variants={variants} variant={value.variant} onChange={(variant) => onChange({ ...value, variant })} disabled={disabled} />
+      : value && variants.length ? <Select value={value.variant ?? '__default__'} onValueChange={(variant) => onChange({ ...value, variant: variant === '__default__' ? undefined : variant })} disabled={disabled}>
       <SelectTrigger className="w-24" aria-label={t('settings.openchamber.defaults.field.defaultThinking')}><SelectValue /></SelectTrigger>
       <SelectContent><SelectItem value="__default__">{t('agents.combinations.nativeDefault')}</SelectItem>{variants.map((variant) => <SelectItem key={variant} value={variant}>{variant}</SelectItem>)}</SelectContent>
     </Select> : null}

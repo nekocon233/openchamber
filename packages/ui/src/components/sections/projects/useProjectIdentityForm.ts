@@ -193,12 +193,10 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
     || Boolean(pendingUploadIconFile)
   );
 
-  const handleDefaultModelChange = React.useCallback((providerId: string, modelId: string) => {
+  const handleDefaultModelChange = React.useCallback((providerId: string, modelId: string, favoriteVariant?: string | null) => {
     setDefaultAgentCombinationId(undefined);
     setDefaultModel(providerId && modelId ? `${providerId}/${modelId}` : undefined);
-    // Variants belong to a model. Carrying the old one over would pin a name
-    // the new model may not have.
-    setDefaultVariant(undefined);
+    setDefaultVariant(favoriteVariant ?? undefined);
   }, []);
 
   const handleDefaultVariantChange = React.useCallback((variant: string | undefined) => {

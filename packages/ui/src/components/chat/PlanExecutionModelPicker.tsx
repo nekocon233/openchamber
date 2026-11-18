@@ -1,5 +1,7 @@
 import React from 'react';
 import { ModelPickerList } from '@/components/model-picker/ModelPickerList';
+import { CodexVariantFields } from '@/components/model-picker/CodexVariantSelect';
+import { NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
@@ -38,12 +40,14 @@ const ActivePlanExecutionModelPicker = ({ selection, disabled, rootRef }: Props)
             allowedProviderIds={selection.providers.map((provider) => provider.id)} hiddenModels={hidden}
             selectedModel={selection.value ? { providerID: selection.value.model.providerID, modelID: selection.model?.id ?? selection.value.model.modelID } : null}
             searchQuery={query} onSearchQueryChange={setQuery}
-            onSelect={(entry) => { selection.choose(entry.providerID, entry.modelID); setOpen(false); setQuery(''); }}
+            onSelect={(entry) => { selection.choose(entry.providerID, entry.modelID, entry.providerID === NATIVE_PROVIDER_CODEX ? entry.variant : undefined); setOpen(false); setQuery(''); }}
             labels={{ searchPlaceholder: t('multirun.modelMultiSelect.search.placeholder'), noResults: t('multirun.modelMultiSelect.search.noResults'), favorites: t('multirun.modelMultiSelect.sections.favorites'), recent: t('multirun.modelMultiSelect.sections.recent'), keyboardHint: t('multirun.modelMultiSelect.keyboard.hint') }}
             maxHeightClassName="max-h-72" autoFocus onEscape={() => setOpen(false)} />
         </DropdownMenuContent>
       </DropdownMenu>
-      {selection.variants.length ? <Select disableGlobalShortcuts value={selection.value?.variant ?? '__default__'}
+      {selection.value?.model.providerID === NATIVE_PROVIDER_CODEX && selection.variants.length > 0
+        ? <CodexVariantFields variant={selection.value.variant} variants={selection.variants} onChange={selection.chooseVariant} disabled={disabled || selection.blocked} />
+        : selection.variants.length ? <Select disableGlobalShortcuts value={selection.value?.variant ?? '__default__'}
         onValueChange={(variant) => selection.chooseVariant(variant === '__default__' ? undefined : variant)} disabled={disabled || selection.blocked}>
         <SelectTrigger className="w-auto min-w-24" aria-label={t('chat.planExecution.effort')}>
           <Icon name="brain-ai-3" className="size-3.5" />

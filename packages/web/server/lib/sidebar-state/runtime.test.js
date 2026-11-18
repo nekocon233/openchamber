@@ -104,6 +104,28 @@ describe('sidebar state runtime', () => {
     expect((await runtime.readSnapshot()).revision).toBe(2);
   });
 
+  it('keeps the reasoning and speed variant with its project model across writes and reloads', async () => {
+    const { runtime } = await createHarness();
+    const model = 'codex-native/sol';
+    const initial = await runtime.initialize({ legacyProjects: [
+      { ...project('a', '/workspace/a'), defaultModel: model, defaultVariant: 'high-fast' },
+      { ...project('b', '/workspace/b'), defaultVariant: 'high' },
+    ] });
+    expect(initial.projects[0].defaultVariant).toBe('high-fast');
+    expect(initial.projects[1]).not.toHaveProperty('defaultVariant');
+    const update = (revision, patch) => apply(runtime, revision, `variant-${revision}`, { type: 'project.update', projectId: 'a', patch });
+    await update(0, { defaultModel: model, defaultVariant: 'high-ultrafast' });
+    expect((await runtime.readSnapshot()).projects[0]).toMatchObject({ defaultModel: model, defaultVariant: 'high-ultrafast' });
+    await update(1, { defaultModel: 'codex-native/astra' });
+    expect((await runtime.readSnapshot()).projects[0]).not.toHaveProperty('defaultVariant');
+    await update(2, { defaultVariant: 'default' });
+    expect((await runtime.readSnapshot()).projects[0].defaultVariant).toBe('default');
+    await update(3, { defaultModel: null });
+    expect((await runtime.readSnapshot()).projects[0]).not.toHaveProperty('defaultVariant');
+    await expect(update(4, { defaultVariant: 'high' })).rejects.toBeInstanceOf(SidebarStateValidationError);
+    expect((await runtime.readSnapshot()).revision).toBe(4);
+  });
+
   it('initializes from sanitized legacy projects without device-local fields', async () => {
     const { runtime } = await createHarness();
 

@@ -52,6 +52,13 @@ describe('useProjectIdentityForm', () => {
       await render(project('lib', 'Lib'));
       expect(capture.form?.name).toBe('Lib');
 
+      await act(async () => capture.form?.handleDefaultModelChange('codex-native', 'sol', 'high-ultrafast'));
+      expect(await capture.form?.prepareSaveData()).toMatchObject({ defaultModel: 'codex-native/sol', defaultVariant: 'high-ultrafast' });
+      await act(async () => capture.form?.handleDefaultVariantChange('default'));
+      expect(await capture.form?.prepareSaveData()).toMatchObject({ defaultVariant: 'default' });
+      await act(async () => capture.form?.handleDefaultModelChange('codex-native', 'astra'));
+      expect(await capture.form?.prepareSaveData()).toMatchObject({ defaultModel: 'codex-native/astra', defaultVariant: null });
+
       await render(null);
       expect(capture.form?.name).toBe('');
     } finally {

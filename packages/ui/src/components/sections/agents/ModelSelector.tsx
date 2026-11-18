@@ -20,7 +20,9 @@ import { ModelPickerList, type ModelPickerEntry, type ModelPickerProvider } from
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useEnterpriseMode } from '@/stores/useEnterprisePolicyStore';
 import { orderPickerItems } from '@/lib/modelPickerOrder';
-import { isNativeProviderId } from '@/lib/native-agents/ids';
+import { isNativeProviderId, NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
+import { codexVariantLabel } from '@/lib/native-agents/codex-speed';
+import { listModelVariantIds } from '@/lib/modelVariants';
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
 
@@ -28,7 +30,8 @@ interface ModelSelectorProps {
     disabled?: boolean;
     providerId: string;
     modelId: string;
-    onChange: (providerId: string, modelId: string) => void;
+    onChange: (providerId: string, modelId: string, variant?: string | null) => void;
+    selectedVariant?: string | null;
     className?: string;
     allowedProviderIds?: string[];
     isModelAllowed?: (providerId: string, modelId: string) => boolean;
@@ -62,6 +65,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     providerId,
     modelId,
     onChange,
+    selectedVariant,
     className,
     allowedProviderIds,
     isModelAllowed,
@@ -126,7 +130,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }, []);
 
     const handleSelect = React.useCallback((entry: ModelPickerEntry) => {
-        onChange(entry.providerID, entry.modelID);
+        // Older favorites record an explicit CLI default as null. The settings
+        // field also has an inherited state, so pass the catalog's explicit id.
+        const variant = entry.variant === null && entry.providerID === NATIVE_PROVIDER_CODEX && entry.kind !== 'auto'
+            && listModelVariantIds(entry.model.variants).includes('default') ? 'default' : entry.variant;
+        if (entry.providerID === NATIVE_PROVIDER_CODEX && variant !== undefined) onChange(entry.providerID, entry.modelID, variant);
+        else onChange(entry.providerID, entry.modelID);
         // Auto has its own pinned row; it does not belong in Recent.
         if (!isAutoModel(entry.providerID, entry.modelID)) addRecentModel(entry.providerID, entry.modelID);
         closePicker();
@@ -204,7 +213,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             onEscape={closePicker}
             tooltipsEnabled={tooltipsEnabled && (isActuallyMobile ? isMobilePanelOpen : isDropdownOpen)}
             isFavorite={(entry) => isFavoriteModel(entry.providerID, entry.modelID)}
-            onToggleFavorite={(entry) => toggleFavoriteModel(entry.providerID, entry.modelID)}
+            renderRowEnd={(entry) => entry.providerID === NATIVE_PROVIDER_CODEX && entry.variant !== undefined
+                ? <span className="typography-micro whitespace-nowrap text-muted-foreground">{codexVariantLabel(entry.variant, t('chat.modelControls.default'))}</span> : null}
+            onToggleFavorite={(entry) => toggleFavoriteModel(entry.providerID, entry.modelID,
+                entry.providerID === NATIVE_PROVIDER_CODEX && entry.providerID === providerId && entry.modelID === modelId ? selectedVariant : undefined)}
         />
     );
 

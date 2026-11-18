@@ -60,9 +60,11 @@ const selectionState = {
 const sessionState = { currentSessionId: null } satisfies { currentSessionId: string | null };
 let savedSettings: DesktopSettings | null = null;
 const updateCalls: Array<Partial<DesktopSettings>> = [];
+let saveResult: (() => Promise<{ ok: boolean }>) | undefined;
+const SelectChange = React.createContext<(value: string) => void>(() => {});
 
 mock.module('@/stores/useConfigStore', () => ({
-  useConfigStore: <T,>(selector: (state: ConfigState) => T): T => selector(configState),
+  useConfigStore: Object.assign(<T,>(selector: (state: ConfigState) => T): T => selector(configState), { getState: () => configState }),
 }));
 mock.module('@/stores/useUIStore', () => ({
   useUIStore: <T,>(selector: (state: typeof settingsState) => T): T => selector(settingsState),
@@ -71,7 +73,7 @@ mock.module('@/sync/selection-store', () => ({
   useSelectionStore: <T,>(selector: (state: typeof selectionState) => T): T => selector(selectionState),
 }));
 mock.module('@/sync/session-ui-store', () => ({
-  useSessionUIStore: <T,>(selector: (state: typeof sessionState) => T): T => selector(sessionState),
+  useSessionUIStore: Object.assign(<T,>(selector: (state: typeof sessionState) => T): T => selector(sessionState), { getState: () => sessionState }),
 }));
 mock.module('@/stores/useDirectoryStore', () => ({
   useDirectoryStore: <T,>(selector: (state: { currentDirectory: string }) => T): T =>
@@ -94,13 +96,15 @@ mock.module('@/lib/persistence', () => ({
   loadDesktopSettings: async () => savedSettings,
   updateDesktopSettings: async (changes: Partial<DesktopSettings>) => {
     updateCalls.push(changes);
-    return { ok: true };
+    return saveResult ? saveResult() : { ok: true };
   },
   reportSettingsSaveState: () => {},
 }));
 const opencodeModule = await import('@/lib/opencode/client');
 const configRead = spyOn(opencodeModule.opencodeClient, 'getConfig').mockResolvedValue({});
+const realI18n = await import('@/lib/i18n');
 mock.module('@/lib/i18n', () => ({
+  ...realI18n,
   useI18n: () => ({ t: (key: string) => key }),
 }));
 mock.module('@/components/chat/mobileControlsUtils', () => ({
@@ -121,7 +125,7 @@ mock.module('@/components/sections/openchamber/PermissionDefaultModeField', () =
 }));
 mock.module('@/components/sections/shared/SettingsSection', () => ({
   SettingsSection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
-  SettingsFieldRow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SettingsFieldRow: ({ children, settingsItem }: { children: React.ReactNode; settingsItem?: string }) => <div data-settings-item={settingsItem}>{children}</div>,
   SettingsCheckboxRow: ({ children, label }: { children?: React.ReactNode; label?: React.ReactNode }) => (
     <div>{label}{children}</div>
   ),
@@ -133,9 +137,12 @@ mock.module('@/components/sections/shared/SettingsSection', () => ({
   SETTINGS_FIELDS_STACK_CLASS: '',
 }));
 mock.module('@/components/ui/select', () => ({
-  Select: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Select: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (value: string) => void }) => <SelectChange.Provider value={onValueChange}>{children}</SelectChange.Provider>,
   SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children, value, disabled }: { children: React.ReactNode; value: string; disabled?: boolean }) => {
+    const change = React.useContext(SelectChange);
+    return <button type="button" data-value={value} disabled={disabled} onClick={() => change(value)}>{children}</button>;
+  },
   SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SelectValue: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
@@ -148,6 +155,7 @@ describe('DefaultsSettings', () => {
   let host: HTMLDivElement;
 
   beforeEach(() => {
+    saveResult = undefined;
     savedSettings = {
       defaultModel: 'sidecar/model',
       defaultVariant: 'high',
@@ -193,6 +201,26 @@ describe('DefaultsSettings', () => {
 
     expect(runtimeFetchCalls.some((url) =>
       url.startsWith('/api/small-model') && url.includes(`directory=${encodeURIComponent('/test/project')}`))).toBe(true);
+  });
+
+  test('saves both Codex fields together and restores the last acknowledged pair after a refused write', async () => {
+    savedSettings = { defaultModel: 'codex-native/sol', defaultVariant: 'default-ultrafast' };
+    configState.providers = [{ id: 'codex-native', models: [{ id: 'sol', variants: ['default', 'high', 'default-ultrafast', 'high-ultrafast'].map((id) => ({ id })) }] }];
+    await act(async () => root.render(<DefaultsSettings />));
+    const pick = (field: string, id: string) => act(async () => {
+      const option = host.querySelector<HTMLButtonElement>(`[data-settings-item="sessions.default-${field}"] [data-value="${id}"]`);
+      if (!option || option.disabled) throw new Error(`Missing ${field} option ${id}`);
+      option.click();
+    });
+    await pick('speed', 'default');
+    expect(updateCalls.at(-1)).toEqual({ defaultModel: 'codex-native/sol', defaultVariant: 'default', defaultAgentCombinationId: '' });
+    const pending: Array<(result: { ok: boolean }) => void> = [];
+    saveResult = () => new Promise((resolve) => pending.push(resolve));
+    await pick('thinking', 'high');
+    await pick('speed', 'ultrafast');
+    expect(updateCalls.slice(-2).map((patch) => patch.defaultVariant)).toEqual(['high', 'high-ultrafast']);
+    await act(async () => { pending[0]({ ok: true }); pending[1]({ ok: false }); });
+    expect(host.textContent).toContain('codex-native/sol (High)');
   });
 
   test('retains a saved model variant while the model disappears and returns', async () => {

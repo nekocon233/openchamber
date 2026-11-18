@@ -1540,6 +1540,7 @@ export type SidebarProjectPatch = Partial<{
   iconBackground: string | null;
   color: string | null;
   defaultModel: string | null;
+  defaultVariant: string | null;
   defaultAgentCombinationId: string | null;
   addedAt: number | null;
 }>;
