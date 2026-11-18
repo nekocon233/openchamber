@@ -162,13 +162,12 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
         <div className="shrink-0 border-b border-border/60 px-4 py-2">
           <SortableTabsStrip
             items={[
-              { id: 'reviewRequested', label: t('references.projectPulls.group.reviewRequested') },
-              { id: 'created', label: t('references.projectPulls.group.created') },
+              { id: 'mine', label: t('references.projectPulls.group.mine') },
               { id: 'any', label: t('references.projectPulls.group.all') },
             ]}
             activeId={browser.githubFilter.people}
             onSelect={id => {
-              if ((id !== 'reviewRequested' && id !== 'created' && id !== 'any') || id === browser.githubFilter.people) return;
+              if ((id !== 'mine' && id !== 'any') || id === browser.githubFilter.people) return;
               if (stateOwner) useWorkspaceViewStateStore.getState().update('scroll', JSON.stringify([stateOwner, 'list', id, browser.query]), () => WORKSPACE_VIEW_DEFAULTS.scroll);
               browser.selectGitHubFilter({ people: id });
               scrollTop.current = 0;
@@ -176,6 +175,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             }}
             variant="active-pill"
             layoutMode="fit"
+            intrinsicWidth
           />
         </div>
         <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2">

@@ -111,6 +111,7 @@ export const REPOSITORY_PEOPLE_LABEL_KEYS = {
     assigned: 'references.picker.filter.assigned',
     created: 'references.picker.filter.created',
     reviewRequested: 'references.picker.filter.reviewRequested',
+    mine: 'references.projectPulls.group.mine',
 } as const satisfies Record<RepositoryReferencePeople, I18nKey>;
 
 /** How a state is drawn: an icon in a theme colour. */

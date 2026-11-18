@@ -2,6 +2,8 @@
 export const ciRunsI18n = {
   "en": {
     'gitView.pullRequest.tab.ci': "CI runs",
+    'contextRail.surface.ci.description': "Inspect GitHub Actions workflow runs and job logs",
+    'ciRuns.gitlabUnsupported': "CI workflow runs are available for GitHub repositories only.",
     'ciRuns.filter.all': "All runs",
     'ciRuns.filter.active': "Running",
     'ciRuns.filter.failure': "Failed",
@@ -48,6 +50,8 @@ export const ciRunsI18n = {
   },
   "de": {
     'gitView.pullRequest.tab.ci': "CI-Läufe",
+    'contextRail.surface.ci.description': "GitHub-Actions-Workflow-Läufe und Job-Protokolle prüfen",
+    'ciRuns.gitlabUnsupported': "CI-Läufe sind nur für GitHub-Repositories verfügbar.",
     'ciRuns.filter.all': "Alle Läufe",
     'ciRuns.filter.active': "Laufend",
     'ciRuns.filter.failure': "Fehlgeschlagen",
@@ -94,6 +98,8 @@ export const ciRunsI18n = {
   },
   "fr": {
     'gitView.pullRequest.tab.ci': "Exécutions CI",
+    'contextRail.surface.ci.description': "Consulter les exécutions GitHub Actions et les journaux de jobs",
+    'ciRuns.gitlabUnsupported': "Les exécutions CI sont uniquement disponibles pour les dépôts GitHub.",
     'ciRuns.filter.all': "Toutes les exécutions",
     'ciRuns.filter.active': "En cours",
     'ciRuns.filter.failure': "Échouées",
@@ -140,6 +146,8 @@ export const ciRunsI18n = {
   },
   "nl": {
     'gitView.pullRequest.tab.ci': "CI-uitvoeringen",
+    'contextRail.surface.ci.description': "GitHub Actions-workflowuitvoeringen en joblogs bekijken",
+    'ciRuns.gitlabUnsupported': "CI-uitvoeringen zijn alleen beschikbaar voor GitHub-repositories.",
     'ciRuns.filter.all': "Alle uitvoeringen",
     'ciRuns.filter.active': "Actief",
     'ciRuns.filter.failure': "Mislukt",
@@ -186,6 +194,8 @@ export const ciRunsI18n = {
   },
   "es": {
     'gitView.pullRequest.tab.ci': "Ejecuciones de CI",
+    'contextRail.surface.ci.description': "Inspeccionar ejecuciones de GitHub Actions y registros de trabajos",
+    'ciRuns.gitlabUnsupported': "Las ejecuciones de CI solo están disponibles para repositorios de GitHub.",
     'ciRuns.filter.all': "Todas las ejecuciones",
     'ciRuns.filter.active': "En curso",
     'ciRuns.filter.failure': "Fallidas",
@@ -232,6 +242,8 @@ export const ciRunsI18n = {
   },
   "pt-BR": {
     'gitView.pullRequest.tab.ci': "Execuções de CI",
+    'contextRail.surface.ci.description': "Inspecionar execuções do GitHub Actions e logs de trabalhos",
+    'ciRuns.gitlabUnsupported': "As execuções de CI estão disponíveis apenas para repositórios do GitHub.",
     'ciRuns.filter.all': "Todas as execuções",
     'ciRuns.filter.active': "Em andamento",
     'ciRuns.filter.failure': "Com falha",
@@ -278,6 +290,8 @@ export const ciRunsI18n = {
   },
   "uk": {
     'gitView.pullRequest.tab.ci': "Запуски CI",
+    'contextRail.surface.ci.description': "Перегляд запусків робочих процесів GitHub Actions і журналів завдань",
+    'ciRuns.gitlabUnsupported': "Запуски CI доступні лише для репозиторіїв GitHub.",
     'ciRuns.filter.all': "Усі запуски",
     'ciRuns.filter.active': "Виконуються",
     'ciRuns.filter.failure': "Помилки",
@@ -324,6 +338,8 @@ export const ciRunsI18n = {
   },
   "ko": {
     'gitView.pullRequest.tab.ci': "CI 실행",
+    'contextRail.surface.ci.description': "GitHub Actions 워크플로 실행 및 작업 로그 확인",
+    'ciRuns.gitlabUnsupported': "CI 워크플로 실행은 GitHub 저장소에서만 사용할 수 있습니다.",
     'ciRuns.filter.all': "전체 실행",
     'ciRuns.filter.active': "실행 중",
     'ciRuns.filter.failure': "실패",
@@ -370,6 +386,8 @@ export const ciRunsI18n = {
   },
   "pl": {
     'gitView.pullRequest.tab.ci': "Uruchomienia CI",
+    'contextRail.surface.ci.description': "Przeglądaj uruchomienia przepływów GitHub Actions i logi zadań",
+    'ciRuns.gitlabUnsupported': "Uruchomienia CI są dostępne tylko dla repozytoriów GitHub.",
     'ciRuns.filter.all': "Wszystkie uruchomienia",
     'ciRuns.filter.active': "W toku",
     'ciRuns.filter.failure': "Nieudane",
@@ -416,6 +434,8 @@ export const ciRunsI18n = {
   },
   "ja": {
     'gitView.pullRequest.tab.ci': "CI 実行",
+    'contextRail.surface.ci.description': "GitHub Actions のワークフロー実行とジョブログを確認",
+    'ciRuns.gitlabUnsupported': "CI 実行は GitHub リポジトリでのみ利用できます。",
     'ciRuns.filter.all': "すべての実行",
     'ciRuns.filter.active': "実行中",
     'ciRuns.filter.failure': "失敗",
@@ -462,6 +482,8 @@ export const ciRunsI18n = {
   },
   "zh-CN": {
     'gitView.pullRequest.tab.ci': "CI 运行",
+    'contextRail.surface.ci.description': "查看 GitHub Actions 工作流运行与作业日志",
+    'ciRuns.gitlabUnsupported': "CI 运行仅支持 GitHub 仓库。",
     'ciRuns.filter.all': "全部运行",
     'ciRuns.filter.active': "运行中",
     'ciRuns.filter.failure': "失败",
@@ -508,6 +530,8 @@ export const ciRunsI18n = {
   },
   "zh-TW": {
     'gitView.pullRequest.tab.ci': "CI 執行",
+    'contextRail.surface.ci.description': "檢視 GitHub Actions 工作流程執行與作業日誌",
+    'ciRuns.gitlabUnsupported': "CI 執行僅支援 GitHub 儲存庫。",
     'ciRuns.filter.all': "全部執行",
     'ciRuns.filter.active': "執行中",
     'ciRuns.filter.failure': "失敗",
@@ -554,6 +578,8 @@ export const ciRunsI18n = {
   },
   "tr": {
     'gitView.pullRequest.tab.ci': "CI çalışmaları",
+    'contextRail.surface.ci.description': "GitHub Actions iş akışı çalışmalarını ve iş günlüklerini inceleyin",
+    'ciRuns.gitlabUnsupported': "CI çalışmaları yalnızca GitHub depoları için kullanılabilir.",
     'ciRuns.filter.all': "Tüm çalışmalar",
     'ciRuns.filter.active': "Çalışıyor",
     'ciRuns.filter.failure': "Başarısız",
@@ -600,6 +626,8 @@ export const ciRunsI18n = {
   },
   "ar": {
     'gitView.pullRequest.tab.ci': "تشغيلات CI",
+    'contextRail.surface.ci.description': "فحص تشغيلات سير عمل GitHub Actions وسجلات المهام",
+    'ciRuns.gitlabUnsupported': "تشغيلات CI متاحة لمستودعات GitHub فقط.",
     'ciRuns.filter.all': "كل التشغيلات",
     'ciRuns.filter.active': "قيد التشغيل",
     'ciRuns.filter.failure': "فاشلة",
@@ -646,6 +674,8 @@ export const ciRunsI18n = {
   },
   "he": {
     'gitView.pullRequest.tab.ci': "הרצות CI",
+    'contextRail.surface.ci.description': "בדיקת הרצות תהליכי עבודה של GitHub Actions ויומני משימות",
+    'ciRuns.gitlabUnsupported': "הרצות CI זמינות עבור מאגרי GitHub בלבד.",
     'ciRuns.filter.all': "כל ההרצות",
     'ciRuns.filter.active': "פעילות",
     'ciRuns.filter.failure': "נכשלו",

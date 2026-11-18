@@ -40,9 +40,9 @@ The project PR host supplies each row's filtered file statistics through
 and file-type exclusions. Picker and board rows do not mount this reader.
 
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
-  open PRs only, with Awaiting my review, Created by me, and All categories in
-  that order. The saved project category is restored, defaulting to Awaiting my
-  review. Category filters stay separate from
+  open PRs only, with Mine and All categories in
+  that order. The saved project category is restored, defaulting to Mine, and
+  legacy saved `reviewRequested` or `created` selections migrate to Mine. Category filters stay separate from
   the picker and board; the panel does not preload issues or expose their state
   filter. It asks for `scope=repository`; existing
   callers keep `network`. Scope joins the list cache key. A hidden panel reads
@@ -234,7 +234,8 @@ preview's footer holds actions instead of what the agent gets.
   answers the call as unsupported.
 - The project PR list refresh button uses the same provider-cache invalidation
   before its forced list read. It stays busy through both operations and keeps
-  the displayed list on failure. Review-requested membership comes from the
+  the displayed list on failure. Mine combines PRs authored by the viewer with
+  review-requested PRs whose membership comes from the
   provider's current pending user or team requests, checked in the repository
   page query even when search membership lags behind a completed review. A
   number or URL search in this category obeys the same check. Approval alone

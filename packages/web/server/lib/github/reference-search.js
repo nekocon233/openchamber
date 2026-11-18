@@ -44,7 +44,7 @@ const acrossRequestSchema = z.strictObject({
   contexts: z.array(acrossContextSchema),
   kind: z.enum(['issue', 'pull', 'discussion']),
   state: z.enum(['open', 'closed', 'merged', 'all', 'unanswered']).optional(),
-  people: z.enum(['any', 'assigned', 'created', 'reviewRequested']).optional(),
+  people: z.enum(['any', 'assigned', 'created', 'reviewRequested', 'mine']).optional(),
   query: z.string().optional(),
   // The first page sends no cursor as null, like the single-repository list.
   cursor: z.string().max(100_000).nullable().optional(),
@@ -92,6 +92,7 @@ const SEARCH_PEOPLE = {
   assigned: 'assignee:@me',
   created: 'author:@me',
   reviewRequested: 'review-requested:@me',
+  mine: 'author:@me',
 };
 
 const COMMON_FIELDS = `
@@ -264,6 +265,39 @@ query DiscussionDetail($owner: String!, $repo: String!, $number: Int!) {
 const SEARCH_QUERY = `
 query ReferenceSearch($q: String!, $first: Int!, $after: String, $withReviewRequests: Boolean!) {
   search(type: ISSUE, query: $q, first: $first, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      __typename
+      ...IssueReference
+      ...PullReference
+    }
+  }
+}
+${REFERENCE_FRAGMENTS}
+`;
+
+const MINE_PULL_SEARCH_QUERY = `
+query MinePullSearch(
+  $reviewQuery: String!,
+  $createdQuery: String!,
+  $first: Int!,
+  $reviewAfter: String,
+  $createdAfter: String,
+  $includeReview: Boolean!,
+  $includeCreated: Boolean!,
+  $withReviewRequests: Boolean!
+) {
+  reviewRequested: search(type: ISSUE, query: $reviewQuery, first: $first, after: $reviewAfter) @include(if: $includeReview) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      __typename
+      ...IssueReference
+      ...PullReference
+    }
+  }
+  created: search(type: ISSUE, query: $createdQuery, first: $first, after: $createdAfter) @include(if: $includeCreated) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {
@@ -820,7 +854,7 @@ export function readPullStatusRefs(value) {
 }
 
 const stateSchema = z.enum(['open', 'closed', 'merged', 'all', 'unanswered']).catch('open');
-const peopleSchema = z.enum(['any', 'assigned', 'created', 'reviewRequested']).catch('any');
+const peopleSchema = z.enum(['any', 'assigned', 'created', 'reviewRequested', 'mine']).catch('any');
 const kindSchema = z.enum(['issue', 'pull']).nullable().catch(null);
 const scopeSchema = z.enum(['repository', 'network']).nullable().catch(null);
 
@@ -968,7 +1002,7 @@ export function buildReferenceSearchQuery({ repos, kind, state, people, text }) 
   return parts.join(' ');
 }
 
-function buildLookupQuery(number, repos, family, withReviewRequests = false) {
+function buildLookupQuery(number, repos, family, withReviewRequests = false, withViewer = false) {
   const variables = { number };
   const declarations = ['$number: Int!'];
   if (family !== 'discussion') {
@@ -984,6 +1018,7 @@ function buildLookupQuery(number, repos, family, withReviewRequests = false) {
     declarations.push(`$o${index}: String!, $n${index}: String!`);
     return `a${index}: repository(owner: $o${index}, name: $n${index}) {\n      ${field}\n    }`;
   });
+  if (withViewer) selections.unshift('viewer { login }');
   const fragments = family === 'discussion' ? DISCUSSION_FRAGMENT : REFERENCE_FRAGMENTS;
   return {
     query: `query ReferenceLookup(${declarations.join(', ')}) {\n${selections.join('\n')}\n}\n${fragments}`,
@@ -1004,6 +1039,206 @@ async function runPartialQuery(octokit, query, variables, notFoundOnly = false) 
   }
 }
 
+const mineStreamPositionSchema = z.strictObject({
+  cursor: z.string().min(1).max(10_000).nullable(),
+  offset: z.number().int().min(0).max(REFERENCE_PAGE_SIZE),
+  done: z.boolean(),
+  total: z.number().int().nonnegative(),
+});
+
+const mineCursorSchema = z.strictObject({
+  version: z.literal(1),
+  scope: z.string().regex(/^[a-f0-9]{64}$/),
+  review: mineStreamPositionSchema,
+  created: mineStreamPositionSchema,
+  seen: z.array(z.string().min(1).max(300)).max(5_000),
+});
+
+const minePullSearchResultSchema = z.object({
+  reviewRequested: searchPageSchema.extend({ issueCount: z.number().int() }).optional(),
+  created: searchPageSchema.extend({ issueCount: z.number().int() }).optional(),
+});
+
+const nodeUpdatedAtSchema = z.object({ updatedAt: z.string() });
+
+const nodeUpdatedAtOf = (node) => {
+  const parsed = nodeUpdatedAtSchema.safeParse(node);
+  return parsed.success ? Date.parse(parsed.data.updatedAt) || 0 : 0;
+};
+
+const pullDedupeKeyOf = (item) => `${repoKey(item.sourceRepo.owner, item.sourceRepo.repo)}#${item.number}`;
+
+function readMineCursor(cursor, scope) {
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 100_000) throw invalidAcrossCursor();
+    const decoded = Buffer.from(cursor, 'base64url');
+    if (decoded.toString('base64url') !== cursor) throw invalidAcrossCursor();
+    const parsed = mineCursorSchema.parse(JSON.parse(decoded.toString('utf8')));
+    if (parsed.scope !== scope || (parsed.review.done && parsed.created.done)) {
+      throw invalidAcrossCursor();
+    }
+    return parsed;
+  } catch {
+    throw invalidAcrossCursor();
+  }
+}
+
+const MAX_MINE_EMPTY_HOPS = 3;
+
+async function searchMinePullReferences({ octokit, repos, state, text, cursor, scope }) {
+  const scopeHash = createHash('sha256').update(JSON.stringify({
+    repos: repos.map((repo) => repoKey(repo.owner, repo.repo)),
+    state,
+    text: text.trim(),
+    scope,
+  })).digest('hex');
+  const initial = cursor
+    ? readMineCursor(cursor, scopeHash)
+    : {
+      review: { cursor: null, offset: 0, done: false, total: 0 },
+      created: { cursor: null, offset: 0, done: false, total: 0 },
+      seen: [],
+    };
+  const verifyReview = scope === 'repository';
+  const reviewQuery = buildReferenceSearchQuery({ repos, kind: 'pull', state, people: 'reviewRequested', text });
+  const createdQuery = buildReferenceSearchQuery({ repos, kind: 'pull', state, people: 'created', text });
+
+  const projectStream = (rawPage, position, verifyViewerReview) => {
+    if (position.done) return null;
+    if (!rawPage) throw new Error('GitHub omitted a requested search connection');
+    if (rawPage.pageInfo.hasNextPage && !rawPage.pageInfo.endCursor) {
+      throw new Error('GitHub returned an invalid search cursor');
+    }
+    const items = rawPage.nodes
+      .map((node) => {
+        const item = toReference(node, repos);
+        return item?.kind === 'pull' && (!verifyViewerReview || hasViewerReviewRequest(node)) ? item : null;
+      })
+      .filter((item) => item !== null)
+      .slice(position.offset);
+    const oldestRaw = rawPage.nodes.length > 0 ? nodeUpdatedAtOf(rawPage.nodes[rawPage.nodes.length - 1]) : -Infinity;
+    const oldestRemaining = items.length > 0 ? updatedAtOf(items[items.length - 1]) : oldestRaw;
+    return {
+      items,
+      hasMore: rawPage.pageInfo.hasNextPage,
+      endCursor: rawPage.pageInfo.endCursor,
+      total: rawPage.issueCount,
+      oldestBound: Math.min(oldestRaw === -Infinity ? oldestRemaining : oldestRaw, oldestRemaining),
+    };
+  };
+
+  const advance = (stream, position, shownCount) => {
+    if (!stream) return position;
+    if (shownCount < stream.items.length) {
+      return {
+        cursor: position.cursor,
+        offset: position.offset + shownCount,
+        done: false,
+        total: stream.total,
+      };
+    }
+    return stream.hasMore
+      ? { cursor: stream.endCursor, offset: 0, done: false, total: stream.total }
+      : { cursor: null, offset: 0, done: true, total: stream.total };
+  };
+
+  let reviewPos = initial.review;
+  let createdPos = initial.created;
+  const seenSet = new Set(initial.seen);
+  let cachedReview = null;
+  let cachedCreated = null;
+  const items = [];
+
+  for (let hop = 0; hop <= MAX_MINE_EMPTY_HOPS; hop += 1) {
+    const needReview = !reviewPos.done && !cachedReview;
+    const needCreated = !createdPos.done && !cachedCreated;
+    if (needReview || needCreated) {
+      const raw = minePullSearchResultSchema.parse(await octokit.graphql(MINE_PULL_SEARCH_QUERY, {
+        reviewQuery,
+        createdQuery,
+        first: REFERENCE_PAGE_SIZE,
+        reviewAfter: reviewPos.cursor,
+        createdAfter: createdPos.cursor,
+        includeReview: needReview,
+        includeCreated: needCreated,
+        withReviewRequests: verifyReview,
+      }));
+      if (needReview) cachedReview = projectStream(raw.reviewRequested, reviewPos, verifyReview);
+      if (needCreated) cachedCreated = projectStream(raw.created, createdPos, false);
+    }
+
+    const streams = [
+      reviewPos.done ? null : cachedReview,
+      createdPos.done ? null : cachedCreated,
+    ];
+    const bound = Math.max(
+      -Infinity,
+      ...streams.filter((stream) => stream?.hasMore).map((stream) => stream.oldestBound),
+    );
+    let eligible = streams.map((stream) => {
+      if (!stream) return 0;
+      const count = stream.items.findIndex((item) => updatedAtOf(item) < bound);
+      return count === -1 ? stream.items.length : count;
+    });
+    const canAdvanceEmptyFilteredStream = hop < MAX_MINE_EMPTY_HOPS
+      && streams.some((stream) => stream !== null && stream.items.length === 0 && stream.hasMore);
+    // Non-monotonic `updatedAt` (search-index lag behind a fresh comment/push, or custom `sort:`)
+    // or reaching the empty-hop ceiling must still consume buffered items rather than stall or paint empty.
+    if (eligible.every((count) => count === 0) && !canAdvanceEmptyFilteredStream) {
+      eligible = streams.map((stream) => stream?.items.length ?? 0);
+    }
+
+    const consumed = [0, 0];
+    while (items.length < REFERENCE_PAGE_SIZE) {
+      const left = consumed[0] < eligible[0] ? streams[0]?.items[consumed[0]] ?? null : null;
+      const right = consumed[1] < eligible[1] ? streams[1]?.items[consumed[1]] ?? null : null;
+      if (!left && !right) break;
+      const pickIndex = left && (!right || updatedAtOf(left) >= updatedAtOf(right)) ? 0 : 1;
+      const picked = pickIndex === 0 ? left : right;
+      consumed[pickIndex] += 1;
+      const key = pullDedupeKeyOf(picked);
+      if (seenSet.has(key)) continue;
+      seenSet.add(key);
+      items.push(picked);
+    }
+
+    const nextReview = advance(streams[0], reviewPos, consumed[0]);
+    const nextCreated = advance(streams[1], createdPos, consumed[1]);
+    cachedReview = streams[0] && consumed[0] < streams[0].items.length
+      ? { ...streams[0], items: streams[0].items.slice(consumed[0]) }
+      : null;
+    cachedCreated = streams[1] && consumed[1] < streams[1].items.length
+      ? { ...streams[1], items: streams[1].items.slice(consumed[1]) }
+      : null;
+    reviewPos = nextReview;
+    createdPos = nextCreated;
+
+    const hasMore = !reviewPos.done || !createdPos.done;
+    if (items.length > 0 || !hasMore) {
+      const seen = [...seenSet].slice(-5_000);
+      return {
+        items,
+        cursor: hasMore
+          ? Buffer.from(JSON.stringify({ version: 1, scope: scopeHash, review: reviewPos, created: createdPos, seen })).toString('base64url')
+          : null,
+        hasMore,
+        total: !hasMore && !cursor ? items.length : Math.max(reviewPos.total, createdPos.total),
+      };
+    }
+  }
+
+  const hasMore = !reviewPos.done || !createdPos.done;
+  const seen = [...seenSet].slice(-5_000);
+  return {
+    items,
+    cursor: hasMore
+      ? Buffer.from(JSON.stringify({ version: 1, scope: scopeHash, review: reviewPos, created: createdPos, seen })).toString('base64url')
+      : null,
+    hasMore,
+    total: !hasMore && !cursor ? items.length : Math.max(reviewPos.total, createdPos.total),
+  };
+}
+
 /**
  * One page of the picker. `repos` is the project's repo network, origin
  * first. A lookup answers every repo that has the number: an issue or PR
@@ -1011,27 +1246,43 @@ async function runPartialQuery(octokit, query, variables, notFoundOnly = false) 
  * one kind, newest activity first.
  */
 export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, cursor, scope = 'network' }) {
-  const withReviewRequests = scope === 'repository' && kind === 'pull' && people === 'reviewRequested';
+  const isMinePulls = kind === 'pull' && people === 'mine';
+  const isRepositoryMinePulls = scope === 'repository' && isMinePulls;
+  const withReviewRequests = scope === 'repository' && kind === 'pull' && (people === 'reviewRequested' || people === 'mine');
+  const lookup = parseReferenceLookup(text, repos, kind);
+  if (lookup) {
+    if (isMinePulls && cursor) throw invalidAcrossCursor();
+    if (lookup.repos.length === 0) {
+      return { items: [], cursor: null, hasMore: false, total: 0 };
+    }
+    const { query, variables } = buildLookupQuery(lookup.number, lookup.repos, lookup.family, withReviewRequests, isRepositoryMinePulls);
+    const data = await runPartialQuery(octokit, query, variables, withReviewRequests);
+    const viewerLogin = isRepositoryMinePulls
+      ? z.object({ login: z.string().min(1) }).parse(data?.viewer).login.toLowerCase()
+      : null;
+    const toLookupItem = (value) => {
+      const item = toReference(value, repos);
+      if (item?.kind !== 'pull' || !withReviewRequests) return item;
+      if (isRepositoryMinePulls && item.author?.login?.toLowerCase() === viewerLogin) return item;
+      return hasViewerReviewRequest(value) ? item : null;
+    };
+    const field = lookup.family === 'discussion' ? 'discussion' : 'issueOrPullRequest';
+    const items = lookup.repos
+      .map((_entry, index) => toLookupItem(data?.[`a${index}`]?.[field]))
+      .filter((item) => item !== null && (scope !== 'repository' || item.kind === kind));
+    return { items, cursor: null, hasMore: false, total: items.length };
+  }
+
+  if (isMinePulls) {
+    return searchMinePullReferences({ octokit, repos, state, text, cursor, scope });
+  }
+
   const toItem = (value) => {
     const item = toReference(value, repos);
     // Search membership can lag behind a submitted review; the live requests
     // determine whether the viewer still has work in the repository PR list.
     return item?.kind === 'pull' && withReviewRequests && !hasViewerReviewRequest(value) ? null : item;
   };
-  const lookup = parseReferenceLookup(text, repos, kind);
-  if (lookup) {
-    if (lookup.repos.length === 0) {
-      return { items: [], cursor: null, hasMore: false, total: 0 };
-    }
-    const { query, variables } = buildLookupQuery(lookup.number, lookup.repos, lookup.family, withReviewRequests);
-    const data = await runPartialQuery(octokit, query, variables, withReviewRequests);
-    const field = lookup.family === 'discussion' ? 'discussion' : 'issueOrPullRequest';
-    const items = lookup.repos
-      .map((_entry, index) => toItem(data?.[`a${index}`]?.[field]))
-      .filter((item) => item !== null && (scope !== 'repository' || item.kind === kind));
-    return { items, cursor: null, hasMore: false, total: items.length };
-  }
-
   const variables = {
     q: buildReferenceSearchQuery({ repos, kind, state, people, text }),
     first: REFERENCE_PAGE_SIZE,
@@ -1057,7 +1308,7 @@ const acrossCursorSchema = z.strictObject({
   scope: z.string().regex(/^[a-f0-9]{64}$/),
   searches: z.array(z.strictObject({
     // The GitHub page the search resumes on, and how many of its items were already shown.
-    cursor: z.string().min(1).max(10_000).nullable(),
+    cursor: z.string().min(1).max(100_000).nullable(),
     offset: z.number().int().min(0).max(REFERENCE_PAGE_SIZE),
     done: z.boolean(),
     total: z.number().int().nonnegative(),

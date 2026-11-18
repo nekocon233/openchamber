@@ -105,11 +105,11 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   try {
     await render();
     await until(() => current().list.status === 'ready');
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'reviewRequested' });
+    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
     expect(listRequests()).toHaveLength(1);
     expect(listRequests()[0]?.searchParams.get('kind')).toBe('pull');
     expect(listRequests()[0]?.searchParams.get('state')).toBe('open');
-    expect(listRequests()[0]?.searchParams.get('people')).toBe('reviewRequested');
+    expect(listRequests()[0]?.searchParams.get('people')).toBe('mine');
     const listed = current().items[0];
     expect(listed?.source === 'github' ? listed.reference.sourceRepo.owner : null).toBe('acme');
     expect(current().previewItem).toBeNull();
@@ -126,7 +126,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(current().items).toHaveLength(2);
 
     await act(async () => boardBrowser().selectGitHubFilter({ state: 'open', people: 'created' }));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'reviewRequested' });
+    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
     failNextPage = true;
     await act(async () => current().list.loadMore());
     await until(() => Boolean(current().list.error));
@@ -167,17 +167,17 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(numbers()).not.toContain(500);
     await act(async () => current().closeMobilePreview());
 
-    await act(async () => current().selectGitHubFilter({ state: 'closed', people: 'reviewRequested' }));
-    await until(() => listRequests().some(url => url.searchParams.get('people') === 'reviewRequested'));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'reviewRequested' });
-    await act(async () => current().selectGitHubFilter({ people: 'created' }));
-    await until(() => listRequests().some(url => url.searchParams.get('people') === 'created'));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'created' });
+    await act(async () => current().selectGitHubFilter({ state: 'closed', people: 'any' }));
+    await until(() => listRequests().some(url => url.searchParams.get('people') === 'any'));
+    expect(current().githubFilter).toEqual({ state: 'open', people: 'any' });
+    await act(async () => current().selectGitHubFilter({ people: 'mine' }));
+    await until(() => listRequests().filter(url => url.searchParams.get('people') === 'mine').length >= 2);
+    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
     await act(async () => current().selectGitHubKind('issue'));
     expect(current().githubKind).toBe('pull');
     await render(false); await render(true);
-    expect(current().githubFilter.people).toBe('created');
-    await act(async () => current().selectGitHubFilter({ people: 'assigned', state: 'merged' }));
+    expect(current().githubFilter.people).toBe('mine');
+    await act(async () => current().selectGitHubFilter({ people: 'any', state: 'merged' }));
     expect(current().githubFilter).toEqual({ state: 'open', people: 'any' });
     expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
 

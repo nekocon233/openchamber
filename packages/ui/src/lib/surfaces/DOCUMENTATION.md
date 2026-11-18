@@ -69,7 +69,8 @@ Full-screen extension pages are separate from this rail registry. `contributes.p
   configure button — `ContextRailSurfacesDialog`),
   drops the walkthrough on VS Code and below `WALKTHROUGH_MIN_WIDTH`, hides the Tracker
   unless a source-control account is connected (signed in from Settings →
-  Integrations) or an item is open in it, and hides `has-content` surfaces
+  Integrations) or an item is open in it, hides `ci` unless a GitHub account is
+  connected and the repository provider is not `'gitlab'`, and hides `has-content` surfaces
   until a tab of their mode exists. Both consumers use it so the digit shown
   on a rail badge always maps to the same surface the shortcut opens.
 
@@ -236,7 +237,7 @@ waits for the release.
 
 The `pr` surface is the Tracker. Its strip lists instances like files and
 chats do. The first tab is always the workspace's repository view
-(`views/PullRequestView.tsx`): project PRs and CI runs on GitHub, or the branch
+(`views/PullRequestView.tsx`): project PRs on GitHub, or the branch
 workflow on GitLab. It sorts
 first, has no close button, and `closeContextPanelTabs` and the per-surface
 tab budget never remove it. Every other tab is one issue, pull or merge
@@ -284,6 +285,17 @@ project with no host. While the host is still unknown the rail shows the first
 registered provider, as it did before hosts were read. Closing a Tracker whose
 account disconnected waits until any provider's default instance has answered
 an auth check.
+
+## CI runs
+
+The `ci` surface (`views/CiRunsView.tsx`, icon `play-circle`, grouped right after
+`pr` in `changes`) hosts GitHub Actions workflow runs independently of the Tracker.
+`getVisibleContextRailSurfaces` shows `ci` on the desktop rail only when a GitHub
+account is connected (`selectAnyGitHubConnected`) and the checkout's repository
+provider is not `'gitlab'`. Disconnecting GitHub (once GitHub auth checks settle)
+or switching to a GitLab checkout closes any open `ci` zone automatically.
+Clicking a linked `#PR` inside `CiRunDetail` requests that PR and opens the
+Tracker (`mode: 'pr'`).
 
 ## Workflows
 
@@ -363,14 +375,14 @@ chat/palette go through the `openContext*` actions in `useUIStore`.
   command palette, an in-content link, a composer + menu row from
   `contributes.attach`, or New Worktree's guest icons for dialog attach.
 - Multi-instance and session-holding surfaces (file/editor, diff, browser,
-  terminal, pull requests) are keep-alive panes in `ContextSurfacePanes.tsx`. Switching these
+  terminal, pull requests, CI runs) are keep-alive panes in `ContextSurfacePanes.tsx`. Switching these
   surfaces must not reset their state (open tabs, xterm session, scroll
   positions). Chat tab records stay open, but only the active chat tab's
   pinned chat column is mounted while the panel is open. A selected chat
   restores its state from the session stores. A closed panel mounts no chat.
-  The PR pane uses React Activity to retain its list, preview and drafts while
-  disconnecting effects and subscriptions when hidden. Its zone can close and
-  reopen or move without remounting it. Visited PR tabs in other projects stay
+  The PR and CI panes use React Activity to retain their lists, details and drafts while
+  disconnecting effects and subscriptions when hidden. Their zones can close and
+  reopen or move without remounting them. Visited PR and CI tabs in other projects stay
   mounted with their own explicit directories; an unvisited tab stays asleep.
   Closing a tab removes its view, and a runtime switch clears the retained set.
   GitHub PR links reveal that same surface without toggling it closed. Its

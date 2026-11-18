@@ -38,7 +38,12 @@ import {
 } from '@/lib/shortcuts';
 import { cn } from '@/lib/utils';
 import { useGitStatus } from '@/stores/useGitStore';
-import { useSourceControlAuthEntry, useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
+import {
+  hasConnectedProviderInAuthEntries,
+  isProviderAuthSettled,
+  useSourceControlAuthEntry,
+  useSourceControlAuthStore,
+} from '@/stores/useSourceControlAuthStore';
 import { GITHUB_SOURCE_CONTROL_IDENTITY } from '@/lib/source-control/identity';
 import { useRepositoryReferenceProvider } from '@/components/references/referenceSources';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
@@ -214,6 +219,8 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
   // so the surface is there when either kind of account is connected.
   const sourceControlConnected = useSourceControlAuthStore((state) => Object.values(state.entries)
     .some((entry) => entry.status?.status === 'connected'));
+  const githubConnected = useSourceControlAuthStore((state) => hasConnectedProviderInAuthEntries(state.entries, 'github'));
+  const githubAllAuthSettled = useSourceControlAuthStore((state) => isProviderAuthSettled(state, 'github'));
   const repositoryProvider = useRepositoryReferenceProvider(directoryKey || null);
   const { screenWidth } = useDeviceInfo();
   const gitStatus = useGitStatus(directoryKey || null);
@@ -321,9 +328,11 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
       screenWidth,
       tabs,
       sourceControlConnected,
+      githubConnected,
+      repositoryProvider,
       extras: guestSurfaces,
     }).map((surface) => (surface.id === 'pr' && repositoryProvider === 'gitlab' ? { ...surface, icon: 'gitlab' as const } : surface));
-  }, [contextRailHiddenSurfaces, contextRailOrder, directoryKey, guestSurfaces, repositoryProvider, screenWidth, sourceControlConnected, tabs]);
+  }, [contextRailHiddenSurfaces, contextRailOrder, directoryKey, githubConnected, guestSurfaces, repositoryProvider, screenWidth, sourceControlConnected, tabs]);
 
   // A surface whose integration disconnected closes rather than lingering as
   // an active panel with no rail icon.
@@ -333,6 +342,16 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
     }
     closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'pr', defaultZone));
   }, [closeContextZone, contextSurfaceZones, defaultZone, directoryKey, githubAuthChecked, shownModes, sourceControlConnected]);
+
+  React.useEffect(() => {
+    if (!directoryKey || !githubAllAuthSettled || !shownModes.has('ci')) {
+      return;
+    }
+    if (githubConnected && repositoryProvider !== 'gitlab') {
+      return;
+    }
+    closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'ci', defaultZone));
+  }, [closeContextZone, contextSurfaceZones, defaultZone, directoryKey, githubAllAuthSettled, githubConnected, repositoryProvider, shownModes]);
 
   const [isSurfacesDialogOpen, setIsSurfacesDialogOpen] = React.useState(false);
 

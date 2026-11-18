@@ -96,13 +96,16 @@ function requestIssueNumber(value) {
  * and anyone. `unanswered` narrows a list of discussions to open questions
  * without an answer; no other list has it.
  */
-function readListFilter(query) {
+function readListFilter(query, options = {}) {
   const state = requestText(query?.state);
   const people = requestText(query?.people);
   const states = requestText(query?.kind) === 'discussion' ? ['open', 'closed', 'all', 'unanswered'] : ['open', 'closed', 'merged', 'all'];
+  const allowedPeople = options.allowMine
+    ? ['any', 'assigned', 'created', 'reviewRequested', 'mine']
+    : ['any', 'assigned', 'created', 'reviewRequested'];
   return {
     state: states.includes(state) ? state : 'open',
-    people: ['any', 'assigned', 'created', 'reviewRequested'].includes(people) ? people : 'any',
+    people: allowedPeople.includes(people) ? people : 'any',
   };
 }
 
@@ -879,7 +882,7 @@ export function registerProviderRoutes(app, {
         session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
         kind,
         scope: requestText(req.query?.scope) || 'network',
-        ...readListFilter(req.query),
+        ...readListFilter(req.query, { allowMine: true }),
         query: requestText(req.query?.query),
         cursor: requestText(req.query?.cursor) || null,
       }));

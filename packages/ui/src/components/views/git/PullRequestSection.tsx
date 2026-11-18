@@ -59,6 +59,7 @@ import { useChangeIdPreflight } from './changeIdPreflight';
 import { ReviewPushFields } from './ReviewPushFields';
 import { useBranchPush } from './useBranchPush';
 import { joinProjectPath } from '@/lib/source-control/projectPath';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useDurationTickerNow } from '@/hooks/useDurationTicker';
 import type { CiWorkflowRun } from '@/lib/api/types';
@@ -938,6 +939,7 @@ export const PullRequestSection: React.FC<{
   };
 
   const containerClassName = 'border-0 bg-transparent rounded-none px-4 py-3';
+  const mobileActions = useMobileAppActions();
   const branchCi = useBranchLatestCiRun(
     directory,
     branch,
@@ -945,12 +947,19 @@ export const PullRequestSection: React.FC<{
   );
   const openBranchCiDetail = React.useCallback(() => {
     if (!branchCi.run) return;
-    usePullRequestSelectionStore.getState().requestCiRun(
-      workspaceDirectory ?? directory,
+    const targetWorkspace = workspaceDirectory ?? directory;
+    const opened = usePullRequestSelectionStore.getState().requestCiRun(
+      targetWorkspace,
       directory,
       branchCi.run.id,
     );
-  }, [branchCi.run, directory, workspaceDirectory]);
+    if (!opened) return;
+    if (mobileActions) {
+      mobileActions.openWorkspaceTab('ci');
+    } else if (targetWorkspace) {
+      useUIStore.getState().openContextPanelTab(targetWorkspace, { mode: 'ci' });
+    }
+  }, [branchCi.run, directory, mobileActions, workspaceDirectory]);
 
   if (!canShow) {
     return (

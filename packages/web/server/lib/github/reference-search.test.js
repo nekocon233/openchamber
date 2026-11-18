@@ -67,6 +67,7 @@ describe('buildReferenceSearchQuery', () => {
     expect(readReferenceState('unanswered')).toBe('unanswered');
     expect(readReferencePeople('everyone')).toBe('any');
     expect(readReferencePeople('created')).toBe('created');
+    expect(readReferencePeople('mine')).toBe('mine');
   });
 });
 
@@ -128,6 +129,153 @@ describe('repository review-requested membership', () => {
     await expect(searchGitHubReferences({ ...options, octokit, text: '#1' })).rejects.toBe(failure);
     failure.errors = [{ type: 'NOT_FOUND' }];
     expect((await searchGitHubReferences({ ...options, octokit, text: '#1' })).items).toEqual([]);
+  });
+
+  it('merges pending review requests and viewer-created PRs for people=mine across pages without duplicates', async () => {
+    const datedPull = (number, updatedAt, reviewers = [], authorLogin = 'octo') => ({
+      ...pull(number, reviewers),
+      updatedAt,
+      author: { login: authorLogin, avatarUrl: `https://avatars/${authorLogin}` },
+    });
+    const calls = [];
+    const octokit = {
+      graphql: async (query, variables) => {
+        calls.push({ query, variables });
+        const created = {
+          issueCount: 3,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            datedPull(19, '2026-10-04T12:00:00Z', [], 'viewer-me'),
+            datedPull(18, '2026-10-04T10:00:00Z', [{ __typename: 'Team', id: 'viewer-team' }], 'viewer-me'),
+            datedPull(10, '2026-09-29T10:00:00Z', [], 'viewer-me'), // older than review page 1 bound: held for page 2
+          ],
+        };
+        if (variables.reviewAfter === 'rev-page-2') {
+          const page2 = {
+            reviewRequested: {
+              issueCount: 3,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [datedPull(11, '2026-10-01T10:00:00Z', [requestedUser])],
+            },
+          };
+          if (variables.includeCreated) page2.created = created;
+          return page2;
+        }
+        return {
+          reviewRequested: {
+            issueCount: 3,
+            pageInfo: { hasNextPage: true, endCursor: 'rev-page-2' },
+            nodes: [
+              datedPull(20, '2026-10-05T10:00:00Z', []), // stale approved review request: filtered out
+              datedPull(18, '2026-10-04T10:00:00Z', [{ __typename: 'Team', id: 'viewer-team' }], 'viewer-me'), // in both streams: deduped
+              datedPull(15, '2026-10-03T10:00:00Z', [requestedUser]),
+            ],
+          },
+          created,
+        };
+      },
+    };
+    const first = await searchGitHubReferences({ ...options, people: 'mine', octokit });
+    expect(first.items.map((item) => item.number)).toEqual([19, 18, 15]);
+    expect(first.hasMore).toBe(true);
+    expect(first.cursor).toBeTruthy();
+    expect(calls[0].variables).toMatchObject({
+      includeReview: true,
+      includeCreated: true,
+      withReviewRequests: true,
+    });
+    expect(calls[0].variables.reviewQuery).toContain('review-requested:@me');
+    expect(calls[0].variables.createdQuery).toContain('author:@me');
+
+    const second = await searchGitHubReferences({ ...options, people: 'mine', cursor: first.cursor, octokit });
+    expect(second.items.map((item) => item.number)).toEqual([11, 10]);
+    expect(second.hasMore).toBe(false);
+    expect(second.cursor).toBeNull();
+    expect(calls[1].variables).toMatchObject({
+      reviewAfter: 'rev-page-2',
+      createdAfter: null,
+      includeReview: true,
+      includeCreated: true,
+    });
+
+    await expect(searchGitHubReferences({ ...options, people: 'mine', cursor: 'not-a-valid-cursor!', octokit }))
+      .rejects.toMatchObject({ code: 'INVALID_REFERENCES_CURSOR', status: 400 });
+  });
+
+  it('matches viewer-authored PRs and pending review requests on number lookup for people=mine', async () => {
+    const ownNoReview = { ...pull(7, []), author: { login: 'ViewerUser', avatarUrl: null } };
+    const otherPending = { ...pull(8, [requestedUser]), author: { login: 'someone', avatarUrl: null } };
+    const otherApproved = { ...pull(9, []), author: { login: 'someone', avatarUrl: null } };
+    const lookupOf = (target) => ({ graphql: async () => ({ viewer: { login: 'vieweruser' }, a0: { issueOrPullRequest: target } }) });
+    expect((await searchGitHubReferences({ ...options, people: 'mine', text: '#7', octokit: lookupOf(ownNoReview) })).items.map((i) => i.number)).toEqual([7]);
+    expect((await searchGitHubReferences({ ...options, people: 'mine', text: '#8', octokit: lookupOf(otherPending) })).items.map((i) => i.number)).toEqual([8]);
+    expect((await searchGitHubReferences({ ...options, people: 'mine', text: '#9', octokit: lookupOf(otherApproved) })).items).toEqual([]);
+    // Network-scoped direct lookups do not enforce repository review-request filtering.
+    expect((await searchGitHubReferences({
+      ...options,
+      scope: 'network',
+      people: 'mine',
+      text: '#9',
+      octokit: { graphql: async () => ({ a0: { issueOrPullRequest: otherApproved } }) },
+    })).items.map((i) => i.number)).toEqual([9]);
+  });
+
+  it('hops past all-stale review pages and advances when live updatedAt lags search order', async () => {
+    const datedPull = (number, updatedAt, requests, authorLogin = 'teammate') => ({
+      ...pull(number, requests),
+      updatedAt,
+      author: { login: authorLogin, avatarUrl: null },
+    });
+    const calls = [];
+    const octokit = {
+      graphql: async (_query, variables) => {
+        calls.push(variables);
+        if (variables.reviewAfter === 'stale-2') {
+          return {
+            reviewRequested: {
+              issueCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [datedPull(5, '2026-09-20T10:00:00Z', [])],
+            },
+          };
+        }
+        return {
+          reviewRequested: {
+            issueCount: 2,
+            pageInfo: { hasNextPage: true, endCursor: 'stale-2' },
+            nodes: [datedPull(30, '2026-10-05T10:00:00Z', [])], // filtered out, older created PR #12 must still arrive
+          },
+          created: {
+            issueCount: 1,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [datedPull(12, '2026-10-01T10:00:00Z', [], 'viewer-me')],
+          },
+        };
+      },
+    };
+    const hopped = await searchGitHubReferences({ ...options, people: 'mine', octokit });
+    expect(hopped.items.map((i) => i.number)).toEqual([12]);
+    expect(hopped.hasMore).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ reviewAfter: 'stale-2', includeReview: true, includeCreated: false });
+
+    // Non-monotonic live updatedAt (last node updated right before read) still advances instead of returning items: [].
+    const skewedOctokit = {
+      graphql: async () => ({
+        reviewRequested: {
+          issueCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: 'skew-2' },
+          nodes: [
+            datedPull(21, '2026-10-01T10:00:00Z', [requestedUser]),
+            datedPull(22, '2026-10-06T10:00:00Z', [requestedUser]),
+          ],
+        },
+        created: { issueCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      }),
+    };
+    const skewed = await searchGitHubReferences({ ...options, people: 'mine', octokit: skewedOctokit });
+    expect(skewed.items.map((i) => i.number)).toEqual([21, 22]);
+    expect(skewed.hasMore).toBe(true);
   });
 });
 

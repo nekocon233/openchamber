@@ -43,7 +43,7 @@ const NO_REFERENCES: GitHubReference[] = [];
 const NO_ITEMS: ReadonlyMap<string, ReferencePickerItem> = new Map();
 const SEARCH_DEBOUNCE_MS = 300;
 const DETAIL_DEBOUNCE_MS = 250;
-const PROJECT_PULL_FILTER: RepositoryReferenceFilter = { state: 'open', people: 'reviewRequested' };
+const PROJECT_PULL_FILTER: RepositoryReferenceFilter = { state: 'open', people: 'mine' };
 
 export const IDLE_PULL_STATUS: CachedValue<GitHubPullStatus | null> = { status: 'idle' };
 
@@ -179,13 +179,14 @@ export function useReferenceBrowser({
         const filter = { ...githubFilter, ...patch };
         if (projectPulls) {
             filter.state = 'open';
-            if (filter.people === 'assigned') filter.people = 'any';
-        }
-        if (!projectPulls) lastGitHubFilter.set(githubKind, filter);
-        if (projectPulls) {
-            setProjectPeople(filter.people === 'assigned' ? 'any' : filter.people);
+            const nextPeople = filter.people === 'any' ? 'any' : 'mine';
+            filter.people = nextPeople;
+            setProjectPeople(nextPeople);
             setLoadedCount(0);
-        } else setGitHubFilter(filter);
+        } else {
+            lastGitHubFilter.set(githubKind, filter);
+            setGitHubFilter(filter);
+        }
         setHighlightedKey(null);
     };
     /** Changes one part of the Linear filter, keeping the others. */

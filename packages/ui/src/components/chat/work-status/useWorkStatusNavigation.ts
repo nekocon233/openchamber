@@ -76,10 +76,10 @@ export const useWorkStatusNavigation = (directory: string | null) => {
     if (!directory) return;
     usePullRequestSelectionStore.getState().requestCiRun(directory, sourceDirectory ?? directory, runId);
     if (mobileActions) {
-      mobileActions.openWorkspaceTab('pr');
+      mobileActions.openWorkspaceTab('ci');
       return;
     }
-    openContextPanelTab(directory, { mode: 'pr' });
+    openContextPanelTab(directory, { mode: 'ci' });
   }, [directory, mobileActions, openContextPanelTab]);
 
   return {

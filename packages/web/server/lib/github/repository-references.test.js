@@ -144,6 +144,46 @@ describe('single-repository PR references', () => {
     expect(resolveNetwork).not.toHaveBeenCalled();
   });
 
+  it('combines pending review requests and viewer-authored PRs for people=mine and rejects invalid cursors', async () => {
+    const entry = (number, updatedAt, isViewerRequested, authorLogin = 'someone') => ({
+      ...node(number),
+      updatedAt,
+      author: { login: authorLogin, avatarUrl: null },
+      repository: { name: 'project', owner: { login: 'example', __typename: 'User' } },
+      reviewRequests: {
+        nodes: isViewerRequested ? [{ requestedReviewer: { __typename: 'User', isViewer: true } }] : [],
+        pageInfo: { hasNextPage: false },
+      },
+    });
+    const fetch = serve(({ query, variables }) => {
+      expect(query).toContain('MinePullSearch');
+      expect(variables.withReviewRequests).toBe(true);
+      expect(variables.reviewQuery).toContain('review-requested:@me');
+      expect(variables.createdQuery).toContain('author:@me');
+      return {
+        data: {
+          reviewRequested: {
+            nodes: [entry(1, '2026-11-18T10:00:00Z', false), entry(2, '2026-11-18T08:00:00Z', true)],
+            issueCount: 2,
+            pageInfo: { endCursor: null, hasNextPage: false },
+          },
+          created: {
+            nodes: [entry(3, '2026-11-18T09:00:00Z', false, 'tester')],
+            issueCount: 1,
+            pageInfo: { endCursor: null, hasNextPage: false },
+          },
+        },
+      };
+    });
+    const { body } = await get({ state: 'open', people: 'mine' }).expect(200);
+    expect(body.items.map((item) => item.number)).toEqual([3, 2]);
+    expect(body.total).toBe(2);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(resolveNetwork).not.toHaveBeenCalled();
+
+    await get({ state: 'open', people: 'mine', cursor: 'bad.cursor' }).expect(400);
+  });
+
   it('does not substitute an issue for a PR with the same number', async () => {
     serve(({ variables }) => {
       expect(variables).toEqual({ number: 4, o0: 'example', n0: 'project', withReviewRequests: false });

@@ -145,6 +145,17 @@ export function useGitHubReadContext(directory: string | null): SourceControlRea
  * moments, so they answer meanwhile; GitHub only when nothing says otherwise.
  * GitHub wins over GitLab when a project has both, as the read context does.
  */
+export function currentRepositoryReferenceProvider(directory: string | null): SourceControlProvider {
+    if (!directory) return 'github';
+    const project = resolveProjectForSessionDirectory(
+        useProjectsStore.getState().projects,
+        useSessionUIStore.getState().availableWorktreesByProject,
+        directory,
+    );
+    const projectPath = normalizeProjectPath(project?.path ?? directory);
+    return rememberedRepositoryProvider(getRuntimeKey(), projectPath) ?? 'github';
+}
+
 export function useRepositoryReferenceProvider(directory: string | null): SourceControlProvider {
     const { binding, hosts } = useRepositoryHosts(directory);
     // A worktree shares its project's host, so the answer is kept per project.

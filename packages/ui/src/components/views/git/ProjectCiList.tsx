@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { REFERENCE_META_TEXT, relativeTimeOf } from '@/components/references/referencePickerItems';
-import { useGitHubReadContext, useGitHubSourceStatus } from '@/components/references/referenceSources';
+import { useGitHubReadContext, useGitHubSourceStatus, useRepositoryHost } from '@/components/references/referenceSources';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { getDropdownNavigationKey, shouldDismissDropdown } from '@/components/ui/dropdown-navigation';
@@ -15,6 +15,7 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import { useWorkspaceScroll, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 import type { CiRunStatusFilter, CiWorkflowRun } from '@/lib/api/types';
+import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { getRuntimeKey } from '@/lib/runtime-switch';
@@ -150,8 +151,10 @@ export const ProjectCiList: React.FC<{
   active: boolean;
 }> = ({ directory, workspaceDirectory, active }) => {
   const { t } = useI18n();
+  const { isMobile } = useDeviceInfo();
   const { sourceControl } = useRuntimeAPIs();
   const openSettings = useOpenSourceControlSettings();
+  const host = useRepositoryHost(directory || null);
   const sourceStatus = useGitHubSourceStatus(directory);
   const rawContext = useGitHubReadContext(directory);
   const context = rawContext && rawContext !== 'missing' && rawContext.provider === 'github' ? rawContext : null;
@@ -395,6 +398,13 @@ export const ProjectCiList: React.FC<{
         </div>
       );
     }
+    if (host?.provider === 'gitlab') {
+      return (
+        <div className="px-6 py-12 text-center typography-meta text-muted-foreground">
+          {t('ciRuns.gitlabUnsupported')}
+        </div>
+      );
+    }
     if (sourceStatus === 'disconnected') {
       return (
         <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
@@ -447,7 +457,7 @@ export const ProjectCiList: React.FC<{
             activeId={filterTab}
             onSelect={selectFilterTab}
             variant="active-pill"
-            layoutMode="fit"
+            layoutMode={isMobile ? 'scrollable' : 'fit'}
           />
         </div>
 

@@ -8,6 +8,42 @@ import { useSourceControlProviderRegistry } from '@/lib/source-control/providers
 export const getSourceControlAuthKey = (identity: { provider: string; instance: string }): string =>
   JSON.stringify([getRuntimeKey(), identity.provider, identity.instance]);
 
+export const hasConnectedProviderInAuthEntries = (
+  entries: Record<string, SourceControlAuthEntry>,
+  provider: string,
+  runtimeKey: string = getRuntimeKey(),
+): boolean => Object.entries(entries).some(([key, entry]) => {
+  if (entry.status?.status !== 'connected') return false;
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && parsed[0] === runtimeKey && parsed[1] === provider;
+  } catch {
+    return false;
+  }
+});
+
+export const isProviderAuthSettled = (
+  state: { identities: SourceControlIdentity[]; entries: Record<string, SourceControlAuthEntry> },
+  provider: string,
+  runtimeKey: string = getRuntimeKey(),
+): boolean => {
+  const matchingIdentities = state.identities.filter((identity) => identity.provider === provider);
+  if (matchingIdentities.length > 0) {
+    return matchingIdentities.every((identity) => (
+      state.entries[JSON.stringify([runtimeKey, identity.provider, identity.instance])]?.hasChecked === true
+    ));
+  }
+  return Object.entries(state.entries).some(([key, entry]) => {
+    if (!entry.hasChecked) return false;
+    try {
+      const parsed: unknown = JSON.parse(key);
+      return Array.isArray(parsed) && parsed[0] === runtimeKey && parsed[1] === provider;
+    } catch {
+      return false;
+    }
+  });
+};
+
 type SourceControlAuthEntry = {
   status: SourceControlAuthStatus | null;
   isLoading: boolean;

@@ -114,6 +114,7 @@ const getModeLabel = (
   if (mode === 'browser') return t('contextPanel.mode.browser');
   if (mode === 'git') return t('layout.rightSidebar.git');
   if (mode === 'pr') return t('contextPanel.mode.pr');
+  if (mode === 'ci') return t('gitView.pullRequest.tab.ci');
   if (mode === 'notes') return t('contextRail.surface.notes');
   if (mode === 'terminal') return t('layout.mainTab.terminal');
   if (isPluginContextPanelMode(mode)) {
@@ -216,6 +217,10 @@ const getTabIcon = (
 
   if (tab.mode === 'pr') {
     return <Icon name="github" className="h-3.5 w-3.5" />;
+  }
+
+  if (tab.mode === 'ci') {
+    return <Icon name="play-circle" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'notes') {
