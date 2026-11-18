@@ -75,6 +75,7 @@ import { EMPTY_CANVAS_READ, shouldShowFileCanvas, type FileCanvasHandle } from '
 import { GuestFileEditor } from '@/components/views/files/GuestFileEditor';
 import { findGuestFileEditor, useGuestFileEditor } from '@/lib/guests/file-editors';
 import { useGuestsStore } from '@/lib/guests/store';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { GUEST_FILE_EDITOR_CONTENT_MAX } from '@openchamber/sdk';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { EditorView } from '@codemirror/view';
@@ -2859,7 +2860,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // their text and a pointer to the Integrations card, where the runtime can
   // install extensions at all.
   const guestCatalogStatus = useGuestsStore((state) => state.status);
-  const suggestExcalidrawExtension = !claimedByGuest && isTextFile && guestCatalogStatus !== 'unsupported'
+  const suggestExcalidrawExtension = !claimedByGuest && isTextFile && guestCatalogStatus !== 'unsupported' && !isMobileSurfaceRuntime()
     && Boolean(selectedFile?.path && isExcalidrawFile(selectedFile.path));
   const canUseShikiFileView = isTextFile && !isMarkdown && !isDrawio && !hasCanvas
     && !(isHtml && htmlViewMode === 'preview')

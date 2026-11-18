@@ -21,6 +21,7 @@ import { useGuestsStore } from '@/lib/guests/store';
 import { closeGuestTabsById } from '@/lib/guests/tabs';
 import { updateGuest } from '@/lib/guests/updates';
 import { useI18n } from '@/lib/i18n';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { openExternalUrl } from '@/lib/url';
 import { useUIStore } from '@/stores/useUIStore';
@@ -55,6 +56,7 @@ export const CatalogExtensionsSection: React.FC<CatalogExtensionsSectionProps> =
   const [removeTarget, setRemoveTarget] = React.useState<CatalogExtensionDefinition | null>(null);
 
   React.useEffect(() => {
+    if (isMobileSurfaceRuntime()) return;
     void loadGuestCatalog();
   }, []);
 
@@ -210,7 +212,7 @@ export const CatalogExtensionsSection: React.FC<CatalogExtensionsSectionProps> =
     );
   };
 
-  if (catalogStatus === 'unsupported') return null;
+  if (catalogStatus === 'unsupported' || isMobileSurfaceRuntime()) return null;
 
   return (
     <>

@@ -8,9 +8,13 @@ import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { PauseClock } from '@/components/ui/pause-clock';
 import { SortableTabsStrip, type SortableTabsStripItem } from '@/components/ui/sortable-tabs-strip';
 import { TerminalView } from '@/components/views/TerminalView';
+import { isGuestActive } from '@/lib/guests/capabilities';
+import { resolveGuestIconName } from '@/lib/guests/icon';
+import { useGuestsStore } from '@/lib/guests/store';
 import { useI18n } from '@/lib/i18n';
 import type { ProjectRef } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
+import { DESKTOP_GUEST_ID, DESKTOP_PANEL_MODE } from '@/lib/workspace/editorTabs';
 import { useGitStore } from '@/stores/useGitStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useOnDemandComponent } from '@/hooks/useOnDemandComponent';
@@ -31,9 +35,10 @@ const ENTER_DELAY_MS = 16;
 const ENTER_DURATION_MS = 320;
 const DRAWER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes';
+export type MobileWorkspaceTab = 'changes' | 'pr' | 'files' | 'terminal' | 'notes' | 'desktop';
 
 const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
+const loadPluginPane = () => import('@/components/layout/PluginPane').then((module) => module.PluginPane);
 
 const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
   const draftSpace = useDraftSpaceTarget();
@@ -44,6 +49,25 @@ const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void 
     <PauseClock paused={!visible}>
       {draftSpace?.kind === 'preparing' ? <SpacePreparing />
         : View ? <View key={JSON.stringify([runtimeKey, directory])} directory={directory} visible={visible} /> : null}
+    </PauseClock>
+  );
+};
+
+const MobileRemoteDesktopPane: React.FC<{ visible: boolean; onDismiss: () => void }> = ({ visible, onDismiss }) => {
+  const runtimeKey = useGuestsStore((state) => state.runtimeKey);
+  const View = useOnDemandComponent(visible, loadPluginPane, onDismiss);
+  return (
+    <PauseClock paused={!visible}>
+      <div className="h-full min-h-0 overflow-hidden bg-background">
+        {View ? (
+          <View
+            key={runtimeKey}
+            mode={DESKTOP_PANEL_MODE}
+            surface="panel"
+            onDismiss={onDismiss}
+          />
+        ) : null}
+      </div>
     </PauseClock>
   );
 };
@@ -82,18 +106,24 @@ export const MobileWorkspaceDrawer: React.FC<{
   React.useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+  const onTabChangeRef = React.useRef(onTabChange);
+  React.useEffect(() => {
+    onTabChangeRef.current = onTabChange;
+  }, [onTabChange]);
   const tabRef = React.useRef(tab);
   React.useEffect(() => {
     tabRef.current = tab;
   }, [tab]);
+  const desktopGuest = useGuestsStore((state) => state.guests.find((guest) => guest.id === DESKTOP_GUEST_ID) ?? null);
+  const desktopAvailable = desktopGuest !== null && isGuestActive(desktopGuest);
 
   // Swipe from the drawer's start edge back toward its end = close, the
   // reverse of the end-edge swipe that opened it from the chat. Only the
   // full-cover drawer has an edge to grab; the tablet panel is closed from the
-  // header instead.
+  // header instead. Remote Desktop owns single-finger drags across its canvas.
   const closeFromEdge = () => onCloseRef.current();
   useEdgeSwipe(drawerRef, {
-    enabled: variant === 'drawer' && open,
+    enabled: variant === 'drawer' && open && tab !== 'desktop',
     ...(direction === 'rtl' ? { onRightEdgeSwipe: closeFromEdge } : { onLeftEdgeSwipe: closeFromEdge }),
   });
 
@@ -101,13 +131,27 @@ export const MobileWorkspaceDrawer: React.FC<{
   const [visitedTabs, setVisitedTabs] = React.useState<ReadonlySet<MobileWorkspaceTab>>(() => new Set());
   React.useEffect(() => {
     if (!open) return;
+    if (tab === 'desktop' && !desktopAvailable) return;
     setVisitedTabs((current) => {
       if (current.has(tab)) return current;
       const next = new Set(current);
       next.add(tab);
       return next;
     });
-  }, [open, tab]);
+  }, [desktopAvailable, open, tab]);
+
+  React.useEffect(() => {
+    if (desktopAvailable) return;
+    if (tab === 'desktop') {
+      onTabChangeRef.current('changes');
+    }
+    setVisitedTabs((current) => {
+      if (!current.has('desktop')) return current;
+      const next = new Set(current);
+      next.delete('desktop');
+      return next;
+    });
+  }, [desktopAvailable, tab]);
 
   if (typeof document !== 'undefined' && !rootRef.current) {
     let root = document.getElementById(DRAWER_ROOT_ID);
@@ -141,7 +185,7 @@ export const MobileWorkspaceDrawer: React.FC<{
       // The same goes for the file editor on the Vim keymap, where Escape
       // leaves INSERT mode (hardware keyboards on tablets and phones), and
       // for an IME composition, where it dismisses the candidate window.
-      if (event.key !== 'Escape' || tabRef.current === 'terminal') return;
+      if (event.key !== 'Escape' || tabRef.current === 'terminal' || tabRef.current === 'desktop') return;
       if (isVimEditorEventTarget(event.target)) return;
       if (isIMECompositionEvent(event)) return;
       onCloseRef.current();
@@ -161,6 +205,11 @@ export const MobileWorkspaceDrawer: React.FC<{
     { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
     { id: 'notes', label: t('contextRail.surface.notes'), icon: <Icon name="sticky-note" className="h-3.5 w-3.5" /> },
+    ...(desktopAvailable && desktopGuest ? [{
+      id: 'desktop',
+      label: desktopGuest.name,
+      icon: <Icon name={resolveGuestIconName(desktopGuest.icon)} className="h-3.5 w-3.5" />,
+    }] : []),
   ];
 
   const body = (
@@ -240,6 +289,13 @@ export const MobileWorkspaceDrawer: React.FC<{
           <div className={cn('h-full', tab !== 'notes' && 'hidden')}>
             <ErrorBoundary>
               <ProjectContextPanel visible={open && tab === 'notes'} onActionComplete={onClose} onOpenPlan={onOpenPlan} />
+            </ErrorBoundary>
+          </div>
+        ) : null}
+        {desktopAvailable && visitedTabs.has('desktop') ? (
+          <div className={cn('h-full', (tab !== 'desktop' || !visible) && 'hidden')}>
+            <ErrorBoundary>
+              <MobileRemoteDesktopPane visible={open && tab === 'desktop'} onDismiss={onClose} />
             </ErrorBoundary>
           </div>
         ) : null}

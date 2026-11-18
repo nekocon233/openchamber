@@ -198,8 +198,9 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   const guestId = pluginIdFromMode(mode);
   const guest = useGuestsStore((state) => state.guests.find((entry) => entry.id === guestId) ?? null);
   const catalogStatus = useGuestsStore((state) => state.status);
-  // Paused or not yet approved: the frame stays down and every effect refuses.
-  const guestEnabled = guest ? isGuestActive(guest) : true;
+  // Paused, not yet approved, or outside mobile's built-in Remote Desktop allowlist: the frame stays down and every effect refuses.
+  const guestSupportedOnSurface = !isMobileSurfaceRuntime() || guestId === DESKTOP_GUEST_ID;
+  const guestEnabled = guestSupportedOnSurface && (guest ? isGuestActive(guest) : true);
   const oauthStatus = useGuestOauthStore((state) => state.byId[guestId]);
   const setOauthStatus = useGuestOauthStore((state) => state.setStatus);
   const refreshOauth = useGuestOauthStore((state) => state.refresh);
@@ -243,7 +244,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   const ready = React.useMemo<HostReadyContext>(() => {
     const features: NonNullable<HostReadyContext['features']> = {};
     if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.browserTabs = true;
-    if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.serviceSockets = true;
+    if (!isVSCodeRuntime() && guestSupportedOnSurface) features.serviceSockets = true;
     if (guest?.pageEntry && !isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.pages = true;
     if (guest?.storageId && globalThis.indexedDB) features.deviceStorage = true;
     const supportsHeaderControls = !headless && (surface === 'status' || surface === 'panel' || surface === 'page');
@@ -302,7 +303,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     popover: popoverHost?.context ?? popover,
     features,
     };
-  }, [currentTheme, readableColors, directory, guest?.backgroundEntry, guest?.pageEntry, guest?.storageId, headless, item, locale, oauthStatus, onStatusControls, popover, popoverHost, sessionSnapshot, surface]);
+  }, [currentTheme, readableColors, directory, guest?.backgroundEntry, guest?.pageEntry, guest?.storageId, guestSupportedOnSurface, headless, item, locale, oauthStatus, onStatusControls, popover, popoverHost, sessionSnapshot, surface]);
 
   const fileEditorEntry = surface === 'file' && fileEditor
     ? guest?.fileEditors?.find((editor) => editor.id === fileEditor.editorId)?.entry ?? null

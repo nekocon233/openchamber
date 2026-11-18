@@ -9,8 +9,17 @@
     html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
     body { background: var(--oc-background); color: var(--oc-foreground); font: 13px var(--oc-font); }
     #root { display: flex; flex-direction: column; position: relative; }
+    .toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: flex-end; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--oc-border); background: var(--oc-background); padding: 6px 12px; scrollbar-width: none; }
+    .toolbar::-webkit-scrollbar { display: none; }
+    .toolbar .oc-sdk-select { width: auto; flex-shrink: 0; }
+    .toolbar .oc-sdk-trigger { height: 28px; padding: 0 8px; gap: 4px; font-size: 12px; white-space: nowrap; }
+    .toolbar .oc-sdk-btn { flex-shrink: 0; white-space: nowrap; }
+    .stage { flex: 1; min-height: 0; min-width: 0; position: relative; display: flex; overflow: hidden; }
     .viewport { flex: 1; min-height: 0; min-width: 0; overflow: hidden; direction: ltr; }
     .viewport:focus-visible { outline: none; }
+    .touch-keyboard-pill { position: absolute; right: 12px; bottom: 12px; z-index: 2; }
+    [dir="rtl"] .touch-keyboard-pill { right: auto; left: 12px; }
+    .soft-keyboard { position: fixed; top: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; resize: none; font-size: 16px; }
     .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
     .empty-content { max-width: 36rem; text-align: start; line-height: 1.6; color: var(--oc-muted); }
     .empty-content[data-error="true"] p:first-child { color: var(--oc-error-text); }

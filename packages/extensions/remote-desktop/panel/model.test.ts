@@ -29,6 +29,11 @@ describe('remote desktop display ratio presets', () => {
     expect(resolveSessionSize('16:10', viewport)).toEqual({ width: 1440, height: 900 });
     expect(targetDesktopResolution('4:3')).toEqual({ width: 1280, height: 960 });
     expect(resolveSessionSize('4:3', viewport)).toEqual({ width: 1280, height: 960 });
+
+    expect(targetDesktopResolution('auto', { width: 390, height: 680 }, true)).toEqual({ width: 1280, height: 800 });
+    expect(resolveSessionSize('auto', { width: 390, height: 680 }, true)).toEqual({ width: 1280, height: 800 });
+    expect(targetDesktopResolution('auto', { width: 1440, height: 920 }, true)).toEqual({ width: 1440, height: 920 });
+    expect(targetDesktopResolution('16:9', { width: 390, height: 680 }, true)).toEqual({ width: 1920, height: 1080 });
   });
 
   test('builds header select options within SDK status-control limits', () => {

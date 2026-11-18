@@ -43,19 +43,32 @@ viewer-selected TCP target.
   and omit `--new-window` so subsequent links open as tabs in the existing window.
   Non-Linux hosts return `UNSUPPORTED` so the panel hands the URL back to
   `host.openUrl` and dismisses itself.
-- The panel publishes an aspect-ratio selector (`Auto`, `16:9 (1920×1080)`,
-  `16:10 (1440×900)`, `4:3 (1280×960)`) and a `Connect` / `Disconnect` control
-  into the host panel or page header through `setStatusControls`, persisting the
-  selected ratio in extension storage (`host.storage`) and rendering no inner
-  toolbar or status bar. Loading, empty and error notices render in the centered
-  empty overlay while disconnected. It covers every host locale; the desktop
-  viewport always has physical left-to-right coordinates.
+- On desktop hosts with `features.statusControls`, the panel publishes an
+  aspect-ratio selector (`Auto`, `16:9 (1920×1080)`, `16:10 (1440×900)`,
+  `4:3 (1280×960)`), a `Pan` / `Fit` toggle once touch input hits the viewport,
+  and a `Connect` / `Disconnect` control into the host panel or page header
+  through `setStatusControls`, rendering no inner toolbar; on touch desktop
+  sessions a corner `Keyboard` button inside the connected stage triggers the
+  soft keyboard synchronously within the iframe. On mobile hosts without
+  `features.statusControls`, the panel renders a single-row `@openchamber/sdk/ui`
+  header strip (`Auto`, `Pan` / `Fit`, `Keyboard` / `Hide keyboard`, `Connect` /
+  `Disconnect`) directly above the stage. Selected ratios persist in extension
+  storage (`host.storage`). Loading, empty and error notices render in the
+  centered empty overlay while disconnected. It covers every host locale; the
+  desktop viewport always has physical left-to-right coordinates.
 - Automatic clipboard writes and deliberate paste events exchange text up to
   the SDK limit; clipboard failures surface through host toasts.
-- Local scaling stays on so any framebuffer scales proportionally and centers
-  inside the viewport; remote resolution tracks the viewport in `Auto` mode or
-  holds the selected preset resolution otherwise. No automatic reconnect loop is
-  used.
+- Local scaling stays on by default so any framebuffer scales proportionally and
+  centers inside the viewport; remote resolution tracks the viewport in `Auto`
+  mode or holds the selected preset resolution otherwise. Enabling `Pan` switches
+  noVNC to 1:1 clipped viewport dragging (`scaleViewport = false`,
+  `clipViewport = true`, `dragViewport = true`) with at least `1280×800` in
+  `Auto` mode so single-finger drags pan the desktop while taps, two-finger/long
+  presses and two-finger scrolling keep their pointer and wheel roles. Enabling
+  `Keyboard` focuses a 16 px hidden `<textarea>` that translates typed text,
+  committed IME compositions, Backspace and control keys into X11 KeySyms while
+  retaining focus across viewport taps on iOS WebKit. No automatic reconnect
+  loop is used.
 
 ## Decisions
 
@@ -107,3 +120,13 @@ request `SetDesktopSize` over RFB. Subclassing `RFB` in the panel to supply the
 preset dimensions only inside `_requestRemoteResize()` keeps container-based
 proportional scaling intact without assuming `xrandr` is installed on the host
 or expanding the `@novnc/novnc` build patch.
+
+### Why touch panning and soft-keyboard input use dedicated panel modes and not noVNC defaults
+
+noVNC disables `_display.clipViewport` whenever `scaleViewport` is true, which
+makes `dragViewport` a no-op until local scaling is turned off and `Auto`
+sessions are given at least `1280×800` to pan across. noVNC also binds keyboard
+listeners only to `<canvas>`, which never opens a mobile virtual keyboard; a
+16 px hidden `<textarea>` with `rfb.focusOnClick = false` and `touchend` focus
+retention keeps the soft keyboard open on iOS WebKit across sandboxed iframes
+and forwards Unicode and IME output as X11 KeySyms.

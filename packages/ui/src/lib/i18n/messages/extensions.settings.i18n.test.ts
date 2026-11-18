@@ -16,6 +16,7 @@ const requiredKeys = [
   'settings.extensions.section.installed',
   'settings.extensions.empty',
   'settings.extensions.unsupported',
+  'settings.extensions.mobileBuiltInOnly',
   'settings.extensions.source.bundled',
   'settings.extensions.source.path',
   'settings.extensions.source.zip',

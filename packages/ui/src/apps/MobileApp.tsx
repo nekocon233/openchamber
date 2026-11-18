@@ -32,7 +32,9 @@ import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
 import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
+import { useGuestCatalogSync } from '@/hooks/useGuestCatalogSync';
 import { useSourceControlProviderSync } from '@/hooks/useSourceControlProviderSync';
+import { loadGuestCatalog } from '@/lib/guests/load-catalog';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { resolveEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -127,6 +129,7 @@ const MOBILE_SETTINGS_PAGES = [
   'usage',
   'voice',
   'integrations',
+  'extensions',
   'about',
 ] as const;
 
@@ -870,6 +873,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       void refreshSourceControlProviders(apis.sourceControl);
       void refreshSourceControlAuth(apis.sourceControl, { force: true });
       void refreshLinearAuthStatus(apis.linear, { force: true });
+      void loadGuestCatalog();
       if (providersCount === 0) void loadProviders({ source: 'mobileApp:nativeResume' });
       if (agentsCount === 0) void loadAgents({ source: 'mobileApp:nativeResume' });
     };
@@ -1018,6 +1022,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   useBrowserPushSubscriptionReconciliation({ enabled: isConnected });
   useWebNotificationStream();
   useSourceControlProviderSync(apis.sourceControl);
+  useGuestCatalogSync();
 
   // Switching instances (or disconnecting) only changes the runtime endpoint; the
   // stores still hold the previous instance's data. Mirror the web App.tsx reset
@@ -1230,6 +1235,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
     void refreshSourceControlProviders(apis.sourceControl);
     void refreshSourceControlAuth(apis.sourceControl, { force: true });
     void refreshLinearAuthStatus(apis.linear, { force: true });
+    void loadGuestCatalog();
   }, [apis.sourceControl, apis.linear, isConnected, refreshSourceControlAuth, refreshSourceControlProviders, refreshLinearAuthStatus, runtimeEndpointEpoch]);
 
   // Discover all worktrees for every known project so the draft session's

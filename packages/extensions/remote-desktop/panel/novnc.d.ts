@@ -11,6 +11,8 @@ declare module '@novnc/novnc' {
   export default class RFB {
     constructor(target: HTMLElement, channel: GuestServiceSocket, options?: { credentials?: { password: string }; shared?: boolean });
     scaleViewport: boolean;
+    clipViewport: boolean;
+    dragViewport: boolean;
     resizeSession: boolean;
     focusOnClick: boolean;
     background: string;
@@ -21,7 +23,7 @@ declare module '@novnc/novnc' {
     focus(): void;
     sendCredentials(credentials: { password: string }): void;
     sendCtrlAltDel(): void;
-    sendKey(keysym: number, code?: string, down?: boolean): void;
+    sendKey(keysym: number, code?: string | null, down?: boolean): void;
     clipboardPasteFrom(text: string): void;
   }
 }
