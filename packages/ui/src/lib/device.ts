@@ -424,7 +424,7 @@ const keyboardIsUp = (): boolean => {
   // soft keyboard here is an HTMLElement, which is where these flags live.
   const active = doc.activeElement as HTMLElement | null;
   const editing = active !== null
-    && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+    && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'IFRAME' || active.isContentEditable);
   return editing && keyboardFreeHeight !== null && window.innerHeight < keyboardFreeHeight;
 };
 

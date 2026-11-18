@@ -8,8 +8,18 @@
 
 The workspace drawer and tablet panel share a scrollable tab strip. Its PR tab
 loads the shared `PullRequestView` on first use, keyed by runtime and effective
-workspace directory. The same draft-space directory rules as Changes apply. Native task information
-lives in Work Status; the workspace drawer has no standalone Tasks tab.
+workspace directory. The same draft-space directory rules as Changes apply. When
+the connected server exposes an enabled built-in Remote Desktop extension
+(`openchamber-builtin-desktop`), the workspace strip adds a `Remote Desktop` tab
+that mounts `PluginPane` without `onStatusControls` so the extension renders its
+own single-row mobile header strip inside the iframe for synchronous iOS WebKit
+keyboard activation, suppresses drawer edge-swipe and `Escape` dismissal while
+active, and hides the pane once closed so its viewer socket disconnects until
+reopened. Mobile catalog loading
+retains only `openchamber-builtin-desktop`, and the Extensions page in mobile
+Settings exposes only its Enable/Disable card while keeping user-installed
+extensions unsupported. Native task information lives in Work Status; the workspace drawer
+has no standalone Tasks tab.
 The workspace also has no MCP tab; MCP deep links open the existing Settings
 page. Work status hosts its section selector in the sheet header immediately
 before Close, while the shared panel retains its dialog state.
@@ -22,7 +32,7 @@ before Close, while the shared panel retains its dialog state.
 - HTTP requests with mobile custom headers refuse redirects in both the native connection checks and the fetch transport. The configured address must be the final address, so a redirect cannot forward proxy credentials to another origin or path.
 - Native header values live in secure storage. Metadata holds an opaque reference; browser-mode storage holds the parsed header configuration inline. Missing headers preserve old connections. An unreadable native entry fails the connection or edit operation, without replacing the saved headers with an empty set.
 - A header edit writes a fresh secure entry before publishing its metadata reference. Failure preserves the old reference and credentials. Replaced and removed references are deleted after the metadata commit. Native bridge calls remain bounded by the existing secure-storage timeout.
-- Native mobile with headers uses the existing fetch-based OpenChamber event stream reader and the native WebSocket adapter behind `openRuntimeWebSocket`. Files media previews use bounded runtime HTTP reads and owned object URLs; prepared chat images use the existing validated data-URL loader. HTML previews and inline Markdown video still use browser-owned URLs without proxy headers.
+- Native mobile with headers uses the existing fetch-based OpenChamber event stream reader, the `srcDoc` extension document loader (`runtimeAssetsNeedFetch`), and the native WebSocket adapter behind `openRuntimeWebSocket`. Files media previews use bounded runtime HTTP reads and owned object URLs; prepared chat images use the existing validated data-URL loader. HTML previews and inline Markdown video still use browser-owned URLs without proxy headers.
 - An empty welcome-form header editor preserves a saved connection's headers. Explicit clearing belongs to the prefilled Instances edit form. Cancelling a password prompt does not erase existing header credentials.
 
 - Chat-side Settings entry points request the native Settings tab through `RuntimeAPIs.vscode`. They preserve chat selection, drafts and the current layout. The source's in-page dialog flag is cleared so it cannot block chat shortcuts.
@@ -64,3 +74,7 @@ Each webview owns its own stores. A small parsed request preserves the originati
 ### Why mobile listens for the dialog flag and not a mobile branch at every entry point
 
 About twenty shared entry points open Settings through `setSettingsDialogOpen`. The phone renders no dialog, so each one did nothing there and left the flag set, which blocks chat shortcuts. One bridge in the shell covers every entry point, the same way the VS Code bridge does.
+
+### Why closing the workspace drawer hides Remote Desktop and not only visibility
+
+The settled workspace drawer closes with `visibility: hidden` after its slide-out transition, which does not trip an `IntersectionObserver` inside the guest iframe. Applying `display: none` to the `Remote Desktop` container once `!visible` triggers the panel's `IntersectionObserver` so its RFB WebSocket stream disconnects while the drawer is closed and reconnects when reopened.

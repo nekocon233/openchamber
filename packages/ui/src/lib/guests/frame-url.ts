@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { mintGuestFrameUrlAuthToken } from '@/lib/runtime-auth';
+import { runtimeAssetsNeedFetch } from '@/lib/runtime-asset';
 import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { getActiveRelayTunnel } from '@/lib/relay/runtime-tunnel';
@@ -13,10 +14,11 @@ import { loadRelayGuestDocument } from './relay-document';
  * URLs (scripts, styles, its own `fetch`) keep it, and the frame never needs
  * the session a sign-in proxy in front of the server would ask for. A server
  * that predates grants gets the short-lived guest-scoped query token instead.
- * Relay frames fetch their HTML and static resources over authenticated
- * runtime HTTP and use srcDoc; browser-owned iframe requests cannot travel
- * through the JS tunnel client. No representation contains the runtime's
- * bearer credential.
+ * Relay frames and Capacitor connections with custom proxy headers fetch their
+ * HTML and static resources over authenticated runtime HTTP and use srcDoc,
+ * since browser-owned iframe requests cannot travel through the JS tunnel
+ * client or attach native proxy headers. No representation contains the
+ * runtime's bearer credential.
  */
 export type GuestFrameUrl =
   | { kind: 'url'; url: string; expiresAt: number }
@@ -44,7 +46,8 @@ export const resolveGuestFrameUrl = async (
 ): Promise<GuestFrameUrl> => {
   const runtimeKey = getRuntimeKey();
   const relay = getActiveRelayTunnel();
-  if (relay) {
+  const needsDocument = Boolean(relay) || runtimeAssetsNeedFetch();
+  if (needsDocument) {
     const html = await loadRelayGuestDocument(guestId, entry, (path) => {
       if (getRuntimeKey() !== runtimeKey || getActiveRelayTunnel() !== relay || signal?.aborted) {
         throw new DOMException('Extension frame owner changed', 'AbortError');

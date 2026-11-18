@@ -1742,6 +1742,22 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'extensions.overview',
+    page: 'extensions',
+    titleKey: 'settings.page.extensions.title',
+    descriptionKey: 'settings.page.extensions.description',
+    keywords: ['remote desktop', 'vnc', 'tigervnc', 'desktop', 'extension', 'extensions'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+  },
+  {
+    id: 'extensions.mobile-remote-desktop',
+    page: 'extensions',
+    titleKey: 'settings.page.extensions.title',
+    descriptionKey: 'settings.extensions.mobileBuiltInOnly',
+    keywords: ['remote desktop', 'vnc', 'tigervnc', 'desktop', 'extension', 'extensions'],
+    isAvailable: (ctx) => !ctx.isVSCode && ctx.isMobile,
+  },
+  {
     id: 'extensions.add',
     page: 'extensions',
     titleKey: 'settings.extensions.add.label',

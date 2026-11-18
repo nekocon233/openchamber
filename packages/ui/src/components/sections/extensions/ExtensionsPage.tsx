@@ -50,6 +50,7 @@ import { checkGuestUpdates, updateGuest } from '@/lib/guests/updates';
 import type { GuestSource, InstalledGuest, UnreadableGuest } from '@/lib/guests/types';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useI18n, type I18nKey, type Locale } from '@/lib/i18n';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { cn } from '@/lib/utils';
 import { openExternalUrl } from '@/lib/url';
@@ -551,6 +552,7 @@ export const ExtensionsPage: React.FC = () => {
   const [identityLoadFailed, setIdentityLoadFailed] = React.useState(false);
   const [selectedGitIdentityId, setSelectedGitIdentityId] = React.useState('global');
   const unsupported = status === 'unsupported';
+  const builtInOnly = isMobileSurfaceRuntime();
   const [installValue, setInstallValue] = React.useState('');
   const enterpriseMode = useEnterpriseMode();
   const [busy, setBusy] = React.useState(false);
@@ -580,14 +582,14 @@ export const ExtensionsPage: React.FC = () => {
     setReinstall(null);
     setApproval(null);
     checkedOnOpen.current = false;
-    if (unsupported) return;
+    if (unsupported || builtInOnly) return;
     void Promise.all([getGitIdentities(), getGlobalGitIdentity()]).then(([profiles, global]) => {
       if (!cancelled) setIdentityData({ runtimeKey, profiles, global });
     }).catch(() => {
       if (!cancelled) setIdentityLoadFailed(true);
     });
     return () => { cancelled = true; };
-  }, [runtimeKey, unsupported]);
+  }, [builtInOnly, runtimeKey, unsupported]);
 
   const identities = React.useMemo<GitIdentityProfile[]>(() => {
     const data = identityData?.runtimeKey === runtimeKey ? identityData : null;
@@ -602,7 +604,7 @@ export const ExtensionsPage: React.FC = () => {
   // One quiet check per page open, once the catalog is in. The server
   // answers from its hour cache, so this is cheap on a revisit.
   React.useEffect(() => {
-    if (status !== 'ready' || checkedOnOpen.current) return;
+    if (status !== 'ready' || builtInOnly || checkedOnOpen.current) return;
     checkedOnOpen.current = true;
     const runtimeKey = useGuestsStore.getState().runtimeKey;
     void checkGuestUpdates(false).then((result) => {
@@ -610,7 +612,7 @@ export const ExtensionsPage: React.FC = () => {
         useGuestsStore.getState().applyUpdates(result.updates, runtimeKey);
       }
     });
-  }, [status]);
+  }, [builtInOnly, status]);
 
   const checkForUpdates = async () => {
     setChecking(true);
@@ -1055,8 +1057,12 @@ export const ExtensionsPage: React.FC = () => {
     <>
       <SettingsPageLayout
         title={t('settings.page.extensions.title')}
-        description={t('settings.page.extensions.description')}
-        headerEnd={unsupported ? null : (
+        description={(
+          <span data-settings-item={builtInOnly ? 'extensions.mobile-remote-desktop' : 'extensions.overview'}>
+            {builtInOnly ? t('settings.extensions.mobileBuiltInOnly') : t('settings.page.extensions.description')}
+          </span>
+        )}
+        headerEnd={unsupported || builtInOnly ? null : (
           <div className="flex items-center gap-2">
             {/* Enterprise mode installs only from approved repositories, so the public list stays out of it. */}
             {enterpriseMode ? null : (
@@ -1091,8 +1097,8 @@ export const ExtensionsPage: React.FC = () => {
         )}
       >
         {/* The whole grid takes a dropped folder or ZIP, not only the dialog. */}
-        <div className="relative" {...(unsupported ? {} : dropHandlers)}>
-          {dropActive && !addOpen ? (
+        <div className="relative" {...(unsupported || builtInOnly ? {} : dropHandlers)}>
+          {dropActive && !addOpen && !builtInOnly ? (
             <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary bg-background/80 typography-ui-label text-primary">
               {t('settings.extensions.add.drop.active')}
             </span>
@@ -1108,12 +1114,14 @@ export const ExtensionsPage: React.FC = () => {
             <p className="typography-meta text-muted-foreground">{t('settings.extensions.unsupported')}</p>
           ) : (
             <div className={SETTINGS_CARD_GRID_CLASS}>
-              <SettingsAddCard
-                label={t('settings.extensions.grid.addTitle')}
-                hint={t('settings.extensions.grid.addHint')}
-                onClick={() => setAddOpen(true)}
-                settingsItem="extensions.add"
-              />
+              {builtInOnly ? null : (
+                <SettingsAddCard
+                  label={t('settings.extensions.grid.addTitle')}
+                  hint={t('settings.extensions.grid.addHint')}
+                  onClick={() => setAddOpen(true)}
+                  settingsItem="extensions.add"
+                />
+              )}
               {guests.map((guest) => (
                 <ExtensionCard key={guest.id} guest={guest} onOpen={() => setSelectedId(guest.id)} {...handlers} />
               ))}
@@ -1132,7 +1140,7 @@ export const ExtensionsPage: React.FC = () => {
           ) : null}
         </div>
       </SettingsPageLayout>
-      {dialogs}
+      {builtInOnly ? null : dialogs}
     </>
   );
 };

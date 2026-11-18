@@ -27,16 +27,31 @@ export const DESKTOP_DISPLAY_PRESETS = {
 
 export const readDisplayRatio = (value: JsonValue | undefined): DesktopDisplayRatio => displayRatioSchema.catch('auto').parse(value);
 
-export const targetDesktopResolution = (ratio: DesktopDisplayRatio): DesktopDisplayResolution | null => {
-  if (ratio === 'auto') return null;
-  const { width, height } = DESKTOP_DISPLAY_PRESETS[ratio];
-  return { width, height };
+const PAN_AUTO_MIN_RESOLUTION: DesktopDisplayResolution = { width: 1280, height: 800 };
+
+export const targetDesktopResolution = (
+  ratio: DesktopDisplayRatio,
+  viewportSize?: DesktopDisplayResolution,
+  panViewport = false,
+): DesktopDisplayResolution | null => {
+  if (ratio !== 'auto') {
+    const { width, height } = DESKTOP_DISPLAY_PRESETS[ratio];
+    return { width, height };
+  }
+  if (panViewport && viewportSize) {
+    return {
+      width: Math.max(PAN_AUTO_MIN_RESOLUTION.width, viewportSize.width),
+      height: Math.max(PAN_AUTO_MIN_RESOLUTION.height, viewportSize.height),
+    };
+  }
+  return null;
 };
 
 export const resolveSessionSize = (
   ratio: DesktopDisplayRatio,
   viewportSize: DesktopDisplayResolution,
-): DesktopDisplayResolution => targetDesktopResolution(ratio) ?? viewportSize;
+  panViewport = false,
+): DesktopDisplayResolution => targetDesktopResolution(ratio, viewportSize, panViewport) ?? viewportSize;
 
 export const displayRatioOptions = (autoLabel: string): Array<{ value: DesktopDisplayRatio; label: string }> => [
   { value: 'auto', label: autoLabel },

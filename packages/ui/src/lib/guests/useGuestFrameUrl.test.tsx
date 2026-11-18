@@ -3,6 +3,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 
+import { setRuntimeExtraHeaders } from '@/lib/runtime-auth';
 import { useGuestFrameUrl } from './useGuestFrameUrl';
 
 describe('guest frame URL lifecycle', () => {
@@ -44,7 +45,13 @@ describe('guest frame URL lifecycle', () => {
     finishHeldMint = undefined;
     state = undefined;
     window = new Window({ url: 'http://localhost/' });
-    for (const [key, value] of Object.entries({ window, document: window.document, navigator: window.navigator, IS_REACT_ACT_ENVIRONMENT: true })) {
+    for (const [key, value] of Object.entries({
+      window,
+      document: window.document,
+      navigator: window.navigator,
+      DOMParser: window.DOMParser,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    })) {
       previousGlobals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
       Object.defineProperty(globalThis, key, { configurable: true, value });
     }
@@ -79,6 +86,7 @@ describe('guest frame URL lifecycle', () => {
 
   afterEach(async () => {
     await act(async () => { root.unmount(); });
+    setRuntimeExtraHeaders(null);
     restoreFetch();
     restoreClock();
     await window.happyDOM.close();
@@ -163,5 +171,40 @@ describe('guest frame URL lifecycle', () => {
     await render();
     expect(current().src).toContain('/api/guests/dev-tools/panel/index.html');
     expect(current().src).toContain('oc_url_token=test-cred-1');
+  });
+
+  test('Capacitor connections with custom proxy headers load the panel as srcDoc through runtime HTTP', async () => {
+    Object.defineProperty(window, 'Capacitor', {
+      configurable: true,
+      value: { isNativePlatform: () => true },
+    });
+    setRuntimeExtraHeaders({ 'x-proxy-secret': 'secret-header' });
+    restoreFetch();
+    const seenHeaders: string[] = [];
+    const customFetch = spyOn(globalThis, 'fetch').mockImplementation(async (input, options) => {
+      const headers = new Headers(options?.headers);
+      seenHeaders.push(headers.get('x-proxy-secret') ?? '');
+      const url = String(input);
+      if (url.endsWith('/api/guests/dev-tools/panel/index.html')) {
+        return new Response('<!doctype html><html><body><script src="./panel.js"></script></body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }
+      if (url.endsWith('/api/guests/dev-tools/panel/panel.js')) {
+        return new Response('console.log("ok");', {
+          status: 200,
+          headers: { 'content-type': 'text/javascript' },
+        });
+      }
+      return new Response('', { status: 404 });
+    });
+    restoreFetch = () => customFetch.mockRestore();
+
+    await render();
+    expect(current().src).toBe('');
+    expect(current().srcDoc).toContain('base64,Y29uc29sZS5sb2coIm9rIik7');
+    expect(seenHeaders).toEqual(['secret-header', 'secret-header']);
+    expect(mintCount).toBe(0);
   });
 });

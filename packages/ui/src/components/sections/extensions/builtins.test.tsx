@@ -186,4 +186,41 @@ describe('built-in extension settings', () => {
     expect(getSettingsSaveState()).toBe('idle');
     expect(container.querySelector('input[type="password"]')).toBeNull();
   });
+
+  test('exposes only built-in Remote Desktop enable/disable on mobile without install or catalog UI', async () => {
+    Object.assign(dom, { __OPENCHAMBER_SURFACE__: 'mobile' });
+    const remoteDesktop: InstalledGuest = {
+      id: 'openchamber-builtin-desktop',
+      name: 'Remote Desktop',
+      icon: 'computer',
+      entry: 'panel/index.html',
+      source: 'bundled',
+      enabled: true,
+      version: '2.6.1',
+      capabilities: { requested: ['service'], granted: ['service'] },
+    };
+    catalog = [remoteDesktop, builtIn, installed];
+    unreadableRows = [newer];
+    useGuestsStore.getState().resetForRuntimeSwitch(getRuntimeKey());
+
+    await render(<ExtensionsPage />);
+    expect(container.textContent).toContain('Built-in Remote Desktop for mobile.');
+    expect(container.textContent).toContain('Remote Desktop');
+    expect(container.textContent).not.toContain('SDK Demo');
+    expect(container.textContent).not.toContain('Third-party');
+    expect(container.querySelector('[data-settings-item="extensions.add"]')).toBeNull();
+    expect(container.querySelector('[data-settings-item="extensions.browse"]')).toBeNull();
+    expect(container.querySelector('[data-settings-item="extensions.updates.check"]')).toBeNull();
+    expect(requests.some((entry) => entry.includes('/api/git/identities'))).toBe(false);
+    expect(requests.some((entry) => entry.includes('/api/guests/updates/check'))).toBe(false);
+
+    const card = [...container.querySelectorAll('button')].find((entry) => entry.textContent?.includes('Remote Desktop'));
+    if (!card) throw new Error('Missing Remote Desktop card');
+    await act(async () => { card.click(); });
+
+    const originalEnabledHandler = globalThis.fetch;
+    void originalEnabledHandler;
+    await render(<IntegrationsPage />);
+    expect(container.querySelector('[data-settings-item="integrations.extensions"]')).toBeNull();
+  });
 });

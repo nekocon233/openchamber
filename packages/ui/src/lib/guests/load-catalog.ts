@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getRuntimeKey, MOBILE_DISCONNECTED_RUNTIME_KEY } from '@/lib/runtime-switch';
 import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 
 import { useGuestBadgeStore } from './badge-store.ts';
@@ -54,10 +54,14 @@ const loadGuestCatalogOnce = async (runtimeKey: string): Promise<void> => {
   alignCatalogRuntime(runtimeKey);
 
   const store = useGuestsStore.getState();
-  if (isVSCodeRuntime() || isMobileSurfaceRuntime()) {
+  if (isVSCodeRuntime()) {
     store.markUnsupported(runtimeKey);
     return;
   }
+  if (runtimeKey === MOBILE_DISCONNECTED_RUNTIME_KEY) {
+    return;
+  }
+  const mobileSurface = isMobileSurfaceRuntime();
 
   store.markLoading();
   try {
@@ -78,9 +82,13 @@ const loadGuestCatalogOnce = async (runtimeKey: string): Promise<void> => {
       store.markFailed(runtimeKey, { method: 'GET', path: '/api/guests', kind: 'invalid-response', status: response.status });
       return;
     }
-    useGuestsStore.getState().replaceCatalog(catalog.guests, runtimeKey, catalog.unreadable, catalog.hostPlatform);
-    const desktopGuest = catalog.guests.find((guest) => guest.id === DESKTOP_GUEST_ID);
-    if (catalog.hostPlatform === 'linux' && desktopGuest && isGuestActive(desktopGuest)) {
+    const guests = mobileSurface
+      ? catalog.guests.filter((guest) => guest.id === DESKTOP_GUEST_ID)
+      : catalog.guests;
+    const unreadable = mobileSurface ? [] : catalog.unreadable;
+    useGuestsStore.getState().replaceCatalog(guests, runtimeKey, unreadable, catalog.hostPlatform);
+    const desktopGuest = guests.find((guest) => guest.id === DESKTOP_GUEST_ID);
+    if (!mobileSurface && catalog.hostPlatform === 'linux' && desktopGuest && isGuestActive(desktopGuest)) {
       void probeDesktopUrlReady(runtimeKey);
     }
   } catch {

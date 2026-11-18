@@ -41,6 +41,7 @@ export const StatusHeaderControls: React.FC<Props> = ({
                 size={toolbar ? 'sm' : 'xs'}
                 aria-label={control.label}
                 disabled={control.disabled}
+                onMouseDown={toolbar ? (event) => event.preventDefault() : undefined}
                 onClick={() => onActivate(control.id)}
                 className={toolbar ? 'app-region-no-drag max-w-[10rem]' : 'max-w-[5rem]'}
               >

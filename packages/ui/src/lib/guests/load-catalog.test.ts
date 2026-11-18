@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
-import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { getRuntimeKey, MOBILE_DISCONNECTED_RUNTIME_KEY, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 import { loadGuestCatalog, reloadGuestCatalog } from './load-catalog';
 import { useGuestsStore } from './store';
 
@@ -109,5 +110,50 @@ describe('catalog request diagnostics', () => {
       expect(useGuestsStore.getState().runtimeKey).toBe('next-runtime');
       expect(useGuestsStore.getState().status).toBe('idle');
     } finally { fetch.mockRestore(); }
+  });
+
+  test('filters the mobile surface catalog to built-in Remote Desktop only', async () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { __OPENCHAMBER_SURFACE__: 'mobile', location: { search: '' } },
+    });
+    useGuestsStore.getState().resetForRuntimeSwitch(getRuntimeKey());
+    const desktop = { id: DESKTOP_GUEST_ID, name: 'Remote Desktop', icon: 'computer', source: 'bundled', enabled: true, capabilities: { requested: ['service'], granted: ['service'] } };
+    const thirdParty = { id: 'third-party', name: 'Third Party', icon: 'window', capabilities: { requested: [], granted: [] } };
+    const unreadable = { id: 'broken', name: 'Broken', capabilities: { requested: ['telepathy'], granted: [] } };
+    const requests: string[] = [];
+    const fetch = spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      requests.push(String(input instanceof Request ? input.url : input));
+      return Response.json({ hostPlatform: 'linux', guests: [desktop, thirdParty, unreadable] });
+    });
+    try {
+      await loadGuestCatalog();
+      const state = useGuestsStore.getState();
+      expect(state.status).toBe('ready');
+      expect(state.guests.map((guest) => guest.id)).toEqual([DESKTOP_GUEST_ID]);
+      expect(state.unreadable).toEqual([]);
+      expect(requests).toHaveLength(1);
+    } finally {
+      fetch.mockRestore();
+      if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+      else Reflect.deleteProperty(globalThis, 'window');
+    }
+  });
+
+  test('skips catalog fetches while mobile is disconnected from any instance', async () => {
+    const originalKey = getRuntimeKey();
+    switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: MOBILE_DISCONNECTED_RUNTIME_KEY });
+    useGuestsStore.getState().resetForRuntimeSwitch(MOBILE_DISCONNECTED_RUNTIME_KEY);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const fetch = spyOn(globalThis, 'fetch');
+    try {
+      await loadGuestCatalog();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(useGuestsStore.getState().status).toBe('idle');
+    } finally {
+      fetch.mockRestore();
+      switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: originalKey });
+    }
   });
 });
