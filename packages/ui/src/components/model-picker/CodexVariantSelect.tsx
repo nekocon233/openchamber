@@ -43,13 +43,14 @@ export function CodexVariantSelect({ field, variants, variant, onChange, label, 
   const value = selected?.label ?? (thinking ? effort : speedName);
   const unavailable = (id: string | undefined) => id !== undefined && !variants.includes(id);
   const locked = disabled || (options.length === 1 && selected !== undefined);
-  const icon = thinking ? 'brain-ai-3' : 'flashlight';
   if (toolbar) {
+    const icon = thinking ? 'brain-ai-3' : 'flashlight';
+    const iconColor = thinking ? 'text-[var(--info-text)]' : 'text-[var(--primary-text)]';
     return <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" className={`model-controls__${thinking ? 'variant' : 'speed'}-trigger inline-flex h-8 min-w-0 items-center gap-1.5 typography-micro text-foreground hover:opacity-70 disabled:text-muted-foreground`}
           aria-label={`${title}: ${value}`} title={title} disabled={locked}>
-          <Icon name={icon} className="size-4 shrink-0 text-muted-foreground" />
+          <Icon name={icon} className={`size-4 shrink-0 ${locked ? 'text-muted-foreground' : iconColor}`} />
           <span className="truncate">{value}</span>
         </button>
       </DropdownMenuTrigger>
