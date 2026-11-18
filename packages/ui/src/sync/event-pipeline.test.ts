@@ -497,6 +497,52 @@ describe("createEventPipeline over the WebSocket transport", () => {
     expect(activity).toBe(2)
     expect(delivered).toEqual([])
   })
+
+  test("probes on window focus after a missed heartbeat without dropping a fresh WebSocket", async () => {
+    const sockets: RelayTunnelWebSocket[] = []
+    const disconnectReasons: string[] = []
+    const tunnel: RelayTunnelClient = {
+      async fetch() { throw new Error("the WebSocket transport must not fetch") },
+      openWebSocket() {
+        const socket = createFakeSocket()
+        sockets.push(socket)
+        return socket
+      },
+      getStatus: () => ({ state: "connected" }),
+      subscribeStatus: () => () => undefined,
+      retry: () => undefined,
+      close: () => undefined,
+    }
+    adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
+    const pipeline = createEventPipeline({
+      sdk: createSdk([], () => undefined),
+      onEvents: () => undefined,
+      onDisconnect: (reason) => { disconnectReasons.push(reason) },
+      transport: "ws",
+      heartbeatTimeoutMs: 400,
+    })
+    try {
+      for (let i = 0; i < 20 && sockets.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(sockets).toHaveLength(1)
+      sockets[0].onmessage?.({ data: JSON.stringify({ type: "ready" }) })
+
+      // Fresh stream (< 55% of 400ms = 220ms): routine focus switches keep the socket.
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      globalThis.window.dispatchEvent(new Event("focus"))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(sockets).toHaveLength(1)
+
+      // Silent past one heartbeat interval (>= 220ms, still well before the 400ms passive timeout):
+      // focusing the window tears down the half-open socket and reconnects immediately.
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      globalThis.window.dispatchEvent(new Event("focus"))
+      for (let i = 0; i < 30 && sockets.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(sockets).toHaveLength(2)
+      expect(disconnectReasons).toContain("ws_window_focus")
+    } finally {
+      pipeline.cleanup()
+    }
+  })
 })
 
 describe("classifyStreamPayload", () => {

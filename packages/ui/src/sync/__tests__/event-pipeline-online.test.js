@@ -97,4 +97,55 @@ describe('createEventPipeline — online event', () => {
     expect(sdkCallIndex).toBe(2);
     expect(elapsed).toBeLessThan(2_000);
   });
+
+  it('cuts the inter-attempt wait short when `focus` fires while online and visible', async () => {
+    globalThis.document = createEventTarget({ visibilityState: 'visible' });
+    globalThis.window = createEventTarget({
+      location: { href: 'http://127.0.0.1:3000/', origin: 'http://127.0.0.1:3000' },
+    });
+    globalThis.navigator = { onLine: true };
+
+    let sdkCallIndex = 0;
+    const sdk = {
+      event: {
+        subscribe: () => {
+          const idx = sdkCallIndex++;
+          if (idx < 4) {
+            // 4 consecutive failures → visible backoff reaches 250 * 2^3 = 2000ms.
+            throw new Error('simulated wireguard stall');
+          }
+          return (async function* () {
+            yield { id: 'evt_1', created: 1000, location: { directory: '/repo' }, type: 'session.status', data: { sessionID: 's1', status: { type: 'idle' } } };
+            await new Promise(() => {});
+          })();
+        },
+      },
+    };
+
+    const elapsed = await new Promise((resolve) => {
+      let focusedAt = 0;
+      const { cleanup } = createEventPipeline({
+        sdk,
+        transport: 'sse',
+        heartbeatTimeoutMs: 60_000,
+        onEvent: () => {},
+        onReconnect: () => {
+          cleanup();
+          resolve(Date.now() - focusedAt);
+        },
+      });
+
+      const pollUntilFourthFailure = setInterval(() => {
+        if (sdkCallIndex < 4) return;
+        clearInterval(pollUntilFourthFailure);
+        setTimeout(() => {
+          focusedAt = Date.now();
+          globalThis.window.dispatch('focus');
+        }, 20);
+      }, 10);
+    });
+
+    expect(sdkCallIndex).toBe(5);
+    expect(elapsed).toBeLessThan(500);
+  });
 });

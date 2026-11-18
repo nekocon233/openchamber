@@ -3385,7 +3385,9 @@ export function SyncProvider(props: {
       // heartbeats never become events: OpenCode sends an SSE comment and the
       // WS bridge an `openchamber:heartbeat` frame, so delivered events miss them.
       onStreamActivity: () => {
-        lastStreamActivityAtRef.current = Date.now()
+        const now = Date.now()
+        lastStreamActivityAtRef.current = now
+        messageLoader.revalidateMountedStale(now)
       },
       onEvents: (directory, payloads) => {
         const batch = createDirectoryEventBatch()
@@ -3498,15 +3500,26 @@ export function SyncProvider(props: {
         resyncAfterStreamGap("transport-switch")
       },
     })
+    const revalidateStaleOnForeground = () => {
+      if (globalThis.document && globalThis.document.visibilityState !== "visible") return
+      if (globalThis.navigator && globalThis.navigator.onLine === false) return
+      messageLoader.revalidateMountedStale()
+    }
+    globalThis.document?.addEventListener("visibilitychange", revalidateStaleOnForeground)
+    globalThis.window?.addEventListener("focus", revalidateStaleOnForeground)
+    globalThis.window?.addEventListener("online", revalidateStaleOnForeground)
     pipelineReconnectRef.current = pipeline.reconnect
     return () => {
+      globalThis.document?.removeEventListener("visibilitychange", revalidateStaleOnForeground)
+      globalThis.window?.removeEventListener("focus", revalidateStaleOnForeground)
+      globalThis.window?.removeEventListener("online", revalidateStaleOnForeground)
       if (pipelineReconnectRef.current === pipeline.reconnect) {
         pipelineReconnectRef.current = null
       }
       pipeline.cleanup()
       unsubscribeQueueEvents()
     }
-  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, followUpQueueGeneration, triggerDirectoryResync])
+  }, [props.sdk, childStores, messageLoader, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, followUpQueueGeneration, triggerDirectoryResync])
 
   useEffect(() => {
     let stopped = false

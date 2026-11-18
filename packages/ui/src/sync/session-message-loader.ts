@@ -1,5 +1,5 @@
 import type { Message, Part, Session } from '@/lib/opencode/model';
-import type { MessagePage, OpenCodeClient } from '@/lib/opencode/client';
+import { OpencodeApiError, type MessagePage, type OpenCodeClient } from '@/lib/opencode/client';
 import type { ChildStoreManager, DirectoryStore } from "./child-store"
 import { retry } from "./retry"
 import { mergeOptimisticPage, type OptimisticItem } from "./optimistic"
@@ -49,6 +49,9 @@ const EXTENSION_ESTIMATE_HEADROOM = 1.2
 // Tail read that confirms a cached transcript after a stream gap. It usually
 // overlaps the cache; when it does not, the window is read back further.
 const STALE_HISTORY_TAIL_LIMIT = 30
+const STALE_HISTORY_RETRY_BASE_MS = 2_000
+const STALE_HISTORY_RETRY_MAX_MS = 30_000
+const STALE_HISTORY_RETRY_PERMANENT_MS = 60_000
 
 export type SessionMessageTarget = {
   directory: string
@@ -101,6 +104,8 @@ type LoaderEntry = {
    */
   gapAnchorID: string | null
   nativeHistoryRevision: number | null
+  staleRetryFailures: number
+  staleRetryAfter: number
 }
 
 type FetchedPage = {
@@ -240,6 +245,19 @@ const withoutEchoedOptimisticRecords = (
 const toLoadError = (error: unknown): Error =>
   error instanceof Error ? error : new Error("Session messages could not be loaded")
 
+const computeStaleRefreshRetryDelayMs = (error: Error, failures: number): number => {
+  const status = error instanceof NativeAgentsRequestError
+    ? error.status
+    : error instanceof OpencodeApiError
+      ? error.status
+      : undefined
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return STALE_HISTORY_RETRY_PERMANENT_MS
+  }
+  const exponent = Math.min(Math.max(0, failures - 1), 4)
+  return Math.min(STALE_HISTORY_RETRY_MAX_MS, STALE_HISTORY_RETRY_BASE_MS * 2 ** exponent)
+}
+
 const filterIdentifiedParts = (parts: Part[]): Part[] => parts
   .filter((part) => Boolean(part?.id))
 
@@ -267,6 +285,7 @@ export class SessionMessageLoader {
   private historyEpoch = 0
   private disposed = false
   private readonly entries = new Map<string, LoaderEntry>()
+  private readonly staleRetryEntries = new Set<LoaderEntry>()
   private retention: SessionCacheRetention | null = null
   private releaseDerivedCache: (target: SessionMessageTarget) => void = () => undefined
   private readonly historyReaders = new Map<string, number>()
@@ -300,10 +319,15 @@ export class SessionMessageLoader {
         generation: entry.snapshot.generation + 1,
       }
       entry.inflight = null
+      if (entry.snapshot.resolved && !entry.evicted && entry.verifiedEpoch < this.historyEpoch) {
+        entry.staleRetryAfter = 0
+        this.staleRetryEntries.add(entry)
+      }
       this.notify(entry)
     }
     if (runtimeChanged) {
       this.entries.clear()
+      this.staleRetryEntries.clear()
       clearRuntimeSessionPrefetch(previousRuntimeKey)
     }
   }
@@ -396,7 +420,9 @@ export class SessionMessageLoader {
       form: { ...current.form },
     }
     this.invalidateSession(target)
-    this.getEntry(target).evicted = true
+    const entry = this.getEntry(target)
+    entry.evicted = true
+    this.clearStaleRetry(entry)
     clearSessionPrefetch(target.directory, [target.sessionID], this.runtimeKey)
     dropSessionCaches(draft, [target.sessionID])
     this.releaseDerivedCache(target)
@@ -414,6 +440,8 @@ export class SessionMessageLoader {
     if (current.message[normalized.sessionID] !== undefined && entry.snapshot.resolved) return
     this.bumpGeneration(entry)
     entry.inflight = null
+    entry.verifiedEpoch = this.historyEpoch
+    this.clearStaleRetry(entry)
     if (current.message[normalized.sessionID] === undefined) {
       store.setState({ message: { ...current.message, [normalized.sessionID]: [] } })
     }
@@ -532,6 +560,8 @@ export class SessionMessageLoader {
     for (const entry of this.entries.values()) {
       if (!entry.snapshot.resolved || entry.evicted || entry.listeners.size === 0) continue
       if (entry.verifiedEpoch >= this.historyEpoch) continue
+      entry.staleRetryAfter = 0
+      this.staleRetryEntries.delete(entry)
       void this.refreshTail(entry.target, STALE_HISTORY_TAIL_LIMIT)
     }
   }
@@ -546,8 +576,29 @@ export class SessionMessageLoader {
     if (!normalized || this.disposed) return false
     const entry = this.entries.get(this.keyFor(normalized))
     if (!entry?.snapshot.resolved || entry.inflight || entry.verifiedEpoch >= this.historyEpoch) return false
+    this.staleRetryEntries.delete(entry)
     void this.refreshTail(normalized, STALE_HISTORY_TAIL_LIMIT)
     return true
+  }
+
+  /**
+   * Retries mounted transcripts whose earlier gap tail refresh failed, once
+   * their per-entry backoff has elapsed. O(1) when no refresh is pending retry.
+   */
+  revalidateMountedStale(now = Date.now()): boolean {
+    if (this.staleRetryEntries.size === 0 || this.disposed) return false
+    let started = false
+    for (const entry of Array.from(this.staleRetryEntries)) {
+      if (!entry.snapshot.resolved || entry.evicted || entry.verifiedEpoch >= this.historyEpoch) {
+        this.clearStaleRetry(entry)
+        continue
+      }
+      if (entry.listeners.size === 0 || entry.inflight || now < entry.staleRetryAfter) continue
+      this.staleRetryEntries.delete(entry)
+      void this.refreshTail(entry.target, STALE_HISTORY_TAIL_LIMIT)
+      started = true
+    }
+    return started
   }
 
   prefetch(target: SessionMessageTarget): Promise<void> {
@@ -718,6 +769,7 @@ export class SessionMessageLoader {
       const committed = this.commitPage(normalized, entry, store, page, replacesCache ? "replace" : "merge", isCurrent)
       if (!committed || !isCurrent()) return
       entry.verifiedEpoch = Math.max(entry.verifiedEpoch, epoch)
+      if (entry.verifiedEpoch >= this.historyEpoch) this.clearStaleRetry(entry)
       // A tail that joins the cache uses a deliberately small window: its
       // cursor describes only that window and must not replace the established
       // coverage, unless the tail holds the whole history. A partial tail does
@@ -760,6 +812,7 @@ export class SessionMessageLoader {
     // subscriber, without waiting for another stream gap.
     if (entry.listeners.size === 1 && entry.snapshot.resolved && !entry.evicted
       && entry.verifiedEpoch < this.historyEpoch) {
+      this.staleRetryEntries.delete(entry)
       void this.refreshTail(normalized, STALE_HISTORY_TAIL_LIMIT)
     }
     return () => entry.listeners.delete(listener)
@@ -828,6 +881,7 @@ export class SessionMessageLoader {
     }
     const windowSurvives = entry.snapshot.resolved
       && preservedMessages.some((message) => !entry.optimistic.has(message.id))
+    if (!windowSurvives) this.clearStaleRetry(entry)
     entry.snapshot = windowSurvives
       ? { ...entry.snapshot, status: "ready", loadingKind: null, error: null }
       : createDefaultState(entry.snapshot.generation)
@@ -844,6 +898,7 @@ export class SessionMessageLoader {
       this.bumpGeneration(entry)
       entry.inflight = null
       entry.optimistic.clear()
+      this.clearStaleRetry(entry)
       this.entries.delete(key)
       this.notify(entry)
     }
@@ -861,7 +916,14 @@ export class SessionMessageLoader {
       this.notify(entry)
     }
     this.entries.clear()
+    this.staleRetryEntries.clear()
     clearRuntimeSessionPrefetch(this.runtimeKey)
+  }
+
+  private clearStaleRetry(entry: LoaderEntry): void {
+    entry.staleRetryFailures = 0
+    entry.staleRetryAfter = 0
+    this.staleRetryEntries.delete(entry)
   }
 
   private normalizeTarget(target: SessionMessageTarget): SessionMessageTarget | null {
@@ -916,6 +978,8 @@ export class SessionMessageLoader {
       verifiedEpoch: 0,
       gapAnchorID: null,
       nativeHistoryRevision: null,
+      staleRetryFailures: 0,
+      staleRetryAfter: 0,
     }
     this.entries.set(key, entry)
     return entry
@@ -971,10 +1035,16 @@ export class SessionMessageLoader {
           return
         }
         finishPerformanceEvent("error", performance)
+        const loadError = toLoadError(error)
+        if (kind === "refresh" && entry.snapshot.resolved && !entry.evicted && entry.verifiedEpoch < this.historyEpoch) {
+          entry.staleRetryFailures += 1
+          entry.staleRetryAfter = Date.now() + computeStaleRefreshRetryDelayMs(loadError, entry.staleRetryFailures)
+          this.staleRetryEntries.add(entry)
+        }
         this.patchEntry(entry, {
           status: "error",
           loadingKind: null,
-          error: toLoadError(error),
+          error: loadError,
         })
       })
       .finally(() => {
@@ -1010,6 +1080,7 @@ export class SessionMessageLoader {
     if (!committed || !isCurrent()) return
     entry.evicted = false
     entry.verifiedEpoch = Math.max(entry.verifiedEpoch, epoch)
+    if (entry.verifiedEpoch >= this.historyEpoch) this.clearStaleRetry(entry)
     this.patchEntry(entry, {
       status: "ready",
       loadingKind: null,

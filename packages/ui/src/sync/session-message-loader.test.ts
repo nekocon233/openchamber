@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { MessagePage } from '@/lib/opencode/client';
+import { OpencodeApiError, type MessagePage } from '@/lib/opencode/client';
 import type { Message, Part } from '@/lib/opencode/model';
 import { ChildStoreManager } from "./child-store"
 import { SessionMessageLoader } from "./session-message-loader"
@@ -485,6 +485,83 @@ describe("SessionMessageLoader", () => {
     await loader.refreshTail(target, 30)
 
     expect(store.getState().message[target.sessionID]).toEqual([live])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("retries a failed mounted stale refresh once its backoff elapses and stops once confirmed", async () => {
+    let failRefresh = false
+    let calls = 0
+    const { childStores, loader } = createLoader(async ({ sessionID }) => {
+      calls += 1
+      if (failRefresh) throw new Error("wireguard tunnel reset")
+      return calls === 1
+        ? response([createRecord(sessionID, "msg_1", 1_000)])
+        : response([createRecord(sessionID, "msg_1", 1_000), createRecord(sessionID, "msg_2", 2_000)])
+    })
+    const target = { directory: "/repo", sessionID: "session-stale-retry" }
+
+    await loader.ensure(target)
+    const unsubscribe = loader.subscribe(target, () => undefined)
+    expect(calls).toBe(1)
+
+    failRefresh = true
+    loader.markHistoryStale()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toBe(2)
+    expect(loader.getSnapshot(target).status).toBe("error")
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((m) => m.id)).toEqual(["msg_1"])
+
+    // Stream activity inside the 2s retry window must not spam the server.
+    const failedAt = Date.now()
+    expect(loader.revalidateMountedStale(failedAt + 500)).toBe(false)
+    expect(calls).toBe(2)
+
+    // Once the link recovers and the 2s window passes, the next stream activity repairs the transcript.
+    failRefresh = false
+    expect(loader.revalidateMountedStale(failedAt + 2_500)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toBe(3)
+    expect(loader.getSnapshot(target).status).toBe("ready")
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((m) => m.id)).toEqual(["msg_1", "msg_2"])
+
+    // Confirmed transcripts do zero work on later stream activity.
+    expect(loader.revalidateMountedStale(failedAt + 10_000)).toBe(false)
+    expect(calls).toBe(3)
+
+    unsubscribe()
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("uses the long cooldown when a mounted stale refresh fails with a permanent 4xx status", async () => {
+    let failNotFound = false
+    let calls = 0
+    const { childStores, loader } = createLoader(async ({ sessionID }) => {
+      calls += 1
+      if (failNotFound) throw new OpencodeApiError("session.messages", "Session not found", { status: 404 })
+      return response([createRecord(sessionID, "msg_1", 1_000)])
+    })
+    const target = { directory: "/repo", sessionID: "session-404-cooldown" }
+
+    await loader.ensure(target)
+    const unsubscribe = loader.subscribe(target, () => undefined)
+
+    failNotFound = true
+    loader.markHistoryStale()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toBe(2)
+
+    const failedAt = Date.now()
+    expect(loader.revalidateMountedStale(failedAt + 10_000)).toBe(false)
+    expect(calls).toBe(2)
+
+    failNotFound = false
+    expect(loader.revalidateMountedStale(failedAt + 61_000)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toBe(3)
+
+    unsubscribe()
     loader.dispose()
     childStores.disposeAll()
   })

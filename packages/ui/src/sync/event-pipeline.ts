@@ -42,6 +42,12 @@ const BACKPRESSURE_MODE_MS = 10_000
 const STREAM_YIELD_MS = 8
 const DEFAULT_RECONNECT_DELAY_MS = 250
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 30_000
+// One missed server heartbeat plus network margin: the WS bridge sends a
+// heartbeat every 15s and the SSE proxy at most every 20s, while passive
+// expiry waits 30s. Returning focus or visibility after a missed heartbeat
+// probes immediately without dropping a healthy stream on routine switches.
+const FOREGROUND_PROBE_WS_RATIO = 0.55
+const FOREGROUND_PROBE_SSE_RATIO = 0.7
 const WS_FALLBACK_WINDOW_MS = 60_000
 const DEFAULT_WS_READY_TIMEOUT_MS = 2_000
 // Retry pacing. Visible+online tabs probe quickly so the user sees connection
@@ -569,6 +575,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
       }
       if (typeof globalThis.window !== "undefined") {
         globalThis.window.removeEventListener("online", onInterrupt)
+        globalThis.window.removeEventListener("focus", onFocusInterrupt)
       }
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityInterrupt)
@@ -585,10 +592,16 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
         onInterrupt()
       }
     }
+    const onFocusInterrupt = () => {
+      if (!isHidden() && !isOffline()) {
+        onInterrupt()
+      }
+    }
 
     let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onInterrupt, ms)
     if (typeof globalThis.window !== "undefined") {
       globalThis.window.addEventListener("online", onInterrupt, { once: true })
+      globalThis.window.addEventListener("focus", onFocusInterrupt)
     }
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", onVisibilityInterrupt)
@@ -1045,11 +1058,21 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     }
   })().finally(flushAll)
 
+  const probeForegroundStream = (reason: "visibility_restore" | "window_focus") => {
+    if (isHidden() || isOffline()) return
+    const ratio = activeTransport === "ws" ? FOREGROUND_PROBE_WS_RATIO : FOREGROUND_PROBE_SSE_RATIO
+    if (Date.now() - lastEventAt < Math.ceil(heartbeatTimeoutMs * ratio)) return
+    attemptAbortReason = `${activeTransport}_${reason}`
+    attempt?.abort()
+  }
+
   const onVisibility = () => {
     if (typeof document === "undefined") return
-    if (document.visibilityState !== "visible") return
-    if (Date.now() - lastEventAt < heartbeatTimeoutMs) return
-    attempt?.abort()
+    probeForegroundStream("visibility_restore")
+  }
+
+  const onFocus = () => {
+    probeForegroundStream("window_focus")
   }
 
   const onPageShow = (event: PageTransitionEvent) => {
@@ -1097,6 +1120,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   // test environments can replace globalThis.window with a stub.
   if (typeof globalThis.window !== "undefined") {
     globalThis.window.addEventListener("openchamber:system-resume", onSystemResume)
+    globalThis.window.addEventListener("focus", onFocus)
     globalThis.window.addEventListener("online", onOnline)
     globalThis.window.addEventListener("offline", onOffline)
   }
@@ -1108,6 +1132,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     }
     if (typeof globalThis.window !== "undefined") {
       globalThis.window.removeEventListener("openchamber:system-resume", onSystemResume)
+      globalThis.window.removeEventListener("focus", onFocus)
       globalThis.window.removeEventListener("online", onOnline)
       globalThis.window.removeEventListener("offline", onOffline)
     }
