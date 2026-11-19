@@ -2105,6 +2105,17 @@ independently of animation frames across all chat runtimes.
 
 `bun run profile:switch` measures both moments; see `scripts/perf/DOCUMENTATION.md`.
 
+### Why installed PWAs fetch the host's last selection at launch and resume
+
+The host keeps one session ID from deliberate PWA navigation. A plain launch
+or a return from the background can open it after confirming the session is
+active and its directory is admitted. An explicit URL has priority at launch.
+A resumed draft or input during startup or the read keeps the local view.
+A missing, stale or unreadable selection also falls back to the local view.
+Only deliberate navigation publishes a selection, including choosing the
+current session again. Writes are ordered and best effort. Standard browser
+tabs, Electron, VS Code and Capacitor use device-local navigation.
+
 ### Pinned chat columns
 
 A chat opened in the side panel ("Open in side panel" or Shift-click on a

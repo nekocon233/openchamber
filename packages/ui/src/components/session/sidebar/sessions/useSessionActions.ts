@@ -5,6 +5,7 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { streamPerfMark } from '@/stores/utils/streamDebug';
+import { sharePwaSessionSelection } from '@/sync/pwa-session-selection';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { collectSessionSubtreeIds, runSessionSubtreeAction } from './sessionSubtreeActions';
 import { describeSessionActionError } from './sessionActionError';
@@ -85,6 +86,7 @@ export const useSessionActions = (args: Args) => {
       }
 
       if (sessionId === useSessionUIStore.getState().currentSessionId) {
+        sharePwaSessionSelection(sessionId);
         if (allowReselect) {
           onSessionSelected?.(sessionId);
         }

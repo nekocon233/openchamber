@@ -7,6 +7,7 @@ import { isSessionOpenRedirect, openSessionFromRoute, openSessionLink } from '@/
 import type { RouteState, AppRouteState } from '@/lib/router';
 import { resolveSettingsSlug } from '@/lib/settings/metadata';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
+import { usePwaSessionRestore } from './usePwaSessionRestore';
 
 /**
  * Check if running in VS Code webview context.
@@ -44,7 +45,7 @@ export function getCurrentAppRouteState(): AppRouteState {
  * - Desktop: Full bidirectional sync
  * - VS Code: State-only (no URL updates, reads initial params)
  */
-export function useRouter(): void {
+export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestoreReady?: boolean } = {}): void {
   const isVSCode = React.useMemo(() => isVSCodeContext(), []);
 
   // Track initialization to avoid duplicate applies
@@ -58,14 +59,16 @@ export function useRouter(): void {
   const navigateToDiff = useUIStore((state) => state.navigateToDiff);
 
   const applyRouteState = React.useCallback(
-    async (route: RouteState) => {
+    async (route: RouteState, initial: boolean) => {
       // 1. Apply session first (may trigger async operations); a message
       // link also asks the session's timeline to show that message.
       if (route.sessionId) {
         if (route.messageId) {
           await openSessionLink(route.sessionId, route.messageId);
         } else {
-          await openSessionFromRoute(route.sessionId, route.sessionDirectory);
+          await openSessionFromRoute(route.sessionId, route.sessionDirectory, {
+            recordReselection: !initial || !window.history.state?.route,
+          });
         }
       }
 
@@ -118,7 +121,7 @@ export function useRouter(): void {
         while (pendingRouteRef.current) {
           const request = pendingRouteRef.current;
           pendingRouteRef.current = null;
-          await applyRouteState(request.route);
+          await applyRouteState(request.route, request.initial);
           if (!isVSCode && request.normalize && !request.route.messageId && !pendingRouteRef.current) {
             const state = getCurrentAppRouteState();
             const currentSessionState = useSessionUIStore.getState();
@@ -156,6 +159,20 @@ export function useRouter(): void {
     },
     [isVSCode]
   );
+
+  const canRestorePwaSession = React.useCallback(() => (
+    !isApplyingRouteRef.current && !useUIStore.getState().isSettingsDialogOpen
+  ), []);
+
+  const restorePwaSession = React.useCallback((id: string, directory: string) => {
+    isApplyingRouteRef.current = true;
+    try {
+      useSessionUIStore.getState().setCurrentSession(id, directory, { transition: 'restored', keepSingleProject: true });
+    } finally {
+      isApplyingRouteRef.current = false;
+    }
+    syncURLFromState({ replace: true });
+  }, [syncURLFromState]);
 
   // Initialize: parse URL and apply route on mount
   React.useEffect(() => {
@@ -272,4 +289,6 @@ export function useRouter(): void {
       window.removeEventListener('popstate', handlePopState);
     };
   }, [applyRoute, isVSCode, setSettingsDialogOpen]);
+
+  usePwaSessionRestore(pwaSessionRestoreReady, canRestorePwaSession, restorePwaSession);
 }

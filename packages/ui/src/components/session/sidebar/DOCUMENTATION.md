@@ -501,9 +501,10 @@ in the global titlebar; mobile and VS Code keep their own headers.
 
 The Open sessions dropdown mounts the same `SessionSidebar` with
 its project grouping, search, and virtual list. `allowReselect` makes choosing
-the already active session close the picker too. The dropdown unmounts its
-content on close, so it adds no hidden enrichment or search listeners. The
-permanent sidebar remains the owner of the shared New worktree dialog;
+the already active session close the picker too. In an installed PWA, that
+explicit choice also updates the selection shared with other devices. The
+dropdown unmounts its content on close, so it adds no hidden enrichment or
+search listeners. The permanent sidebar owns the shared New worktree dialog.
 `renderSharedDialogs={false}` prevents the dropdown from mounting a second
 copy of that globally controlled dialog.
 Hovering over the dropdown does not trigger the classic sidebar's edge peek.

@@ -114,6 +114,7 @@ import {
   RuntimeContextChangedError,
 } from "@/lib/runtime-switch"
 import { persistLastActiveSession, readLastActiveSession } from "./last-session-cache"
+import { sharePwaSessionSelection } from "./pwa-session-selection"
 import { persistWorktreeTopology, readPersistedWorktreeTopology } from "./worktree-topology-cache"
 import { rememberRuntimeLiveStatus } from "./runtime-live-memory"
 import {
@@ -588,8 +589,8 @@ export type NewSessionDraftState = {
 }
 
 export type SetCurrentSessionOptions = {
-  /** The session materialized a submitted draft, which the chat announces as its own transition. */
-  transition?: "submitted-draft"
+  /** A submitted draft materialized, or a previous selection was restored. */
+  transition?: "submitted-draft" | "restored"
   /** Launch restoration preserves the device's sidebar project selection. */
   keepSingleProject?: boolean
 }
@@ -1475,8 +1476,12 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // setCurrentSession
   // ---------------------------------------------------------------------------
   setCurrentSession: (id, directoryHint?: string | null, transitionOrOptions?: "submitted-draft" | SetCurrentSessionOptions) => {
-    admissionNavigationRevision += 1
-    const transition = typeof transitionOrOptions === "string" ? transitionOrOptions : transitionOrOptions?.transition
+    const options: SetCurrentSessionOptions | undefined = typeof transitionOrOptions === "string"
+      ? { transition: transitionOrOptions }
+      : transitionOrOptions
+    const transition = options?.transition
+    const keepSingleProject = options?.keepSingleProject === true
+    if (transition !== "restored") admissionNavigationRevision += 1
     const materializedDraftSessionId = id && transition === "submitted-draft" ? id : null
     // Publish the transition identity before closing the draft. Those are two
     // separate store updates, and ChatContainer must never observe a closed
@@ -1530,6 +1535,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     set({
       currentSessionId: id,
       currentSessionDirectory: id ? resolvedDir ?? null : null,
+      currentSessionKeepsSingleProject: Boolean(id) && keepSingleProject,
       restoredSessionPendingValidation: false,
       restoredSessionRuntimeKey: null,
     })
@@ -1540,6 +1546,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       persistSessionNavigation(id, rememberedDir, key)
       // Mobile cold launches still consume the bounded legacy cache directly.
       persistLastActiveSession(key, { sessionId: id, directory: rememberedDir })
+      if (transition !== "restored" && get().currentSessionId === id) {
+        sharePwaSessionSelection(id)
+      }
     } else if (previousSessionId) {
       clearPersistedSessionNavigation(previousSessionId, key)
     }
@@ -1551,7 +1560,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       if (sessionProject && projectsState.activeProjectId !== sessionProject.id) {
         projectsState.setActiveProjectIdOnly(sessionProject.id)
       }
-      if (id && !isGuessedDir && sessionProject) {
+      if (id && !isGuessedDir && sessionProject && !keepSingleProject) {
         useSessionDisplayStore.getState().setSingleProjectId(sessionProject.id)
       }
       opencodeClient.setDirectory(resolvedDir ?? undefined)
@@ -1658,6 +1667,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     set({
       currentSessionId: restoredSessionId,
       currentSessionDirectory: restoredSessionId ? restoredDirectory : null,
+      currentSessionKeepsSingleProject: Boolean(persisted && restoredSessionId),
       materializedDraftSessionId: null,
       restoredSessionPendingValidation: Boolean(persisted && restoredSessionId),
       restoredSessionRuntimeKey: persisted && restoredSessionId ? key : null,
@@ -1693,6 +1703,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       set({
         currentSessionId: null,
         currentSessionDirectory: null,
+        currentSessionKeepsSingleProject: false,
         restoredSessionPendingValidation: false,
         restoredSessionRuntimeKey: null,
       })
@@ -1727,7 +1738,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
 
     const authoritativeDirectory = resolveGlobalSessionDirectory(primarySession)
     set({ restoredSessionPendingValidation: false, restoredSessionRuntimeKey: null })
-    get().setCurrentSession(primarySession.id, authoritativeDirectory ?? state.currentSessionDirectory)
+    get().setCurrentSession(primarySession.id, authoritativeDirectory ?? state.currentSessionDirectory, { transition: "restored", keepSingleProject: true })
   },
 
   // ---------------------------------------------------------------------------
@@ -1758,6 +1769,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         return
       }
       if (draft.open) {
+        admissionNavigationRevision += 1
         nextDraftId = Math.max(nextDraftId, draft.draftId + 1)
         // Keep the draft id, prepared chat directory and attached context intact.
         // Restore its directory's selections without reapplying project defaults.
@@ -1767,6 +1779,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           newSessionDraft: restored,
           currentSessionId: null,
           currentSessionDirectory: null,
+          currentSessionKeepsSingleProject: false,
           materializedDraftSessionId: null,
           restoredSessionPendingValidation: false,
           restoredSessionRuntimeKey: null,
@@ -1786,6 +1799,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   },
 
   openNewSessionDraft: (options) => {
+    if (!options?.automatic) admissionNavigationRevision += 1
     const projectsState = useProjectsStore.getState()
     const projects = projectsState.projects
     const availableWorktreesByProject = get().availableWorktreesByProject
@@ -1913,6 +1927,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       newSessionDraft: nextDraft,
       currentSessionId: null,
       currentSessionDirectory: null,
+      currentSessionKeepsSingleProject: false,
       materializedDraftSessionId: null,
       restoredSessionPendingValidation: false,
       restoredSessionRuntimeKey: null,

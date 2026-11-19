@@ -68,7 +68,7 @@ export const restoreLastActiveSession = async (options: {
     void latest.setCurrentSession(
         session.id,
         resolveGlobalSessionDirectory(session) ?? persisted.directory ?? undefined,
-        { keepSingleProject: true },
+        { transition: 'restored', keepSingleProject: true },
     );
     return 'restored';
 };
@@ -91,7 +91,7 @@ const reopenLastActiveSession = (): ReopenedSession | null => {
     const directory = persisted.directory ?? (cached ? resolveGlobalSessionDirectory(cached) : null);
     // `setCurrentSession` opens the cached record's folder over the pointer's.
     if (!directory || !isSessionAdmitted((cached ? resolveGlobalSessionDirectory(cached) : null) ?? directory)) return null;
-    void ui.setCurrentSession(persisted.sessionId, directory, { keepSingleProject: true });
+    void ui.setCurrentSession(persisted.sessionId, directory, { transition: 'restored', keepSingleProject: true });
     return { runtimeKey, sessionId: persisted.sessionId };
 };
 
@@ -113,17 +113,17 @@ const confirmReopenedSession = async (reopened: ReopenedSession): Promise<LastSe
         const directory = normalizePath(resolveGlobalSessionDirectory(session));
         if (stillOpen && directory && directory !== latest.currentSessionDirectory) {
             if (!isSessionAdmitted(directory)) {
-                void latest.setCurrentSession(null);
+                void latest.setCurrentSession(null, undefined, { transition: 'restored' });
                 return 'none';
             }
-            void latest.setCurrentSession(session.id, directory, { keepSingleProject: latest.currentSessionKeepsSingleProject });
+            void latest.setCurrentSession(session.id, directory, { transition: 'restored', keepSingleProject: latest.currentSessionKeepsSingleProject });
         }
         return 'restored';
     }
     if (readLastActiveSession(reopened.runtimeKey)?.sessionId === reopened.sessionId) {
         clearLastActiveSession(reopened.runtimeKey);
     }
-    if (stillOpen) void latest.setCurrentSession(null);
+    if (stillOpen) void latest.setCurrentSession(null, undefined, { transition: 'restored' });
     return 'none';
 };
 
