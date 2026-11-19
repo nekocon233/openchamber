@@ -1138,12 +1138,14 @@ project in Settings cannot change what chat sees. Components select through
 `selectSkillsForDirectory` / `selectMcpServersForDirectory` /
 `selectProvidersForDirectory`, which return stored arrays.
 
-Native CLI providers (`claude-native`, `codex-native`) join the provider list
-after OpenCode's, from `lib/native-agents/catalog.ts`. That catalog is read once
-per runtime, and a CLI whose read fails keeps the provider an earlier read
-found. `refreshNativeProviders` invalidates that runtime's catalog after a
-Claude connection mutation or a `native-model` catalog event and replaces only native providers in the active
-mirror and every loaded directory. It leaves model selections intact. A read
+Native CLI providers join the provider list after OpenCode's, from
+`lib/native-agents/catalog.ts`. The catalog is shared across directories in a
+runtime, and a CLI whose read fails keeps the provider an earlier read found.
+Opening the composer's picker shows the last catalog immediately and rechecks
+it after one minute of age, without traffic while the picker is closed.
+Connection mutations, stream gaps and `native-model` events can force a read.
+`refreshNativeProviders` replaces only native providers in the active mirror
+and every loaded directory. It leaves model selections intact. A read
 started before invalidation adopts the new catalog instead of committing an
 old response; runtime switches reject old store updates. Automatic fallback never picks a native provider, because the model
 decides whether a new session is a native one; the settings default may name

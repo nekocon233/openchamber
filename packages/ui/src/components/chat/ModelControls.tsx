@@ -631,6 +631,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const [adjustedThinkingModels, setAdjustedThinkingModels] = React.useState<Set<string>>(new Set());
     const [modelPickerRenderVersion, setModelPickerRenderVersion] = React.useState(0);
 
+    const modelPickerOpen = isCompact ? activeMobilePanel === 'model' : isReady && isModelSelectorOpen;
+    React.useEffect(() => {
+        if (modelPickerOpen) void useConfigStore.getState().refreshNativeProviders('if-stale');
+    }, [modelPickerOpen]);
+
     React.useEffect(() => {
         if (activeMobilePanel === 'model') {
             setExpandedMobileProviders(() => {
