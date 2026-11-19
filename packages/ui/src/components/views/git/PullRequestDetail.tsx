@@ -16,6 +16,11 @@ import type { GitHubPullReference, GitHubReferenceDetail, SourceControlReadConte
 import { WorkspaceViewScope, useWorkspaceViewState } from '@/hooks/useWorkspaceViewState';
 import { workspaceRepositoryIdentity, workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
 import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
+import { useDiffFileFilter } from '../useDiffFileFilter';
+import { ProjectPullFileStats } from './ProjectPullFileStats';
+import { invalidateProjectPullFileStats } from './useProjectPullFileStats';
+
+const NO_FILES: Array<{ path: string }> = [];
 
 /** PR actions always use the context that supplied the displayed reference. */
 export const PullRequestDetail: React.FC<{
@@ -31,8 +36,9 @@ export const PullRequestDetail: React.FC<{
   const { sourceControl } = useRuntimeAPIs();
   const { t } = useI18n();
   const runtime = getRuntimeKey();
-  const owner = workspaceViewKey(getRuntimeKey(), context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
+  const owner = workspaceViewKey(runtime, context.directory, 'pull-detail', workspaceRepositoryIdentity(context), reference.sourceRepo.owner, reference.sourceRepo.repo, reference.number);
   const runtimeGeneration = getRuntimeEndpointGeneration();
+  const { excludedTypes } = useDiffFileFilter(runtime, context.directory, NO_FILES);
   const references = React.useMemo(() => context.provider === 'github' ? [reference] : [], [context.provider, reference]);
   const pullStatusOf = useGitHubPullStatuses(context.directory, references);
   const activeOwner = React.useRef<string | null>(null);
@@ -50,7 +56,10 @@ export const PullRequestDetail: React.FC<{
   }, [onChanged, refreshDetail]);
   const refreshFromHost = async () => {
     await sourceControl.refreshProviderReads(context);
-    if (getRuntimeKey() === runtime && getRuntimeEndpointGeneration() === runtimeGeneration) invalidateGitHubPullStatuses(context, runtime);
+    if (getRuntimeKey() === runtime && getRuntimeEndpointGeneration() === runtimeGeneration) {
+      invalidateGitHubPullStatuses(context, runtime);
+      if (owner && activeOwner.current === owner) invalidateProjectPullFileStats(context, reference);
+    }
     await refresh();
   };
   const reviewCompleted = async () => {
@@ -88,6 +97,7 @@ export const PullRequestDetail: React.FC<{
         labelsControl={<SourceBoardLabels reference={reference} context={context} onChanged={refresh} />}
         reviewersControl={<SourceBoardReviewers pull={reference} detail={githubDetail} context={context} onChanged={refresh} />}
         reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} onReviewDispatched={submitted} onReviewCompleted={reviewCompleted} />}
+        pullFileStats={<ProjectPullFileStats context={context} pull={reference} excludedTypes={excludedTypes} detail />}
         pullLinks={pullLinks}
       />
       <SourceBoardChecksDialog pull={reference} context={context} open={checksOpen} onOpenChange={setChecksOpen} onAttachFailed={attachments.attachFailedChecks} />

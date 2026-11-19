@@ -19,6 +19,7 @@ test('statistics bound concurrency, stop hidden queued reads, survive cache scal
   const { useI18nStore } = await import('@/lib/i18n/store');
   const { switchRuntimeEndpoint } = await import('@/lib/runtime-switch');
   const { ProjectPullFileStats } = await import('./ProjectPullFileStats');
+  const { invalidateProjectPullFileStats } = await import('./useProjectPullFileStats');
   switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'file-stats-test' });
   useI18nStore.getState().setLocale('en');
   const base = createWebAPIs();
@@ -33,8 +34,8 @@ test('statistics bound concurrency, stop hidden queued reads, survive cache scal
   } } };
   const node = document.createElement('div');document.body.append(node);const root = createRoot(node);
   const pulls = Array.from({ length: 55 }, (_, index) => pull(index + 1));
-  const render = async (shown = pulls, excludedTypes: string[] = [], read = context, refreshVersion = 0) => act(async () => {
-    root.render(<RuntimeAPIContext.Provider value={apis}><I18nProvider>{shown.map(reference => <section key={reference.number} data-number={reference.number}><ProjectPullFileStats context={read} pull={reference} excludedTypes={excludedTypes} refreshVersion={refreshVersion} /></section>)}</I18nProvider></RuntimeAPIContext.Provider>);
+  const render = async (shown = pulls, excludedTypes: string[] = [], read = context) => act(async () => {
+    root.render(<RuntimeAPIContext.Provider value={apis}><I18nProvider>{shown.map(reference => <section key={reference.number} data-number={reference.number}><ProjectPullFileStats context={read} pull={reference} excludedTypes={excludedTypes} /></section>)}</I18nProvider></RuntimeAPIContext.Provider>);
   });
   const drain = async () => {
     for (let round = 0; round < 100; round++) {
@@ -51,14 +52,29 @@ test('statistics bound concurrency, stop hidden queued reads, survive cache scal
     expect(row(55)).toContain('2 files·+75−3');
     await render(pulls, ['md']);await drain();expect(asked).toHaveLength(55);expect(row(55)).toContain('1 file·+55−1');
     await render(pulls, ['md', 'ts']);expect(row(1)).toContain('0 files·+0−0');
-    fail = 1;await render(pulls.slice(0, 2), [], { ...context, accountId: 'other-account' });await drain();
+    const otherContext = { ...context, accountId: 'other-account' };
+    fail = 1;await render(pulls.slice(0, 2), [], otherContext);await drain();
     expect(row(1)).toContain('File statistics unavailable');expect(row(2)).toContain('2 files·+22−3');
     expect(asked.slice(-2).every(read => read.account === 'other-account')).toBe(true);
-    fail = 0;await render(pulls.slice(0, 2), [], { ...context, accountId: 'other-account' }, 1);await drain();expect(row(1)).toContain('2 files·+21−3');
-    await render(pulls.slice(0, 2), [], context, 2);
+    fail = 0;
+    const beforeRetry = asked.length;
+    await act(async () => invalidateProjectPullFileStats(otherContext, pulls[0]));
+    await drain();
+    expect(asked.slice(beforeRetry)).toEqual([{ number: 1, account: otherContext.accountId }]);
+    expect(row(1)).toContain('2 files·+21−3');
+
+    await act(async () => invalidateProjectPullFileStats(otherContext, pulls[0]));
+    const beforeHide = asked.length;
+    await act(async () => invalidateProjectPullFileStats(otherContext, pulls[0]));
+    await render([]);
+    await drain();
+    expect(asked).toHaveLength(beforeHide);
+
+    await render(pulls.slice(0, 2));
+    await act(async () => invalidateProjectPullFileStats(context));
     const beforeSwitch = asked.length;
     switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'file-stats-other-runtime' });
-    await render(pulls.slice(0, 2), [], context, 2);expect(row(1)).toContain('Loading file statistics');
+    await render(pulls.slice(0, 2));expect(row(1)).toContain('Loading file statistics');
     await drain();expect(asked).toHaveLength(beforeSwitch + 2);expect(row(1)).toContain('2 files·+21−3');
   } finally {
     await act(async () => root.unmount());await drain();await dom.happyDOM.close();

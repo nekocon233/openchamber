@@ -27,18 +27,22 @@ or discarded.
 
 ## Project pull requests and CI runs
 
-Each project PR row shows its visible file count and additions/deletions, using
-the same device-local project file-type exclusions as Changes. Worktrees share
-their owning project's exclusions. These counts describe presentation only;
-provider actions and attachments retain the complete changeset.
+Project PR rows and details show the visible file count and additions/deletions
+using the same device-local project file-type exclusions as Changes. Worktrees
+share their owning project's exclusions. Linked details use the source
+repository's project. The filter applies to the displayed counts. Provider
+actions and attachments use the complete changeset.
 
-`ProjectPullFileStats` reads complete per-file metadata independently of checks
-and selection. It uses the reference value cache's 60-second freshness and
-40-entry soft bound, with active rows pinned. Runtime, exact binding/account,
-PR head/base name and list update time scope each answer. Explicit list refresh
-starts a new reading generation. The shared background gate admits at most two
-statistics reads; a row removed before admission asks nothing. Runtime changes
-retire the cache. Loading, failed and unknown counts stay distinct from zero.
+The list and detail share `useProjectPullFileStats`, so opening a row can reuse
+its complete per-file metadata and filter changes can recalculate locally.
+The reader uses the reference value cache's 60-second freshness and
+40-entry soft bound, with active readers pinned. Runtime, exact binding/account,
+PR head/base name and list update time scope each answer. List refresh
+invalidates the binding's statistics. Detail refresh invalidates the selected
+PR's statistics, including any answer still in flight. The shared background
+gate admits at most two statistics reads. A view that closes before dispatch
+skips its queued read. Runtime changes retire the cache. Loading, failed and
+unknown counts stay distinct from zero.
 
 On GitHub projects, `PullRequestView` renders `ProjectPullRequestList` directly
 without an outer sub-surface tab strip. It uses the bound primary repository alone, across all branches, and only lists

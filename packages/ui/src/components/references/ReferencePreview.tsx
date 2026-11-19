@@ -213,17 +213,18 @@ const LoadError: React.FC<{ error: string }> = ({ error }) => {
 const PullDetailRows: React.FC<{
     detail: CachedValue<GitHubReferenceDetail>;
     checks: CachedValue<GitHubChecksSummary | null>;
+    fileStats?: React.ReactNode;
     links?: React.ReactNode;
     /** Opens the PR's check runs; the totals become a button. */
     onOpenChecks?: () => void;
-}> = ({ detail, checks, links, onOpenChecks }) => {
+}> = ({ detail, checks, fileStats, links, onOpenChecks }) => {
     const { t } = useI18n();
     const pull = detail.status === 'ready' ? detail.value.pull : null;
     return (
         <>
             <MetaRow label={t('references.picker.preview.changes')}>
                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    {detail.status === 'error' ? <LoadError error={detail.error} /> : pull ? (
+                    {fileStats ?? (detail.status === 'error' ? <LoadError error={detail.error} /> : pull ? (
                         <span className="inline-flex items-center gap-2">
                             <span className="text-[var(--status-success)]">+{pull.additions}</span>
                             <span className="text-[var(--status-error)]">−{pull.deletions}</span>
@@ -232,7 +233,7 @@ const PullDetailRows: React.FC<{
                                 {pull.changedFiles}
                             </span>
                         </span>
-                    ) : <Pending />}
+                    ) : <Pending />)}
                     {links}
                 </span>
             </MetaRow>
@@ -293,6 +294,7 @@ const GitHubPreview: React.FC<{
     onIncludeDiffChange: (include: boolean) => void;
     now: number;
     footer?: React.ReactNode;
+    pullFileStats?: React.ReactNode;
     pullLinks?: React.ReactNode;
     reply?: React.ReactNode;
     labelsControl?: React.ReactNode;
@@ -302,7 +304,7 @@ const GitHubPreview: React.FC<{
     stateMenu?: React.ReactNode;
     onRefresh?: () => Promise<void>;
     threadActions?: ReferenceThreadActions;
-}> = ({ reference, pullStatus, detail, purpose, pinned, includeDiff, onIncludeDiffChange, now, footer: footerOverride, pullLinks, reply, labelsControl, reviewersControl, onOpenChecks, commentAttachments, stateMenu, onRefresh, threadActions }) => {
+}> = ({ reference, pullStatus, detail, purpose, pinned, includeDiff, onIncludeDiffChange, now, footer: footerOverride, pullFileStats, pullLinks, reply, labelsControl, reviewersControl, onOpenChecks, commentAttachments, stateMenu, onRefresh, threadActions }) => {
     const { t } = useI18n();
     const [refreshing, setRefreshing] = React.useState(false);
     const refresh = onRefresh ? () => {
@@ -444,7 +446,7 @@ const GitHubPreview: React.FC<{
                                 <span className="truncate">{reference.base}</span>
                             </span>
                         </MetaRow>
-                        <PullDetailRows detail={detail} checks={previewChecks(reference, detail)} links={pullLinks} onOpenChecks={onOpenChecks} />
+                        <PullDetailRows detail={detail} checks={previewChecks(reference, detail)} fileStats={pullFileStats} links={pullLinks} onOpenChecks={onOpenChecks} />
                     </>
                 ) : null}
                 {reviewersControl && reference.kind === 'pull' ? (
@@ -661,6 +663,8 @@ export const ReferencePreview: React.FC<{
     now: number;
     /** Replaces what the agent gets with what the surface does with the item. */
     footer?: React.ReactNode;
+    /** Overrides the PR's provider totals in the Changes row. */
+    pullFileStats?: React.ReactNode;
     /** Beside a PR's size: where to look at its changes. */
     pullLinks?: React.ReactNode;
     /** Replaces a Linear issue's state pill, such as with one that changes the state. */
@@ -682,7 +686,7 @@ export const ReferencePreview: React.FC<{
     onRefresh?: () => Promise<void>;
     /** Answer and resolve a PR's review threads; without it they are read only. */
     threadActions?: ReferenceThreadActions;
-}> = ({ item, directory, pullStatus, linearDetail, githubDetail, purpose, pinned, includeDiff, onIncludeDiffChange, now, footer, pullLinks, linearStateControl, reply, labelsControl, reviewersControl, onOpenChecks, commentAttachments, stateMenu, onOpenLinearIssue, onRefresh, threadActions }) => {
+}> = ({ item, directory, pullStatus, linearDetail, githubDetail, purpose, pinned, includeDiff, onIncludeDiffChange, now, footer, pullFileStats, pullLinks, linearStateControl, reply, labelsControl, reviewersControl, onOpenChecks, commentAttachments, stateMenu, onOpenLinearIssue, onRefresh, threadActions }) => {
     const { t } = useI18n();
     const rewriteMarkdown = useGitLabUploadRewrite(directory, item?.source === 'github' ? item.reference : null);
     if (!item) {
@@ -707,6 +711,7 @@ export const ReferencePreview: React.FC<{
                 onIncludeDiffChange={onIncludeDiffChange}
                 now={now}
                 footer={footer}
+                pullFileStats={pullFileStats}
                 pullLinks={pullLinks}
                 reply={reply}
                 labelsControl={labelsControl}
