@@ -14,6 +14,7 @@ import os from 'os';
 import crypto from 'crypto';
 import http2 from 'node:http2';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
+import { registerPwaSessionSelectionRoutes } from './lib/opencode/pwa-session-selection-routes.js';
 import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
 import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
 import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.js';
@@ -3174,6 +3175,7 @@ async function main(options = {}) {
     logger: console,
   });
 
+  registerPwaSessionSelectionRoutes(app, { express, dataDir: OPENCHAMBER_DATA_DIR });
   registerSessionProjectRoutes(app, {
     validateDirectoryPath,
     openCodeTrust,

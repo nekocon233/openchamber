@@ -136,7 +136,7 @@ export const subscribeSessionAdmission = (): (() => void) => {
       else if (isSessionAdmitted(directory)) {
         const { id } = parked;
         parked = null;
-        void ui.setCurrentSession(id, directory);
+        void ui.setCurrentSession(id, directory, { transition: 'restored', keepSingleProject: true });
         return;
       }
     }

@@ -31,6 +31,9 @@ window focus, acknowledgement deadlines, and document-navigation fallback.
   navigate a page after the worker's fallback deadline.
 - Windows unread jump-list links require a known session before changing selection.
   They wait for the global list on a cold launch; stale entries leave selection unchanged.
+- A plain PWA launch may restore the host's last session. The router records
+  whether the incoming URL carries a route before writing the local selection.
+  Restoring the host's choice replaces the current history entry.
 
 ## Decisions
 

@@ -2,6 +2,7 @@ import type { Session } from '@/lib/opencode/model';
 import { getBtwOriginalSessionID } from '@/lib/sessionBtwMetadata';
 import { ensureGlobalSessionsLoaded, resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useBtwStore } from '@/stores/useBtwStore';
+import { sharePwaSessionSelection } from '@/sync/pwa-session-selection';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { setSessionOpener } from '@/sync/session-navigation';
 import { requestMessageFocus } from './messageFocus';
@@ -54,6 +55,8 @@ const selectTarget = (target: SessionOpenTarget, directoryHint: string | null): 
   const directoryChanged = directory !== null && directory !== state.currentSessionDirectory;
   if (state.currentSessionId !== target.sessionId || directoryChanged) {
     state.setCurrentSession(target.sessionId, directory);
+  } else {
+    sharePwaSessionSelection(target.sessionId);
   }
   if (target.btwParentId) {
     useBtwStore.getState().setPanelState(target.btwParentId, { collapsed: false });
@@ -111,7 +114,7 @@ export async function openSession(sessionId: string, options: SessionOpenOptions
     return;
   }
   if (!target.directory || target.directory === latest.currentSessionDirectory) return;
-  latest.setCurrentSession(target.sessionId, target.directory);
+  latest.setCurrentSession(target.sessionId, target.directory, { transition: 'restored', keepSingleProject: latest.currentSessionKeepsSingleProject });
 }
 
 /**
@@ -131,6 +134,7 @@ export function openSessionLink(sessionId: string, messageId: string | null): Pr
 export async function openSessionFromRoute(
   sessionId: string,
   directoryHint?: string | null,
+  { recordReselection = true }: { recordReselection?: boolean } = {},
 ): Promise<void> {
   const id = sessionId.trim();
   if (!id) return;
@@ -139,6 +143,8 @@ export async function openSessionFromRoute(
   const initial = useSessionUIStore.getState();
   if (initial.currentSessionId !== id || (directory && initial.currentSessionDirectory !== directory)) {
     initial.setCurrentSession(id, directory || initial.getDirectoryForSession(id));
+  } else if (recordReselection) {
+    sharePwaSessionSelection(id);
   }
   if (directory) return;
 
@@ -155,7 +161,7 @@ export async function openSessionFromRoute(
   const resolvedDirectory = resolveGlobalSessionDirectory(session);
   if (!resolvedDirectory || resolvedDirectory === latest.currentSessionDirectory) return;
 
-  latest.setCurrentSession(id, resolvedDirectory);
+  latest.setCurrentSession(id, resolvedDirectory, { transition: 'restored', keepSingleProject: latest.currentSessionKeepsSingleProject });
 }
 
 // Register here to keep the session store independent of the router.

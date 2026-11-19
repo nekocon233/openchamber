@@ -711,7 +711,7 @@ function App({ apis }: AppProps) {
 
   useRootScrollLock();
 
-  useRouter();
+  useRouter({ pwaSessionRestoreReady: isInitialized });
 
   const handleToggleMemoryDebug = React.useCallback(() => {
     setShowMemoryDebug(prev => !prev);

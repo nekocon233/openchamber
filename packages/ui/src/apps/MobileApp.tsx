@@ -1348,7 +1348,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   // Same as App.tsx: the session's memory index and the Memory tab both read
   // this snapshot, and without it the phone showed no memory at all.
   useAgentMemorySync(currentDirectory || null);
-  useRouter();
+  useRouter({ pwaSessionRestoreReady: isInitialized });
   // APNs is the only notification channel on the native app (background-capable,
   // focus-suppressed server-side via the visibility beacon). Local notifications are
   // intentionally disabled — they can't tell foreground from background in a WKWebView
