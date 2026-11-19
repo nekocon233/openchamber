@@ -4,7 +4,7 @@ import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeCatalog } from '@/lib/api/types';
 import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { findCatalogModel, nativeModelAliasVariant } from '@/lib/opencode/model';
-import { invalidateNativeProviders, loadNativeProviders } from './catalog';
+import { invalidateNativeProviders, loadNativeProviders, loadNativeProvidersIfStale } from './catalog';
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from './test-utils/runtime';
 
 const model = (id: string) => ({
@@ -66,6 +66,33 @@ describe('loadNativeProviders', () => {
     expect(providers[0].models[0].variants).toEqual([{ id: 'low', settings: { reasoningEffort: 'low' } }, { id: 'high', settings: { reasoningEffort: 'high' } }]);
     await loadNativeProviders();
     expect(runtime.reads()).toBe(1);
+  });
+
+  test('rechecks an aged catalog on demand and coalesces repeated opens', async () => {
+    let models = [model('gemini-4-hydrogen')];
+    const runtime = useRuntime(async () => ({ backends: {
+      claude: { status: 'ok', models: [] },
+      codex: { status: 'ok', models: [] },
+      antigravity: { status: 'ok', models },
+    } }));
+    const realNow = Date.now;
+    let now = 0;
+    Date.now = () => now;
+    try {
+      const providers = await loadNativeProviders();
+      expect(providers[0].models.map((entry) => entry.id)).toEqual(['gemini-4-hydrogen']);
+      models = [...models, model('gemini-4-neon')];
+      now = 59_999;
+      expect(loadNativeProvidersIfStale()).toBeNull();
+      now = 60_000;
+      const refresh = loadNativeProvidersIfStale();
+      expect(loadNativeProvidersIfStale()).toBeNull();
+      expect((await refresh)?.[0].models.map((entry) => entry.id)).toEqual(['gemini-4-hydrogen', 'gemini-4-neon']);
+      expect(loadNativeProvidersIfStale()).toBeNull();
+      expect(runtime.reads()).toBe(2);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test('keeps only the official DeepSeek models when a gateway repeats them', async () => {

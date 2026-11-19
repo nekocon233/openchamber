@@ -37,7 +37,7 @@ import { normalizePath } from "@/lib/pathNormalization";
 import { getSyncConfig, subscribeToSyncConfigChanges } from "@/sync/sync-refs";
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from "@/lib/runtime-switch";
 import { mergeModelMetadataWithLiveModel } from "@/lib/modelMetadata";
-import { invalidateNativeProviders, loadNativeProviders } from "@/lib/native-agents/catalog";
+import { invalidateNativeProviders, loadNativeProviders, loadNativeProvidersIfStale } from "@/lib/native-agents/catalog";
 import { isNativeProviderId, NATIVE_PROVIDER_CODEX } from "@/lib/native-agents/ids";
 import { codexEffortCycle } from "@/lib/native-agents/codex-speed";
 import { readCachedCatalog, writeCachedCatalogWhenSettled, type CachedCatalog } from "./configCatalogCache";
@@ -1675,8 +1675,8 @@ interface ConfigStore {
 
     activateDirectory: (directory: string | null | undefined, options?: { preserveManualModel?: boolean }) => Promise<void>;
 
-    /** Re-reads the host's native CLI providers after a connection changed. */
-    refreshNativeProviders: () => Promise<void>;
+    /** Rechecks the host's native CLI catalog and updates loaded provider lists. */
+    refreshNativeProviders: (mode?: 'if-stale') => Promise<void>;
     /** `fresh`: a request already in flight started before the caller's reason to reload, so it cannot answer it. */
     loadProviders: (options?: { directory?: string | null; source?: string; fresh?: boolean }) => Promise<void>;
     loadSessionDefaults: () => Promise<boolean>;
@@ -2350,10 +2350,12 @@ export const useConfigStore = create<ConfigStore>()(
                     });
                 },
 
-                refreshNativeProviders: async () => {
+                refreshNativeProviders: async (mode) => {
                     const context = captureConfigRuntimeContext();
-                    invalidateNativeProviders(getRuntimeKey());
-                    const native = await loadNativeProviders();
+                    if (mode !== 'if-stale') invalidateNativeProviders(context.runtimeKey);
+                    const read = mode === 'if-stale' ? loadNativeProvidersIfStale() : loadNativeProviders();
+                    if (!read) return;
+                    const native = await read;
                     if (!isConfigRuntimeContextCurrent(context)) return;
                     set((state) => {
                         const replace = (providers: ProviderWithModelList[]) => [
