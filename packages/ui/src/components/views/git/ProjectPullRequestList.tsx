@@ -18,7 +18,7 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { captureRuntimeInstance, getRuntimeKey } from '@/lib/runtime-switch';
 import { hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { PullRequestDetail } from './PullRequestDetail';
@@ -31,6 +31,7 @@ import { useWorkspaceDraftStore, workspaceReplyDraftKey } from '@/stores/useWork
 import { Textarea } from '@/components/ui/textarea';
 import { useDiffFileFilter } from '../useDiffFileFilter';
 import { ProjectPullFileStats } from './ProjectPullFileStats';
+import { invalidateProjectPullFileStats } from './useProjectPullFileStats';
 
 const NO_FILES: Array<{ path: string }> = [];
 
@@ -61,23 +62,23 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     if (reference) browser.openItem({ source: 'github', reference });
   }, [active, browser, restoreUrl, restored.error, restored.items, restored.refreshing, restored.status, restoring, stateOwner]);
   const [refreshingFromHost, setRefreshingFromHost] = React.useState(false);
-  const [statsRefreshVersion, setStatsRefreshVersion] = React.useState(0);
   const fileFilter = useDiffFileFilter(getRuntimeKey(), directory, NO_FILES);
   const refreshPending = React.useRef(false);
   const refreshFromHost = async () => {
     if (!context || context === 'missing' || refreshPending.current) return;
     const runtime = getRuntimeKey();
+    const isCurrent = captureRuntimeInstance();
     refreshPending.current = true;
     setRefreshingFromHost(true);
     try {
       await sourceControl.refreshProviderReads(context);
-      if (getRuntimeKey() === runtime) {
+      if (isCurrent()) {
         invalidateGitHubPullStatuses(context, runtime);
-        setStatsRefreshVersion(version => version + 1);
+        invalidateProjectPullFileStats(context);
         await browser.list.retry();
       }
     } catch (error) {
-      if (getRuntimeKey() === runtime) toast.error(t('references.projectPulls.refreshFailed'), error instanceof Error ? { description: error.message } : undefined);
+      if (isCurrent()) toast.error(t('references.projectPulls.refreshFailed'), error instanceof Error ? { description: error.message } : undefined);
     } finally {
       refreshPending.current = false;
       setRefreshingFromHost(false);
@@ -205,7 +206,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
         >
           {showingList ? <ReferenceBrowserList browser={browser} label={t('gitView.pullRequest.tab.project')} multiselectable={false} onOpenSettings={openSettings} onShow={rememberScroll}
             renderPullFileStats={context && context !== 'missing' ? pull => (
-              <ProjectPullFileStats context={context} pull={pull} excludedTypes={fileFilter.excludedTypes} refreshVersion={statsRefreshVersion} />
+              <ProjectPullFileStats context={context} pull={pull} excludedTypes={fileFilter.excludedTypes} />
             ) : undefined} /> : null}
         </ScrollableOverlay>
       </div>
