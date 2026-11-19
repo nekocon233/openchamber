@@ -676,6 +676,9 @@ A live unsent model pick survives changing the agent,
 before either an older per-agent override or the new agent's pinned-model
 catalog lookup can replace it. `selectionSource: 'manual'` alone grants no such
 precedence because restoring a session writes that source too.
+The chat model picker records a pick with an explicit effort as pending.
+Switching agents saves that effort, including explicit Default, for the new
+agent so the composer restores the same value it sends.
 
 ### Why only an unsent model pick overrides a pinned model
 
