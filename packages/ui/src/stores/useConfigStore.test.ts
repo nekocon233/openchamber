@@ -1356,6 +1356,35 @@ describe('useConfigStore provider persistence', () => {
     expect(state.currentVariantSelection).toEqual({ override: 'high', inherited: 'low' });
   });
 
+  for (const effort of ['xhigh', null] as const) {
+    test(`setAgent carries a pending model pick's ${effort ?? 'Default'} effort into plan mode`, () => {
+      const sessionId = 'ses_pending_model_effort';
+      const providerId = 'anthropic';
+      const modelId = 'claude-opus-5-5';
+      useSessionUIStore.setState({ currentSessionId: sessionId });
+      const selections = useSelectionStore.getState();
+      selections.saveAgentModelForSession(sessionId, 'plan', providerId, modelId);
+      selections.saveAgentModelVariantForSession(sessionId, 'plan', providerId, modelId, 'max');
+      selections.pickSessionModel(sessionId, providerId, modelId);
+      useConfigStore.setState({
+        activeDirectoryKey: DIRECTORY,
+        providers: [provider(providerId, modelId, ['xhigh', 'max'])],
+        agents: [testAgent('build'), testAgent('plan')],
+        settingsDefaultModel: `${providerId}/${modelId}`,
+        currentProviderId: providerId,
+        currentModelId: modelId,
+        currentAgentName: 'build',
+        directoryScoped: {},
+      });
+      useConfigStore.getState().setCurrentVariantOverride(effort, 'max');
+
+      useConfigStore.getState().setAgent('plan');
+
+      expect(useConfigStore.getState().currentVariant).toBe(effort ?? undefined);
+      expect(selections.getAgentModelVariantForSession(sessionId, 'plan', providerId, modelId)).toBe(effort);
+    });
+  }
+
   test('setAgent applies settings default variant for a saved session agent model', () => {
     const sessionId = 'ses_existing_agent_model_default_variant';
     useSessionUIStore.setState({ currentSessionId: sessionId });

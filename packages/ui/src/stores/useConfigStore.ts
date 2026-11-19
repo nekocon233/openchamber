@@ -3634,6 +3634,15 @@ export const useConfigStore = create<ConfigStore>()(
                                 const selection = useSelectionStore.getState();
                                 selection.saveSessionModelSelection(currentSessionId, currentProviderId, currentModelId);
                                 selection.saveAgentModelForSession(currentSessionId, agentName, currentProviderId, currentModelId);
+                                // The next send uses the pending model's chosen effort.
+                                // Record it for the new agent before the picker restores its effort.
+                                const { override } = get().currentVariantSelection;
+                                if (override !== undefined && agentName !== currentAgentName) {
+                                    const model = findProviderModel(providers, currentProviderId, currentModelId);
+                                    if (!model || override === null || modelHasVariant(model, override)) {
+                                        selection.saveAgentModelVariantForSession(currentSessionId, agentName, currentProviderId, currentModelId, override);
+                                    }
+                                }
                             }
                             return;
                         }

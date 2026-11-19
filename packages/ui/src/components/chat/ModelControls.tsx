@@ -1672,6 +1672,14 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         return null;
     }, [cycleAgentShortcut, selection]);
 
+    const rememberComposerModelPick = (providerId: string, modelId: string, appliedEffort: boolean) => {
+        if (selection) return;
+        if (appliedEffort && currentSessionId && useConfigStore.getState().currentVariantSelection.override !== undefined) {
+            useSelectionStore.getState().pickSessionModel(currentSessionId, providerId, modelId);
+        }
+        setLastSelectedModel(providerId, modelId);
+    };
+
     const handleProviderAndModelChange = (
         providerId: string,
         modelId: string,
@@ -1696,11 +1704,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 // Add to recent models on successful selection. Auto is pinned, not recent.
                 addRecentModel(providerId, modelId);
             }
-            if (!selection) {
-                // A new session starts on this pick when nothing configured names a
-                // model. Only a person's pick writes it, never a session restore.
-                setLastSelectedModel(providerId, modelId);
-            }
+            rememberComposerModelPick(providerId, modelId, options?.applyVariant === true);
             setAgentMenuOpen(false);
             if (!options?.preserveCombination) agentCombinations.clearDraftSelection();
             persistUnifiedSelection(!options?.preserveCombination);
@@ -2103,7 +2107,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 }
                 return;
             }
-            if (!selection) setLastSelectedModel(providerId, modelId);
+            rememberComposerModelPick(providerId, modelId, true);
 
             agentCombinations.clearDraftSelection();
             persistUnifiedSelection(true);
