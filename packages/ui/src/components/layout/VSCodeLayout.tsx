@@ -961,6 +961,8 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
         <ContextUsageDisplay
           reading={toContextUsageReading(stableContextUsage)}
           contextLimit={stableContextUsage.contextLimit}
+          modelContextWindow={stableContextUsage.modelContextWindow}
+          compactionThreshold={stableContextUsage.compactionThreshold}
           outputLimit={stableContextUsage.outputLimit ?? 0}
           cost={(sessionTotalCost ?? 0) > 0 ? sessionTotalCost : null}
           className="h-9 shrink-0 ps-1 pe-1 typography-ui-label"

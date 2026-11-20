@@ -1302,7 +1302,8 @@ export class SessionMessageLoader {
         let info = incoming
         const previous = previousByID?.get(info.id)
         if (info.role === 'assistant' && previous?.role === 'assistant') {
-          info = { ...info, tokens: info.tokens ?? previous.tokens, contextWindow: info.contextWindow ?? previous.contextWindow }
+          info = { ...info, tokens: info.tokens ?? previous.tokens, contextWindow: info.contextWindow ?? previous.contextWindow,
+            contextCompaction: info.contextCompaction ?? previous.contextCompaction }
           if (!info.modelID) info = { ...info, modelID: previous.modelID, variant: info.variant ?? previous.variant, agent: previous.agent }
         }
         let parts = page.partsByMessageID.get(info.id)

@@ -225,6 +225,8 @@ export type AssistantMessage = MessageBase & {
   tokens?: TokenUsageInfo
   /** Effective window reported by the native CLI for this response. */
   contextWindow?: number
+  /** AGY's estimate and automatic compaction threshold for this generation. */
+  contextCompaction?: { used: number; threshold: number }
   snapshot?: { start?: string; end?: string; files?: string[] }
   retry?: { attempt: number; at: number; error: StructuredError }
 }

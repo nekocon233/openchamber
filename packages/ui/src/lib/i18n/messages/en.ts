@@ -2004,6 +2004,7 @@ export const dict = {
   'contextUsage.mobile.usage': 'Usage',
   'contextUsage.tooltip.usedTokens': 'Used tokens: {tokens}',
   'contextUsage.tooltip.contextLimit': 'Context limit: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': 'Auto-compaction threshold {tokens}',
   'contextUsage.tooltip.outputLimit': 'Output limit: {tokens}',
   'contextUsage.tooltip.cost': 'Cost: {cost}',
   'contextUsage.compacted.description': 'Context compacted. Usage updates after the next response.',

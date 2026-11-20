@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { encodeAntigravitySessionId } from '../ids.js';
 import { antigravityPromptFingerprint } from '../prompt-parts.js';
@@ -134,6 +134,62 @@ describe('Antigravity native store', () => {
     ]);
     const store = createAntigravityStore({ registry, home });
     expect(store.completedGenerations(NATIVE_ID).map((entry) => entry.step_index)).toEqual([1, 3, 4]);
+  });
+
+  it('reuses unchanged transcripts and picks up appends, partial lines and replacements', () => {
+    const { registry, home, writeTranscript } = setup();
+    const preview = path.join(home, 'brain', NATIVE_ID, '.system_generated', 'logs', 'transcript.jsonl');
+    const reply = (stepIndex, content) => step({ step_index: stepIndex, type: 'PLANNER_RESPONSE', content });
+    writeTranscript([reply(0, 'Preview')]);
+    writeTranscript([reply(0, 'Complete')], NATIVE_ID, true, 'transcript_full.jsonl');
+    const store = createAntigravityStore({ registry, home });
+    const current = () => store.completedGenerations(NATIVE_ID).map((entry) => entry.content);
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(current()).toEqual(['Complete']);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(current()).toEqual(['Complete']);
+      expect(read).toHaveBeenCalledTimes(2);
+
+      fs.appendFileSync(preview, `${reply(1, 'Next')}\n${reply(2, 'Partial')}`);
+      expect(current()).toEqual(['Complete', 'Next']);
+      fs.appendFileSync(preview, '\n');
+      expect(current()).toEqual(['Complete', 'Next', 'Partial']);
+
+      const replacement = `${preview}.new`;
+      fs.writeFileSync(replacement, `${reply(0, 'Rewritten')}\n`);
+      fs.renameSync(replacement, preview);
+      fs.unlinkSync(path.join(path.dirname(preview), 'transcript_full.jsonl'));
+      expect(current()).toEqual(['Rewritten']);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('reads the compaction budget for the matching native generation', async () => {
+    const { home, directory, registry, writeSummary, writeTranscript } = setup();
+    writeSummary();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Check the window' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Progress' }),
+      step({ step_index: 2, type: 'PLANNER_RESPONSE', content: 'Final reply' }),
+    ]);
+    fs.mkdirSync(path.join(home, 'conversations'));
+    const db = new DatabaseSync(path.join(home, 'conversations', `${NATIVE_ID}.db`));
+    db.exec('create table gen_metadata (idx integer primary key, data blob)');
+    const insert = db.prepare('insert into gen_metadata values (?, ?)');
+    // The generation counter differs from the trajectory step in field 2.
+    insert.run(17, Buffer.from('0a0b4a0952070880642080a01f120102', 'hex'));
+    insert.run(18, Buffer.from('0a0b4a0952070888272080803c12015b', 'hex'));
+    insert.run(19, Buffer.from([0xff]));
+    db.close();
+
+    const store = createAntigravityStore({ registry, home });
+    const history = await store.loadHistory(SESSION_ID, NATIVE_ID, directory);
+    const replies = history.records.filter((record) => record.info.role === 'assistant');
+    expect(replies[0].info.contextCompaction).toBeUndefined();
+    expect(replies[1].info.contextCompaction).toEqual({ used: 12_800, threshold: 512_000 });
+    expect(replies[1].info.contextWindow).toBeUndefined();
   });
 
   it('projects only indexed direct-child reports and the indexed parent task', async () => {

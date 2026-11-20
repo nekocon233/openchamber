@@ -1795,6 +1795,7 @@ export const dict = {
   'contextUsage.mobile.usage': 'שימוש',
   'contextUsage.tooltip.usedTokens': 'טוקנים בשימוש: {tokens}',
   'contextUsage.tooltip.contextLimit': 'מגבלת הקשר: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': 'סף דחיסה אוטומטית {tokens}',
   'contextUsage.tooltip.outputLimit': 'מגבלת פלט: {tokens}',
   'contextUsage.tooltip.cost': 'עלות: {cost}',
   'contextUsage.compacted.description': 'ההקשר דוחס. נתוני השימוש יתעדכנו אחרי התגובה הבאה.',

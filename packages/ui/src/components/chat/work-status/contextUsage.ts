@@ -13,7 +13,7 @@
  * global read to race with.
  */
 
-import { findLatestContextFill, type ContextFillMessage } from '@/stores/utils/tokenUtils';
+import { findLatestContextFill, resolveContextReadingLimits, type ContextFillMessage } from '@/stores/utils/tokenUtils';
 
 type WorkStatusContextUsage =
   | {
@@ -22,10 +22,12 @@ type WorkStatusContextUsage =
     /** Context limit actually used for the ratio, after the default fallback. */
     limit: number;
     /** Unrounded, so the panel and the header cannot disagree by a rounding step. */
-    percent: number;
+    percent: number | null;
+    window: number;
+    compactionThreshold?: number;
   }
   /** Compacted since the last response that reported tokens: the fill is unknown, not zero. */
-  | { state: 'compacted'; limit: number };
+  | { state: 'compacted'; limit: number; window: number; compactionThreshold?: number };
 
 /** The store's own fallback when a model exposes no context limit. */
 export const DEFAULT_CONTEXT_LIMIT = 200_000;
@@ -45,9 +47,9 @@ export const computeContextUsage = (
   const fill = findLatestContextFill(messages);
   if (!fill) return null;
 
-  const reportedLimit = messages[fill.index]?.contextWindow ?? contextLimit;
-  const limit = reportedLimit > 0 ? reportedLimit : DEFAULT_CONTEXT_LIMIT;
-  if (fill.state === 'compacted') return { state: 'compacted', limit };
+  const limits = resolveContextReadingLimits(messages[fill.index], contextLimit, fill.state === 'measured' ? DEFAULT_CONTEXT_LIMIT : 0);
+  if (fill.state === 'compacted') return { state: 'compacted', ...limits };
 
-  return { state: 'measured', totalTokens: fill.totalTokens, limit, percent: (fill.totalTokens / limit) * 100 };
+  return { state: 'measured', totalTokens: fill.totalTokens, ...limits,
+    percent: limits.limit > 0 ? (fill.totalTokens / limits.limit) * 100 : null };
 };

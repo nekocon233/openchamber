@@ -1998,6 +1998,7 @@ export const dict: Record<I18nKey, string> = {
   'contextUsage.mobile.usage': '使用量',
   'contextUsage.tooltip.usedTokens': '使用トークン: {tokens}',
   'contextUsage.tooltip.contextLimit': 'コンテキスト制限: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': '自動圧縮のしきい値 {tokens}',
   'contextUsage.tooltip.outputLimit': '出力制限: {tokens}',
   'contextUsage.tooltip.cost': 'コスト: {cost}',
   'contextUsage.compacted.description': 'コンテキストを圧縮しました。使用量は次の応答後に更新されます。',

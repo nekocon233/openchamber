@@ -1736,6 +1736,7 @@ export const dict = {
   'contextUsage.mobile.usage': 'Nutzung',
   'contextUsage.tooltip.usedTokens': 'Verwendete Tokens: {tokens}',
   'contextUsage.tooltip.contextLimit': 'Kontextlimit: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': 'Schwelle für automatische Komprimierung {tokens}',
   'contextUsage.tooltip.outputLimit': 'Ausgabelimit: {tokens}',
   'contextUsage.tooltip.cost': 'Kosten: {cost}',
   'contextUsage.compacted.description': 'Kontext komprimiert. Die Auslastung wird nach der nächsten Antwort aktualisiert.',

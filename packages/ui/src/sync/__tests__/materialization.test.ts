@@ -48,6 +48,20 @@ describe("getSessionMaterializationRequestKey", () => {
 })
 
 describe("materializeSessionSnapshots", () => {
+  test("adds a recovered AGY reading to an already completed message and retains it on refresh", () => {
+    const original = completedAssistantMessage("msg_agy")
+    const reading = { used: 128_000, threshold: 512_000 }
+    const fetched = { ...original, contextCompaction: reading, time: { created: 1, completed: 3000 } }
+    const first = materializeSessionSnapshots(
+      { message: { ses_1: [original] }, part: {} },
+      "ses_1",
+      [{ info: fetched, parts: [] }],
+    )
+    expect(first.message.ses_1).toEqual([{ ...original, contextCompaction: reading }])
+    const refreshed = materializeSessionSnapshots(first, "ses_1", [{ info: original, parts: [] }])
+    expect(refreshed.message.ses_1).toBe(first.message.ses_1)
+  })
+
   test("a delivered record replaces the pending one a missed delivery left, at its delivery time", () => {
     const pending: Message = { id: "msg_s", sessionID: "ses_1", role: "synthetic", time: { created: 1 }, text: "result", pending: true }
     const delivered: Message = { id: "msg_s", sessionID: "ses_1", role: "synthetic", time: { created: 3 }, text: "result" }

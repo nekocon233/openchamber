@@ -386,6 +386,8 @@ export const ContextPanelContent: React.FC = () => {
       tokenBreakdown,
       hasTokenUsage: contextMessage?.info.role === 'assistant' && contextMessage.info.tokens !== undefined,
       usageState: usage?.state ?? null,
+      contextUsedTokens: usage?.state === 'measured' ? usage.totalTokens : null,
+      contextCompactionThreshold: usage?.compactionThreshold,
       usagePercent,
       cacheHitRate,
       totalAssistantCost,
@@ -450,7 +452,7 @@ export const ContextPanelContent: React.FC = () => {
           <div className="flex items-baseline justify-between">
             <span className="typography-micro text-muted-foreground">{t('contextSidebar.section.context')}</span>
             <span className="typography-micro tabular-nums text-muted-foreground/70">
-              {viewModel.usagePercent === null ? '—' : formatNumber(viewModel.tokenBreakdown.total)}
+              {viewModel.contextUsedTokens === null ? '—' : formatNumber(viewModel.contextUsedTokens)}
               {viewModel.contextLimit ? ` / ${formatNumber(viewModel.contextLimit)}` : ''}
             </span>
           </div>
@@ -472,6 +474,11 @@ export const ContextPanelContent: React.FC = () => {
                 ? t('contextSidebar.context.percentUsed', { percent: viewModel.usagePercent.toFixed(1) })
                 : '—'}
           </div>
+          {viewModel.contextCompactionThreshold !== undefined ? (
+            <p className="mt-1 typography-micro text-muted-foreground">
+              {t('contextUsage.tooltip.compactionThreshold', { tokens: formatNumber(viewModel.contextCompactionThreshold) })}
+            </p>
+          ) : null}
         </div>
 
         {/* ── Stat grid ── */}

@@ -1959,6 +1959,7 @@ export const dict: Record<I18nKey, string> = {
   "contextUsage.mobile.usage": "Використання",
   "contextUsage.tooltip.usedTokens": "Використані токени: {tokens}",
   "contextUsage.tooltip.contextLimit": "Обмеження контексту: {tokens}",
+  "contextUsage.tooltip.compactionThreshold": "Поріг автоматичного стиснення {tokens}",
   "contextUsage.tooltip.outputLimit": "Ліміт виводу: {tokens}",
   "contextUsage.tooltip.cost": "Вартість: {cost}",
   "contextUsage.compacted.description": "Контекст стиснуто. Використання оновиться після наступної відповіді.",

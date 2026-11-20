@@ -73,6 +73,7 @@ const assistantMessageSchema = z.object({
     cache: z.object({ read: z.number(), write: z.number() }),
   }).optional(),
   contextWindow: z.number().int().positive().optional(),
+  contextCompaction: z.object({ used: z.number().int().nonnegative(), threshold: z.number().int().positive() }).optional(),
   variant: z.string().optional(),
   finish: z.enum(['stop', 'length', 'tool-calls', 'content-filter', 'error', 'unknown']).catch('unknown').optional(),
 });

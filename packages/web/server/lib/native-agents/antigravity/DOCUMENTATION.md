@@ -206,15 +206,21 @@ refused before native input; text files and file references follow the shared
 prompt-parts conversion. Authentication failure is reported separately as
 `reason: 'unauthenticated'` in the native catalog partition.
 
-### Why all catalog models use a 1M context window
+### Why context pressure uses the saved generation
 
-Every catalog model uses the maintainer-selected 1,000,000-token capacity for
-shared usage readings and unified handoff budgets, because `agy models` does
-not report limits. Built-in models and native Google login retain the CLI's
-own capacity. In Gemini API mode, OpenChamber also applies a 1,000,000-token
-budget to the selected and saved-default custom model definitions, identified
-by their key or label. Other custom model budgets and all routes stay intact.
-Automatic compaction remains under the CLI's control.
+`agy models` lists names and efforts. Its catalog reports unknown capacity, so
+handoff applies its existing conservative estimate. The CLI records its
+estimated context use and automatic compaction threshold in each completed
+model call's generation metadata. A read-only lookup matches the recorded
+trajectory step to the latest completed assistant response. The counter in
+the metadata table belongs to model calls and can differ from that step.
+Missing, incompatible or unreadable metadata leaves the threshold unknown.
+The model window stays independent of this threshold.
+
+In Gemini API mode, OpenChamber applies a 1,000,000-token budget to the
+selected and saved-default custom model definitions, identified by key or
+label. The CLI owns compaction and the configured budget can differ from the
+threshold it records.
 
 ### Why API context budgets use process-local settings
 
@@ -230,6 +236,13 @@ Process exit, failed startup and discarded candidates remove their files.
 Invalid or unreadable settings refuse admission before any prompt is sent.
 
 ## Identity, history and live state
+
+Repeated reads within a generation reuse parsed transcript snapshots. A
+bounded store-local cache holds up to eight sessions and 32 MiB of source
+bytes. Both files are checked by open-file identity and version. An append
+reuses the parsed prefix after comparing bytes, while a rewrite or a formerly
+partial final line gets parsed afresh. A snapshot that changed during the
+read remains eligible for projection and is discarded from the cache.
 
 `store.js` opens `~/.gemini/antigravity-cli/conversation_summaries.db` read-only
 through Node's built-in SQLite module. Readers allow up to one second for the

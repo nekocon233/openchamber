@@ -50,6 +50,8 @@ export interface SessionHistoryMeta {
 
 interface SessionContextLimits {
     contextLimit: number;
+    modelContextWindow?: number;
+    compactionThreshold?: number;
     outputLimit?: number;
     thresholdLimit: number;
     lastMessageId?: string;

@@ -289,11 +289,14 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
                     ...(contextUsage?.state === 'measured'
                       ? [t('contextUsage.tooltip.usedTokens', { tokens: contextUsage.totalTokens })]
                       : []),
-                    t('contextUsage.tooltip.contextLimit', { tokens: contextWindow }),
+                    ...((contextUsage?.window ?? contextLimit) > 0
+                      ? [t('contextUsage.tooltip.contextLimit', { tokens: contextUsage?.window ?? contextLimit })] : []),
+                    ...(contextUsage?.compactionThreshold !== undefined
+                      ? [t('contextUsage.tooltip.compactionThreshold', { tokens: contextUsage.compactionThreshold })] : []),
                   ].join(' · ')}
                 >
                   {contextUsage?.state === 'measured' ? formatTokens(contextUsage.totalTokens) : UNKNOWN_PERCENT}
-                  {' / '}{formatTokens(contextWindow)}
+                  {contextWindow > 0 ? ` / ${formatTokens(contextWindow)}` : ''}
                 </p>
               ) : null}
               <WorkStatusMeter percent={usagePercent ?? 0} color={meterColor} />

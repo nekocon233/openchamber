@@ -171,7 +171,8 @@ const toolPart = ({ sessionId, nativeId, stepIndex, call, output, created, end, 
 
 /** Projects agy's own transcript, keeping tool results beside their planner step. */
 export const projectAntigravityHistory = ({
-  sessionId, nativeId, directory, entries, bindings, parentSessionId = null, childSessionIds = [], now = Date.now,
+  sessionId, nativeId, directory, entries, bindings, parentSessionId = null, childSessionIds = [],
+  contextReading = null, now = Date.now,
 }) => {
   const records = [];
   let parentID = null;
@@ -347,6 +348,7 @@ export const projectAntigravityHistory = ({
       }),
       parts,
     };
+    if (contextReading?.stepIndex === entry.step_index) lastAssistant.info.contextCompaction = contextReading.budget;
     records.push(lastAssistant);
   }
   settlePermissionDenial();
@@ -568,6 +570,11 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
         if (live.info.role === 'assistant' && historical.info.role === 'assistant'
           && live.info.tokens === undefined && historical.info.tokens !== undefined) {
           live.info.tokens = structuredClone(historical.info.tokens);
+          changed = true;
+        }
+        if (live.info.role === 'assistant' && historical.info.role === 'assistant'
+          && live.info.contextCompaction === undefined && historical.info.contextCompaction !== undefined) {
+          live.info.contextCompaction = historical.info.contextCompaction;
           changed = true;
         }
         const parts = historical.parts.map((part) => {
