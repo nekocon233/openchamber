@@ -152,19 +152,21 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
       // A failed native read keeps the held native statuses, and the global
       // settle below leaves native sessions alone.
       let covers: (sessionId: string) => boolean = () => true
+      let nativeSessionStatusReady = false
       const session_status = await readDirectoryStatusSnapshot(store, async () => {
         const [openCode, native] = await Promise.all([
           opencodeClient.getActiveSessionStatuses(directory),
           readNativeStatuses(directory),
         ])
         if (openCode === null) throw new Error("session.active failed")
+        nativeSessionStatusReady = native !== null
         if (native === null) covers = (sessionId) => !isNativeSessionId(sessionId)
         return {
           ...openCode,
           ...(native ?? heldNativeStatuses(store.getState().session_status)),
         }
       })
-      if (!commit({ session_status, sessionStatusReady: true })) return
+      if (!commit({ session_status, sessionStatusReady: true, nativeSessionStatusReady })) return
       applyGlobalSessionStatusSnapshot(
         directory,
         session_status,

@@ -81,7 +81,8 @@ export const createAntigravityBackend = ({
   const store = createAntigravityStore({ registry, home, now });
   const sessions = new Map();
   const admissions = new Map();
-  const subagents = createAntigravitySubagents({ publisher, now, loadHistory: store.loadHistory, readReasoning: store.completedGenerations });
+  const subagents = createAntigravitySubagents({ publisher, now, loadHistory: store.loadHistory,
+    readReasoning: store.completedGenerations, readActivity: store.readChildActivity });
   const refreshReasoning = (session, projection) => {
     try { projection.restoreGenerations(store.completedGenerations(session.nativeId)); }
     catch { /* Optional enrichment preserves live state; history reads report failures. */ }
@@ -615,6 +616,7 @@ export const createAntigravityBackend = ({
           request: { ...request, sentAt: send.sentAt },
         });
         session.turn = { projection, send, process: session.process, completion: null };
+        subagents.beginTurn(session.id, session.process, send.sentAt);
         session.abortRequested = false;
         publisher.records(session.directory, sessionId, projection.records());
         publisher.status(session.directory, sessionId, 'busy');

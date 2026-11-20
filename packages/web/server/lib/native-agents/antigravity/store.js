@@ -21,6 +21,8 @@ const SELECT_ROOTS = `select ${SUMMARY_COLUMNS}
 from conversation_summaries where parent_conversation_id = '' order by last_modified_time desc`;
 const SELECT_ONE = `select ${SUMMARY_COLUMNS} from conversation_summaries where conversation_id = ? limit 1`;
 const SELECT_CHILDREN = `select ${SUMMARY_COLUMNS} from conversation_summaries where parent_conversation_id = ? order by last_modified_time`;
+const SELECT_CHILD_ACTIVITY = `select conversation_id, parent_conversation_id, last_modified_time, status, not_fully_idle
+from conversation_summaries where conversation_id in (select value from json_each(?))`;
 const TRANSCRIPT_CACHE_BYTES = 32 * 1024 * 1024;
 const TRANSCRIPT_CACHE_SESSIONS = 8;
 
@@ -69,6 +71,12 @@ const summaryRow = z.object({
   workspace_uris: z.string(),
 });
 
+const childActivityRow = summaryRow.pick({ conversation_id: true, last_modified_time: true }).extend({
+  parent_conversation_id: z.string().uuid(),
+  status: z.enum(['CASCADE_RUN_STATUS_IDLE', 'CASCADE_RUN_STATUS_RUNNING']),
+  not_fully_idle: z.union([z.literal(0), z.literal(1)]),
+});
+
 const unavailable = (message) => new NativeAgentError(message, {
   code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE',
   status: 502,
@@ -107,10 +115,10 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
     (await registry.listSessions({ backend: 'antigravity', directory }))
       .map((entry) => [entry.nativeId, entry]),
   );
-  const open = () => {
+  const open = (waitForWrites = true) => {
     const db = new DatabaseSync(summaries, { readOnly: true });
-    // The CLI updates this index while history and checklist reads run.
-    db.exec('PRAGMA busy_timeout = 1000');
+    // Activity reads retry on the next tick when the index is locked.
+    db.exec(waitForWrites ? 'PRAGMA busy_timeout = 1000' : 'PRAGMA busy_timeout = 0');
     return db;
   };
   const hasSummaries = () => fs.existsSync(summaries);
@@ -251,6 +259,23 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
     transcriptPath,
 
     hasTranscript,
+
+    readChildActivity(nativeIds) {
+      const db = open(false);
+      try {
+        const activity = new Map();
+        for (const raw of db.prepare(SELECT_CHILD_ACTIVITY).all(JSON.stringify(nativeIds))) {
+          const parsed = childActivityRow.safeParse(raw);
+          if (!parsed.success) continue;
+          const row = parsed.data;
+          const updatedAt = modifiedTime(row);
+          if (updatedAt === null) continue;
+          const busy = row.status === 'CASCADE_RUN_STATUS_RUNNING' || row.not_fully_idle === 1;
+          activity.set(row.conversation_id, { parentId: encodeAntigravitySessionId(row.parent_conversation_id), updatedAt, busy });
+        }
+        return activity;
+      } finally { db.close(); }
+    },
 
     async listRootSessions(directory, { statistics = false, signal } = {}) {
       signal?.throwIfAborted();

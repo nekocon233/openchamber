@@ -4,14 +4,51 @@ import { agySubagentReferences } from './protocol.js';
 import { createAntigravityLiveProjection } from './projector.js';
 import { agyMissingFileDetails } from './tools.js';
 
+const CHILD_ACTIVITY_INTERVAL_MS = 1000;
+
 /** Child ownership is established by the parent's live subagent_info, never
  * by an arbitrary conversation id or a persisted running flag. */
-export const createAntigravitySubagents = ({ publisher, now, loadHistory, readReasoning }) => {
+export const createAntigravitySubagents = ({ publisher, now, loadHistory, readReasoning, readActivity }) => {
   const children = new Map();
+  const watched = new Map();
+  let activityTimer;
 
   const publishSession = (child, created = false) => {
     child.session.time.updated = now();
     publisher.session(child.session.directory, child.session, { created });
+  };
+  const publishPhase = (child, phase, error = null) => {
+    if (child.phase === phase && !error) return;
+    const { directory, id } = child.session;
+    if (child.phase !== phase) {
+      child.phase = phase;
+      child.session.metadata.openchamber.native.activityKnown = phase !== 'unknown';
+      publishSession(child);
+    }
+    if (error) publisher.error(directory, id, error);
+    publisher.status(directory, id, phase === 'running' ? 'busy' : 'idle');
+  };
+  const refreshActivity = () => {
+    let readings;
+    try { readings = readActivity([...watched.keys()].map((child) => child.nativeId)); }
+    catch { return; /* An unavailable index supplies no activity update. */ }
+    for (const [child, minimumTime] of watched) {
+      const reading = readings.get(child.nativeId);
+      if (!reading || reading.parentId !== child.session.parentID || reading.updatedAt < minimumTime) continue;
+      watched.set(child, reading.updatedAt);
+      publishPhase(child, reading.busy ? 'running' : 'settled');
+    }
+  };
+  const watchActivity = (child, startedAt) => {
+    if (!Number.isFinite(startedAt)) return;
+    watched.set(child, startedAt);
+    activityTimer ??= setInterval(refreshActivity, CHILD_ACTIVITY_INTERVAL_MS).unref();
+  };
+  const unwatchActivity = (child) => {
+    watched.delete(child);
+    if (watched.size > 0) return;
+    clearInterval(activityTimer);
+    activityTimer = undefined;
   };
   const captureRecords = (child) => {
     for (const record of child.projection?.records() ?? []) child.records.set(record.info.id, record);
@@ -42,7 +79,10 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
       if (existing) {
         // A stale process or a different parent cannot reassign a child.
         if (existing.ownerId !== owner.id || existing.session.parentID !== parent.id) continue;
-        existing.process = process;
+        if (existing.process !== process) {
+          existing.process = process;
+          watchActivity(existing, owner.turn?.send?.sentAt);
+        }
         continue;
       }
       const session = buildSessionRecord({
@@ -56,6 +96,7 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
       };
       children.set(id, child);
       publishSession(child, true);
+      watchActivity(child, owner.turn?.send?.sentAt);
     }
   };
 
@@ -68,6 +109,10 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
       }
       const child = children.get(`nag_${nativeId}`);
       if (!child || child.ownerId !== owner.id || child.process !== process) return true;
+      // A direct frame supersedes older rows. The index can still report a
+      // later completion or a new assignment when those frames are missing.
+      const minimumTime = watched.get(child);
+      if (minimumTime !== undefined) watched.set(child, Math.max(minimumTime, now() + 1));
       const directory = child.session.directory;
       if (frame.event === 'result') {
         const result = frame.result;
@@ -89,11 +134,7 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
         });
         if (history) child.projection.restoreMissingHistory(history.records, { scope: 'session' });
         captureRecords(child);
-        child.phase = 'settled';
-        child.session.metadata.openchamber.native.activityKnown = true;
-        publishSession(child);
-        if (outcome === 'error') publisher.error(directory, child.session.id, unknownError(result.error || 'Antigravity subagent failed'));
-        publisher.status(directory, child.session.id, 'idle');
+        publishPhase(child, 'settled', outcome === 'error' ? unknownError(result.error || 'Antigravity subagent failed') : null);
         return true;
       }
       const step = frame.step_update;
@@ -102,12 +143,7 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
         const userIndex = step.step_type === 'user_input' ? step.step_index : 'context';
         beginProjection(child, userIndex);
       }
-      if (child.phase !== 'running') {
-        child.phase = 'running';
-        child.session.metadata.openchamber.native.activityKnown = true;
-        publishSession(child);
-        publisher.status(directory, child.session.id, 'busy');
-      }
+      publishPhase(child, 'running');
       const tool = await child.projection.applyStep(step, now(), async () => {});
       const settledTool = tool && ['DONE', 'ERROR', 'INVALID'].includes(step.state);
       if (step.step_type === 'agent_response' && step.state === 'DONE') {
@@ -123,13 +159,17 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
       return true;
     },
 
+    beginTurn(ownerId, process, startedAt) {
+      for (const child of children.values()) {
+        if (child.ownerId === ownerId && child.process === process) watchActivity(child, startedAt);
+      }
+    },
+
     release(ownerId, process) {
       for (const child of children.values()) {
-        if (child.ownerId !== ownerId || child.process !== process || child.phase === 'settled') continue;
-        child.phase = 'unknown';
-        child.session.metadata.openchamber.native.activityKnown = false;
-        publishSession(child);
-        publisher.status(child.session.directory, child.session.id, 'idle');
+        if (child.ownerId !== ownerId || child.process !== process) continue;
+        unwatchActivity(child);
+        if (child.phase !== 'settled') publishPhase(child, 'unknown');
       }
     },
 
@@ -157,6 +197,11 @@ export const createAntigravitySubagents = ({ publisher, now, loadHistory, readRe
     busyIds(directory) {
       return [...children.values()].filter((child) => child.phase === 'running' && child.session.directory === directory).map((child) => child.session.id);
     },
-    clear() { children.clear(); },
+    clear() {
+      clearInterval(activityTimer);
+      activityTimer = undefined;
+      watched.clear();
+      children.clear();
+    },
   };
 };

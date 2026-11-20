@@ -69,6 +69,7 @@ export const heldNativeForms = (held: Readonly<Record<string, FormRequest[]>>): 
 export type DirectoryStatusSnapshot = {
   statuses: StatusMap;
   covers: (sessionId: string) => boolean;
+  coversNativeSessions: boolean;
 };
 
 const coversEverySession = () => true;
@@ -97,8 +98,8 @@ export const readDirectoryStatuses = async (
       readNativeStatuses(directory, { signal: controller.signal }),
     ]);
     if (openCode === null) return null;
-    if (native === null) return { statuses: openCode, covers: coversOpenCodeSessions };
-    return { statuses: { ...openCode, ...native }, covers: coversEverySession };
+    if (native === null) return { statuses: openCode, covers: coversOpenCodeSessions, coversNativeSessions: false };
+    return { statuses: { ...openCode, ...native }, covers: coversEverySession, coversNativeSessions: true };
   } finally {
     clearTimeout(deadline);
     options?.signal?.removeEventListener('abort', abort);
