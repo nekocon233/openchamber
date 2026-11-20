@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
 import { useUIStore } from '@/stores/useUIStore';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { I18nProvider } from '@/lib/i18n';
 import { SyncProvider } from '@/sync/sync-context';
 import { getSyncChildStores } from '@/sync/sync-refs';
@@ -66,6 +67,7 @@ describe('subagent status rows', () => {
     };
     ({ WorkStatusSubagentsSection } = await import('./WorkStatusSubagentsSection'));
     useUIStore.setState({ workStatusExpandedSections: {} });
+    useSessionDisplayStore.setState({ animatedActivityIndicators: false });
     useSessionActivityTimingStore.setState({ startedAt: new Map(), settledMs: new Map() });
     useGlobalSessionStatusStore.setState({ observedById: new Map(), statusById: new Map() });
     container = document.createElement('div');
@@ -116,7 +118,14 @@ describe('subagent status rows', () => {
     expect(rowContent().textContent).toContain('Status unknown');
     await publish({ session: [parent, { ...agy, metadata: { openchamber: { native: { backend: 'antigravity', activityKnown: true } } } }], session_status: { [agy.id]: { type: 'busy' } } });
     expect(icon()).toBe('#oc-record-circle');
+    await act(async () => useSessionDisplayStore.setState({ animatedActivityIndicators: true }));
+    expect(rowContent().querySelector('[data-spinner]')).not.toBeNull();
     await publish({ session_status: { [agy.id]: { type: 'idle' } } });
+    expect(rowContent().querySelector('[data-spinner]')).toBeNull();
+    expect(icon()).toBe('#oc-checkbox-circle');
+    await publish({ session_status: {}, nativeSessionStatusReady: false });
+    expect(icon()).toBe('#oc-time');
+    await publish({ nativeSessionStatusReady: true });
     expect(icon()).toBe('#oc-checkbox-circle');
   });
 

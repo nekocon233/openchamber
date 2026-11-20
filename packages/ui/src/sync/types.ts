@@ -47,8 +47,10 @@ export type State = {
   sessionEventRevision?: Record<string, number>
   sessionDeletedRevision?: Record<string, number>
   session_status: Record<string, SessionStatus>
-  /** A successful status snapshot makes omitted sessions authoritatively idle. */
+  /** A successful OpenCode status snapshot makes omitted sessions idle in its scope. */
   sessionStatusReady?: boolean
+  /** The last authoritative status read also covered native sessions in this directory. */
+  nativeSessionStatusReady?: boolean
   /** Archive evicts a session's status; the earlier snapshot no longer covers it. */
   sessionStatusInvalidated?: Record<string, true>
   permission: Record<string, PermissionRequest[]>

@@ -271,12 +271,27 @@ are read-only and inherit their root's archive state.
 
 `subagents.js` establishes ownership through live `subagent_info` and routes
 only that process's known child events. Multiple and nested children publish
-through the shared native events. `activityKnown: false` keeps an unobserved
+through the shared native events. The adapter reads the CLI's live status
+index once per second for children it observes in active parent turns. One
+indexed query covers all watched IDs. A child
+reading must match its immediate parent and be at least as recent as the start
+of the turn and the last accepted reading. A direct child frame supersedes
+index rows until the CLI writes a newer update. A locked index, missing row, or unsupported schema preserves
+the last observation. Ending a turn or losing its process stops these reads.
+`activityKnown: false` keeps an unobserved
 child from being called completed by an idle directory snapshot. A parent
 result does not establish a child's completion. Unsettled children become
 unknown when observation ends; partial live copies then stop overriding native
 history. Process exit releases child projections. Token events update only the
 current projection; completed-turn records are merged on read.
+
+### Why child activity reads use the live index
+
+The streamed `invoke_subagent` result acknowledges the launch. Some child
+steps and results appear only in the native index and transcript while work
+continues. The index's live status fields let the adapter publish activity
+for a child whose launch it observed. Saved transcripts supply content, and
+reopening old history cannot start an activity watch.
 
 `projector.js` shares deterministic native step identities between live frames
 and history. `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC` and `CHECKPOINT` map to

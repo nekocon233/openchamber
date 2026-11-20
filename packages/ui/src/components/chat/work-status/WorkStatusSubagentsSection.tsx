@@ -2,18 +2,22 @@ import React from 'react';
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { Icon } from '@/components/icon/Icon';
 import type { IconName } from '@/components/icon/icons';
+import { Spinner } from '@/components/ui/spinner';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
 import { useI18n } from '@/lib/i18n';
 import { useAllLiveSessions, useAllSessionStatuses, useDirectorySync } from '@/sync/sync-context';
 import { useUIStore } from '@/stores/useUIStore';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { normalizePath } from '@/lib/pathNormalization';
 import { hasUnknownAntigravityActivity } from '@/lib/native-agents/capabilities';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { spaceIdOfDirectory } from '@/lib/spaces/space-route';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
 import { formatCost } from './subagentCost';
@@ -40,6 +44,7 @@ const SubagentDuration: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directory }) => {
   const { t } = useI18n();
   const isMobile = useUIStore((state) => state.isMobile);
+  const animated = useSessionDisplayStore((state) => state.animatedActivityIndicators);
   const providers = useConfigStore((state) => state.providers);
 
   const liveSessions = useAllLiveSessions();
@@ -61,6 +66,10 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
   const forms = useDirectorySync(React.useCallback((state: State) => state.form, []));
   const statusReady = useDirectorySync(
     React.useCallback((state: State) => state.sessionStatusReady, []),
+    directory ?? undefined,
+  );
+  const nativeStatusReady = useDirectorySync(
+    React.useCallback((state: State) => state.nativeSessionStatusReady, []),
     directory ?? undefined,
   );
   const statusInvalidated = useDirectorySync(
@@ -124,6 +133,7 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
     if (id && observed) observedById.set(id, observed);
   }
   const panelDirectory = normalizePath(directory);
+  const panelSpace = spaceIdOfDirectory(panelDirectory);
   const rows = children.map((child) => {
     const blocked = (permissions[child.id]?.length ?? 0) > 0;
     const asked = (forms[child.id]?.length ?? 0) > 0;
@@ -132,11 +142,14 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
     const unknown = hasUnknownAntigravityActivity(child);
     const busy = !unknown && (status === 'busy' || status === 'retry' || (!status && observed === 'busy'));
     const failed = !unknown && !busy && observed === 'failed';
-    // The snapshot only speaks for its own directory. Paths are compared
-    // normalized: OpenCode may report a child's directory with a trailing
-    // slash or Windows separators the panel's directory does not have.
-    const snapshotCovers = statusReady === true && !statusInvalidated?.[child.id]
-      && panelDirectory !== null && normalizePath(child.directory) === panelDirectory;
+    // Native status reads cover a directory. OpenCode's list covers the host
+    // or one space, including children that moved to another worktree there.
+    const childDirectory = normalizePath(child.directory);
+    const nativeChild = isNativeSessionId(child.id);
+    const snapshotReady = nativeChild ? nativeStatusReady : statusReady;
+    const snapshotCovers = snapshotReady === true && !statusInvalidated?.[child.id]
+      && panelDirectory !== null && childDirectory !== null
+      && (nativeChild ? childDirectory === panelDirectory : spaceIdOfDirectory(childDirectory) === panelSpace);
     const done = !unknown && !failed && !busy && (status === 'idle' || (!status && (snapshotCovers || observed === 'settled')));
     const finished = !blocked && !asked && (done || failed);
     // Blockers first, then running rows, then rows whose status is not known
@@ -198,7 +211,11 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
               // starts where every other row's does.
               leading={(
                 <span className="flex size-4 shrink-0 items-center justify-center">
-                  <Icon name={icon} className="size-3.5" style={iconColor ? { color: iconColor } : undefined} />
+                  {animated && busy && !blocked && !asked ? (
+                    <Spinner className="size-3.5 text-status-info" aria-hidden />
+                  ) : (
+                    <Icon name={icon} className="size-3.5" style={iconColor ? { color: iconColor } : undefined} />
+                  )}
                 </span>
               )}
               label={label}

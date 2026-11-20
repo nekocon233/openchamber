@@ -987,7 +987,7 @@ async function resyncDirectorySessionStatuses(
     baselineRevision,
   )
   if (mode === "authoritative") {
-    store.setState({ sessionStatusReady: true })
+    store.setState({ sessionStatusReady: true, nativeSessionStatusReady: snapshot.coversNativeSessions })
     applyGlobalSessionStatusSnapshot(
       directory,
       snapshot.statuses,
