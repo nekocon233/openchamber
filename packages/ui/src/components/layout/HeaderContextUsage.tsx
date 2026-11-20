@@ -38,7 +38,7 @@ const HeaderContextUsageComponent: React.FC<{ buttonClassName: string }> = ({ bu
     return null;
   }
 
-  const percent = fill.state === 'measured' ? (fill.totalTokens / limit) * 100 : null;
+  const percent = fill.state === 'measured' && limit > 0 ? (fill.totalTokens / limit) * 100 : null;
   // Rounded for the tone, as the Work Status meter does, so both turn together.
   const arcColor = percent === null ? undefined : TONE_COLOR[resolveUsageTone(Math.round(percent))];
 

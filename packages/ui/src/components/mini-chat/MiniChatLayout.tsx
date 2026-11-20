@@ -251,6 +251,8 @@ const MiniChatHeader: React.FC<{ mode: MiniChatMode }> = ({ mode }) => {
         <ContextUsageDisplay
           reading={toContextUsageReading(stableContextUsage)}
           contextLimit={stableContextUsage.contextLimit}
+          modelContextWindow={stableContextUsage.modelContextWindow}
+          compactionThreshold={stableContextUsage.compactionThreshold}
           outputLimit={stableContextUsage.outputLimit ?? 0}
           className="h-9 shrink-0 ps-1 pe-1 typography-ui-label"
           valueClassName="font-semibold leading-none"

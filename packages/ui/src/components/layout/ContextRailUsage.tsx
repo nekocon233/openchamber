@@ -56,7 +56,7 @@ export const ContextRing: React.FC<{ percent: number; arcColor?: string; classNa
  */
 export const ContextRailTooltipDetails: React.FC = () => {
   const { t } = useI18n();
-  const { sessionId, fill, limit } = useCurrentContextReading();
+  const { sessionId, fill, window, compactionThreshold } = useCurrentContextReading();
   const { totalCost } = useSubagentCostRollup(sessionId);
   if (!sessionId || !fill) return null;
 
@@ -64,7 +64,9 @@ export const ContextRailTooltipDetails: React.FC = () => {
     fill.state === 'measured'
       ? t('contextUsage.tooltip.usedTokens', { tokens: formatTokens(fill.totalTokens) })
       : t('contextUsage.compacted.description'),
-    t('contextUsage.tooltip.contextLimit', { tokens: formatTokens(limit) }),
+    ...(window > 0 ? [t('contextUsage.tooltip.contextLimit', { tokens: formatTokens(window) })] : []),
+    ...(compactionThreshold !== undefined
+      ? [t('contextUsage.tooltip.compactionThreshold', { tokens: formatTokens(compactionThreshold) })] : []),
     ...(totalCost !== null && totalCost > 0 ? [t('contextUsage.tooltip.cost', { cost: formatMoney(totalCost) })] : []),
   ];
 
@@ -85,6 +87,6 @@ export const ContextRailTooltipDetails: React.FC = () => {
  */
 export const ContextUsageRingIcon: React.FC<{ className?: string }> = ({ className }) => {
   const { fill, limit } = useCurrentContextReading();
-  const percent = fill?.state === 'measured' ? (fill.totalTokens / limit) * 100 : 0;
+  const percent = fill?.state === 'measured' && limit > 0 ? (fill.totalTokens / limit) * 100 : 0;
   return <ContextRing percent={percent} className={className} />;
 };

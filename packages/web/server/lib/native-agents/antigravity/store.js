@@ -14,12 +14,51 @@ import { agySavedTasks } from './tasks.js';
 import { agyInteractionHistory } from './interaction-proposals.js';
 import { restoreAntigravityMeasurements } from './measurements.js';
 import { antigravityStatisticsRecords } from './statistics.js';
+import { readAgyCompactionBudget } from './context-metadata.js';
 
 const SUMMARY_COLUMNS = 'conversation_id, parent_conversation_id, title, preview, last_modified_time, workspace_uris';
 const SELECT_ROOTS = `select ${SUMMARY_COLUMNS}
 from conversation_summaries where parent_conversation_id = '' order by last_modified_time desc`;
 const SELECT_ONE = `select ${SUMMARY_COLUMNS} from conversation_summaries where conversation_id = ? limit 1`;
 const SELECT_CHILDREN = `select ${SUMMARY_COLUMNS} from conversation_summaries where parent_conversation_id = ? order by last_modified_time`;
+const TRANSCRIPT_CACHE_BYTES = 32 * 1024 * 1024;
+const TRANSCRIPT_CACHE_SESSIONS = 8;
+
+const fileVersion = ({ dev, ino, size, mtimeNs, ctimeNs }) => `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}`;
+
+const mergeTranscripts = (older, newer) => {
+  const entries = new Map(older.entries.map((entry) => [entry.step_index, entry]));
+  for (const entry of newer.entries) entries.set(entry.step_index, entry);
+  return {
+    entries: [...entries.values()].sort((left, right) => left.step_index - right.step_index),
+    malformed: older.malformed + newer.malformed,
+    unknownTypes: [...new Set([...older.unknownTypes, ...newer.unknownTypes])],
+  };
+};
+
+const readTranscriptFile = (file, encodedArguments, previous) => {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const before = fs.fstatSync(fd, { bigint: true });
+    const version = fileVersion(before);
+    if (version === previous?.version) return previous;
+    const bytes = fs.readFileSync(fd);
+    const stable = fileVersion(fs.fstatSync(fd, { bigint: true })) === version && BigInt(bytes.length) === before.size;
+    // Both logs can be rewritten. Reuse a parsed prefix only after comparing
+    // the actual bytes, and reparse any partial last line with its continuation.
+    const prefix = previous?.bytes;
+    const append = prefix?.at(-1) === 10 && bytes.length > prefix.length
+      && bytes.subarray(0, prefix.length).equals(prefix);
+    const parsed = parseAgyTranscript(bytes.toString('utf8', append ? prefix.length : 0), { encodedArguments });
+    return { bytes, version: stable ? version : null, parsed: append ? mergeTranscripts(previous.parsed, parsed) : parsed };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+};
 
 const summaryRow = z.object({
   conversation_id: z.string().uuid(),
@@ -59,6 +98,8 @@ const modifiedTime = (row) => {
 export const createAntigravityStore = ({ registry, home = null, now = Date.now }) => {
   const root = home ?? path.join(os.homedir(), '.gemini', 'antigravity-cli');
   const summaries = path.join(root, 'conversation_summaries.db');
+  const transcriptCache = new Map();
+  let transcriptCacheBytes = 0;
   const transcriptPath = (nativeId, name = 'transcript.jsonl') => path.join(
     root, 'brain', nativeId, '.system_generated', 'logs', name,
   );
@@ -141,27 +182,29 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
 
   const readTranscript = (nativeId) => {
     try {
-      const read = (name) => {
-        try { return parseAgyTranscript(fs.readFileSync(transcriptPath(nativeId, name), 'utf8'), { encodedArguments: name === 'transcript.jsonl' }); }
-        catch (error) {
-          if (error.code === 'ENOENT') return null;
-          throw error;
-        }
-      };
-      const full = read('transcript_full.jsonl');
-      const preview = read('transcript.jsonl');
+      const previous = transcriptCache.get(nativeId);
+      const full = readTranscriptFile(transcriptPath(nativeId, 'transcript_full.jsonl'), false, previous?.full);
+      const preview = readTranscriptFile(transcriptPath(nativeId), true, previous?.preview);
+      if (previous) {
+        transcriptCache.delete(nativeId);
+        transcriptCacheBytes -= previous.size;
+      }
       if (!full && !preview) throw new Error('The native transcript is missing');
-      if (!full) return preview;
-      if (!preview) return full;
       // The preview can be ahead while the CLI appends its full log. Complete
       // full records own their step; preview-only steps retain their markers.
-      const entries = new Map(preview.entries.map((entry) => [entry.step_index, entry]));
-      for (const entry of full.entries) entries.set(entry.step_index, entry);
-      return {
-        entries: [...entries.values()].sort((left, right) => left.step_index - right.step_index),
-        malformed: full.malformed + preview.malformed,
-        unknownTypes: [...new Set([...full.unknownTypes, ...preview.unknownTypes])],
-      };
+      const transcript = previous && full === previous.full && preview === previous.preview ? previous.transcript
+        : full && preview ? mergeTranscripts(preview.parsed, full.parsed) : (full ?? preview).parsed;
+      const size = (full?.bytes.length ?? 0) + (preview?.bytes.length ?? 0);
+      if (full?.version !== null && preview?.version !== null && size <= TRANSCRIPT_CACHE_BYTES) {
+        transcriptCache.set(nativeId, { full, preview, transcript, size });
+        transcriptCacheBytes += size;
+        while (transcriptCache.size > TRANSCRIPT_CACHE_SESSIONS || transcriptCacheBytes > TRANSCRIPT_CACHE_BYTES) {
+          const oldest = transcriptCache.keys().next().value;
+          transcriptCacheBytes -= transcriptCache.get(oldest).size;
+          transcriptCache.delete(oldest);
+        }
+      }
+      return transcript;
     } catch (error) {
       throw unavailable(`Could not read Antigravity transcript ${nativeId}: ${error instanceof Error ? error.message : error}`);
     }
@@ -345,10 +388,13 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       let children;
       try { children = childrenOf(nativeId, session); }
       catch { children = { childSessions: [], complete: false }; }
+      const generationStep = transcript.entries.findLast((entry) => entry.type === 'PLANNER_RESPONSE' && entry.status === 'DONE')?.step_index;
+      const budget = readAgyCompactionBudget(root, nativeId, generationStep);
       const records = projectAntigravityHistory({
         sessionId, nativeId, directory: session.directory,
         entries: transcript.entries, bindings, parentSessionId: session.parentID,
         childSessionIds: children.childSessions.map((child) => child.id), now,
+        contextReading: budget ? { stepIndex: generationStep, budget } : null,
       });
       restoreAntigravityMeasurements(records, sends);
       const interactionHistory = !session.parentID && session.time.archived == null ? agyInteractionHistory({

@@ -55,8 +55,10 @@ export const contextTokensFromBreakdown = (breakdown: TokenBreakdown | null | un
 export type ContextFillMessage = {
     id?: string;
     role?: string;
+    providerID?: string;
     tokens?: TokenBreakdown;
     contextWindow?: number;
+    contextCompaction?: AssistantMessage['contextCompaction'];
     /**
      * Compaction records carry OpenCode's lifecycle for the summarizing turn
      * here. Widened to `string` so a whole `Message` (a shell record reports its
@@ -96,14 +98,27 @@ export const findLatestContextFill = (messages: readonly ContextFillMessage[]): 
 
         if (message?.role !== 'assistant') continue;
 
-        const totalTokens = contextTokensFromBreakdown(message.tokens);
-        if (totalTokens > 0) return { state: 'measured', index, totalTokens };
+        const totalTokens = message.contextCompaction?.used ?? contextTokensFromBreakdown(message.tokens);
+        if (message.contextCompaction || totalTokens > 0) return { state: 'measured', index, totalTokens };
     }
 
     return null;
 };
 
 const DEFAULT_THRESHOLD_LIMIT = 200_000;
+
+export const resolveContextReadingLimits = (
+    message: Pick<ContextFillMessage, 'providerID' | 'contextWindow' | 'contextCompaction'> | undefined,
+    catalogWindow: number,
+    estimatedWindow = 0,
+) => {
+    // agy models lists model names without limits. Use a generation's own
+    // reading and keep model capacity independent of compaction.
+    const fallbackWindow = message?.providerID === 'antigravity-native' ? 0 : Math.max(0, catalogWindow) || estimatedWindow;
+    const window = message?.contextWindow ?? fallbackWindow;
+    const compactionThreshold = message?.contextCompaction?.threshold;
+    return { window, compactionThreshold, limit: compactionThreshold ?? window };
+};
 
 /** Header-style context usage for a session's messages, shared by every surface that renders `ContextUsageDisplay`. */
 export const buildSessionContextUsage = (
@@ -114,10 +129,12 @@ export const buildSessionContextUsage = (
     const fill = findLatestContextFill(messages);
     if (!fill) return null;
 
-    const effectiveContextLimit = messages[fill.index]?.contextWindow ?? contextLimit;
+    const { limit: effectiveContextLimit, window, compactionThreshold } = resolveContextReadingLimits(messages[fill.index], contextLimit);
 
     const limits = {
         contextLimit: effectiveContextLimit > 0 ? effectiveContextLimit : 0,
+        modelContextWindow: compactionThreshold === undefined ? undefined : window,
+        compactionThreshold,
         outputLimit: outputLimit > 0 ? outputLimit : undefined,
         thresholdLimit: effectiveContextLimit > 0 ? effectiveContextLimit : DEFAULT_THRESHOLD_LIMIT,
         lastMessageId: messages[fill.index]?.id,
@@ -142,6 +159,8 @@ export const isSameContextUsage = (a: SessionContextUsage | null, b: SessionCont
     if (!a || !b || a.state !== b.state) return false;
 
     const sameLimits = a.contextLimit === b.contextLimit
+        && a.modelContextWindow === b.modelContextWindow
+        && a.compactionThreshold === b.compactionThreshold
         && (a.outputLimit ?? 0) === (b.outputLimit ?? 0)
         && a.thresholdLimit === b.thresholdLimit
         && (a.lastMessageId ?? '') === (b.lastMessageId ?? '');

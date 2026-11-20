@@ -1,29 +1,30 @@
 import { DEFAULT_CONTEXT_LIMIT } from '@/components/chat/work-status/contextUsage';
 import { useContextWindowLimits } from '@/hooks/useContextWindowLimits';
 import type { Message } from '@/lib/opencode/model';
-import { findLatestContextFill } from '@/stores/utils/tokenUtils';
+import { findLatestContextFill, resolveContextReadingLimits, type ContextFillMessage } from '@/stores/utils/tokenUtils';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionMessagesSelector } from '@/sync/sync-context';
 
 type ContextFillReading =
-  | { state: 'measured'; totalTokens: number; contextWindow: number | undefined }
-  | { state: 'compacted'; contextWindow: number | undefined }
+  | ({ state: 'measured'; totalTokens: number } & Pick<ContextFillMessage, 'contextWindow' | 'contextCompaction' | 'providerID'>)
+  | { state: 'compacted' }
   | null;
 
 const selectContextFill = (messages: Message[]): ContextFillReading => {
   const fill = findLatestContextFill(messages);
   if (!fill) return null;
   const message = messages[fill.index];
-  const contextWindow = message?.role === 'assistant' ? message.contextWindow : undefined;
-  return fill.state === 'measured'
-    ? { state: 'measured', totalTokens: fill.totalTokens, contextWindow }
-    : { state: 'compacted', contextWindow };
+  if (fill.state === 'compacted' || message?.role !== 'assistant') return { state: 'compacted' };
+  return { state: 'measured', totalTokens: fill.totalTokens, contextWindow: message.contextWindow,
+    contextCompaction: message.contextCompaction, providerID: message.providerID };
 };
 
 const isSameContextFill = (a: ContextFillReading, b: ContextFillReading): boolean => {
   if (a === null || b === null) return a === b;
-  if (a.state !== b.state || a.contextWindow !== b.contextWindow) return false;
-  return a.state === 'compacted' || (b.state === 'measured' && a.totalTokens === b.totalTokens);
+  if (a.state !== b.state) return false;
+  return a.state === 'compacted' || (b.state === 'measured'
+    && a.totalTokens === b.totalTokens && a.contextWindow === b.contextWindow
+    && a.contextCompaction?.threshold === b.contextCompaction?.threshold && a.providerID === b.providerID);
 };
 
 /**
@@ -36,7 +37,6 @@ export const useCurrentContextReading = () => {
   const directory = useSessionUIStore((state) => state.currentSessionDirectory) ?? undefined;
   const fill = useSessionMessagesSelector(sessionId ?? '', directory, selectContextFill, isSameContextFill);
   const { context } = useContextWindowLimits(sessionId, directory);
-  const reported = fill?.contextWindow ?? context;
-  const limit = reported > 0 ? reported : DEFAULT_CONTEXT_LIMIT;
-  return { sessionId, fill, limit };
+  const measured = fill?.state === 'measured' ? fill : undefined;
+  return { sessionId, fill, ...resolveContextReadingLimits(measured, context, measured ? DEFAULT_CONTEXT_LIMIT : 0) };
 };

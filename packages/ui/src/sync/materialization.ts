@@ -332,15 +332,21 @@ export function materializeSessionSnapshots(
     const delivered = existing.role === "synthetic" && existing.pending === true && incoming?.role === "synthetic"
     // A completion the server reports supersedes a turn this client still
     // holds open, and the local interruption mark (`interruptedTurnToolParts`)
-    // it may have put on it. Any other existing record wins over the snapshot.
+    // it may have put on it. Otherwise only supplement missing AGY telemetry.
     const completed = existing.role === "assistant"
       && incoming?.role === "assistant"
       && incoming.time.completed !== undefined
       && (existing.time.completed === undefined || existing.closedLocally === true)
-    if (!incoming || (!delivered && !completed)) continue
+    if (!incoming) continue
+    let replacement = delivered || completed ? incoming : null
+    if (!replacement && existing.role === "assistant" && incoming.role === "assistant"
+      && existing.contextCompaction === undefined && incoming.contextCompaction !== undefined) {
+      replacement = { ...existing, contextCompaction: incoming.contextCompaction }
+    }
+    if (!replacement) continue
     deliveredWhileAway ||= delivered
     if (reconciledCurrentMessages === currentMessages) reconciledCurrentMessages = [...currentMessages]
-    reconciledCurrentMessages[index] = incoming
+    reconciledCurrentMessages[index] = replacement
   }
   if (deliveredWhileAway) reconciledCurrentMessages = sortMessagesChronologically(reconciledCurrentMessages)
   const messages = mergeMessages(reconciledCurrentMessages, nextMessages)

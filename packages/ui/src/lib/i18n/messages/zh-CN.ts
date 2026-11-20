@@ -1967,6 +1967,7 @@ export const dict: Record<I18nKey, string> = {
   'contextUsage.mobile.usage': '使用率',
   'contextUsage.tooltip.usedTokens': '已用 Token：{tokens}',
   'contextUsage.tooltip.contextLimit': '上下文上限：{tokens}',
+  'contextUsage.tooltip.compactionThreshold': '自动压缩阈值 {tokens}',
   'contextUsage.tooltip.outputLimit': '输出上限：{tokens}',
   'contextUsage.tooltip.cost': '成本：{cost}',
   'contextUsage.compacted.description': '上下文已压缩。用量将在下一次回复后更新。',

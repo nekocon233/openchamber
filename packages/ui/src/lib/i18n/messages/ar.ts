@@ -1795,6 +1795,7 @@ export const dict = {
   'contextUsage.mobile.usage': 'الاستخدام',
   'contextUsage.tooltip.usedTokens': 'الرموز المستخدمة: {tokens}',
   'contextUsage.tooltip.contextLimit': 'حد السياق: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': 'عتبة الضغط التلقائي {tokens}',
   'contextUsage.tooltip.outputLimit': 'حد المخرجات: {tokens}',
   'contextUsage.tooltip.cost': 'التكلفة: {cost}',
   'contextUsage.compacted.description': 'تم ضغط السياق. يُحدَّث الاستخدام بعد الرد التالي.',

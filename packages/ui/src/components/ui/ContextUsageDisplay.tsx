@@ -11,6 +11,8 @@ import type { ContextUsageReading } from '@/components/ui/contextUsageReading';
 interface ContextUsageDisplayProps {
   reading: ContextUsageReading;
   contextLimit: number;
+  modelContextWindow?: number;
+  compactionThreshold?: number;
   outputLimit?: number;
   cost?: number | null;
   size?: 'default' | 'compact';
@@ -29,6 +31,8 @@ const UNKNOWN_VALUE = '\u2014';
 export const ContextUsageDisplay: React.FC<ContextUsageDisplayProps> = ({
   reading,
   contextLimit,
+  modelContextWindow,
+  compactionThreshold,
   outputLimit,
   cost = null,
   size = 'default',
@@ -43,7 +47,7 @@ export const ContextUsageDisplay: React.FC<ContextUsageDisplayProps> = ({
 }) => {
   const { t } = useI18n();
   const [mobileTooltipOpen, setMobileTooltipOpen] = React.useState(false);
-  const isMeasured = reading.state === 'measured';
+  const isMeasured = reading.state === 'measured' && contextLimit > 0;
   const percentage = isMeasured ? reading.percentage : 0;
   const colorPct = isMeasured ? reading.colorPercentage ?? percentage : 0;
   const progressPct = clampPercent(percentage) ?? 0;
@@ -81,10 +85,13 @@ export const ContextUsageDisplay: React.FC<ContextUsageDisplayProps> = ({
   const hasCost = normalizedCost > 0 && Number.isFinite(normalizedCost);
   const percentLabel = isMeasured ? `${Math.min(percentage, 999).toFixed(1)}%` : UNKNOWN_VALUE;
   const tooltipLines = [
-    isMeasured
+    reading.state === 'measured'
       ? t('contextUsage.tooltip.usedTokens', { tokens: formatTokens(reading.totalTokens) })
       : t('contextUsage.compacted.description'),
-    t('contextUsage.tooltip.contextLimit', { tokens: formatTokens(contextLimit) }),
+    ...((modelContextWindow ?? contextLimit) > 0
+      ? [t('contextUsage.tooltip.contextLimit', { tokens: formatTokens(modelContextWindow ?? contextLimit) })] : []),
+    ...(compactionThreshold !== undefined
+      ? [t('contextUsage.tooltip.compactionThreshold', { tokens: formatTokens(compactionThreshold) })] : []),
     t('contextUsage.tooltip.outputLimit', { tokens: formatTokens(safeOutputLimit) }),
     ...(hasCost ? [t('contextUsage.tooltip.cost', { cost: formatMoney(normalizedCost) })] : []),
   ];

@@ -233,6 +233,15 @@ describe('native live overlay', () => {
     expect(overlay(history, live)[0].info).toMatchObject({ tokens, contextWindow: 872000 });
   });
 
+  it('fills AGY compaction telemetry without replacing a settled live record', () => {
+    const contextCompaction = { used: 128_000, threshold: 512_000 };
+    const history = [overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 }, contextCompaction })];
+    const live = [overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 3 } })];
+    const [merged] = overlay(history, live);
+    expect(merged.info).toMatchObject({ time: { completed: 3 }, contextCompaction });
+    expect(merged.parts).toBe(live[0].parts);
+  });
+
   it('does not copy measurements onto non-assistant records', () => {
     const history = [overlayRecord('msg', 'user', 1, { tokens: { total: 9 } })];
     const live = [overlayRecord('msg', 'user', 1)];

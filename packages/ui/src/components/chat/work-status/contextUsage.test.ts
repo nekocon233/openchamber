@@ -50,13 +50,32 @@ describe('computeContextUsage', () => {
     // Rounding here is what made the panel print "34.0%" against the header's
     // "33.6%".
     const usage = computeContextUsage([assistant({ input: 336, output: 0, reasoning: 0 })], 1000);
-    expect(measured(usage).percent.toFixed(1)).toBe('33.6');
+    expect(measured(usage).percent?.toFixed(1)).toBe('33.6');
   });
 
   test('falls back to the default limit when the model exposes none', () => {
     const usage = computeContextUsage([assistant({ input: 20_000, output: 0, reasoning: 0 })], 0);
     expect(usage?.limit).toBe(DEFAULT_CONTEXT_LIMIT);
     expect(measured(usage).percent).toBe(10);
+  });
+
+  test('measures AGY against its observed compaction threshold and retains the model window', () => {
+    const usage = computeContextUsage([{
+      ...assistant({ total: 200_000 }),
+      providerID: 'antigravity-native',
+      contextWindow: 1_048_576,
+      contextCompaction: { used: 128_000, threshold: 512_000 },
+    }], 1_000_000);
+    expect(usage).toMatchObject({
+      totalTokens: 128_000, limit: 512_000, compactionThreshold: 512_000, window: 1_048_576, percent: 25,
+    });
+  });
+
+  test('does not turn an unreported AGY threshold into a percentage', () => {
+    const usage = computeContextUsage([{
+      ...assistant({ total: 20_000 }), providerID: 'antigravity-native',
+    }], 1_000_000);
+    expect(usage).toMatchObject({ totalTokens: 20_000, limit: 0, percent: null });
   });
 
   test('returns null when no message carries usable tokens', () => {
@@ -79,7 +98,7 @@ describe('computeContextUsage', () => {
       1_000_000,
     );
     expect(measured(usage).totalTokens).toBe(232_872);
-    expect(measured(usage).percent.toFixed(4)).toBe('23.2872');
+    expect(measured(usage).percent?.toFixed(4)).toBe('23.2872');
   });
 
   test('selects a message whose only signal is the reported total', () => {
@@ -102,7 +121,7 @@ describe('computeContextUsage', () => {
       ],
       200_000,
     );
-    expect(usage).toEqual({ state: 'compacted', limit: 200_000 });
+    expect(usage).toMatchObject({ state: 'compacted', limit: 200_000 });
   });
 
   test('measures again once a response after the compaction reports tokens', () => {

@@ -115,11 +115,13 @@ const withHistoryMeasurements = (liveRecord, historyRecord) => {
   const history = historyRecord.info;
   if (live.role !== 'assistant' || history.role !== 'assistant') return liveRecord;
   if (typeof live.time?.completed !== 'number' && typeof history.time?.completed === 'number') return historyRecord;
-  if (live.tokens !== undefined && live.contextWindow !== undefined) return liveRecord;
+  if (live.tokens !== undefined && live.contextWindow !== undefined && live.contextCompaction !== undefined) return liveRecord;
   const info = { ...live };
   if (info.tokens === undefined && history.tokens !== undefined) info.tokens = history.tokens;
   if (info.contextWindow === undefined && history.contextWindow !== undefined) info.contextWindow = history.contextWindow;
-  if (info.tokens === live.tokens && info.contextWindow === live.contextWindow) return liveRecord;
+  if (info.contextCompaction === undefined && history.contextCompaction !== undefined) info.contextCompaction = history.contextCompaction;
+  if (info.tokens === live.tokens && info.contextWindow === live.contextWindow
+    && info.contextCompaction === live.contextCompaction) return liveRecord;
   return { ...liveRecord, info };
 };
 

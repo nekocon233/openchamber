@@ -2283,6 +2283,7 @@ export const dict: Record<I18nKey, string> = {
   'contextUsage.mobile.usage': 'Zużycie',
   'contextUsage.mobile.usedTokens': 'Zużyte tokeny',
   'contextUsage.tooltip.contextLimit': 'Limit kontekstu: {tokens}',
+  'contextUsage.tooltip.compactionThreshold': 'Próg automatycznego skracania kontekstu {tokens}',
   'contextUsage.tooltip.outputLimit': 'Limit wyjścia: {tokens}',
   'contextUsage.tooltip.cost': 'Koszt: {cost}',
   'contextUsage.compacted.description': 'Kontekst skompaktowany. Użycie zaktualizuje się po następnej odpowiedzi.',
