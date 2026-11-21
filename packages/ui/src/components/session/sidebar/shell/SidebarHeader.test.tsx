@@ -82,8 +82,13 @@ const press = (key: string) => act(async () => {
   input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 });
 
+const closeManager = () => {
+  const owner = useSidebarSectionsUiStore.getState().managerOwner;
+  if (owner !== null) closeSectionsManager(owner);
+};
+
 beforeEach(() => {
-  closeSectionsManager();
+  closeManager();
   useUIStore.setState({ messageSearchEnabled: true });
   host = document.createElement('div');
   document.body.append(host);
@@ -119,11 +124,26 @@ describe('SidebarHeader', () => {
     await render(<SidebarHeader {...baseProps} />);
     const customize = document.querySelector<HTMLButtonElement>('[aria-label="Customize sections"]');
     await act(async () => { customize?.click(); });
-    expect(useSidebarSectionsUiStore.getState().managerOpen).toBe(true);
-    closeSectionsManager();
+    expect(customize?.getAttribute('aria-expanded')).toBe('true');
+    closeManager();
 
     await render(<SidebarHeader {...baseProps} showSectionControls={false} />);
     expect(buttonLabels()).toEqual(['Display mode']);
+  });
+
+  test('section settings belong to the header that opened them', async () => {
+    await render(<>
+      <SidebarHeader key="main" {...baseProps} />
+      <SidebarHeader key="picker" {...baseProps} />
+    </>);
+    const [main, picker] = document.querySelectorAll<HTMLButtonElement>('[aria-label="Customize sections"]');
+    await act(async () => picker.click());
+    expect(main.getAttribute('aria-expanded')).toBe('false');
+    expect(picker.getAttribute('aria-expanded')).toBe('true');
+
+    await render(<><SidebarHeader key="main" {...baseProps} /></>);
+    expect(useSidebarSectionsUiStore.getState().managerOwner).toBeNull();
+    expect(main.getAttribute('aria-expanded')).toBe('false');
   });
 
   test('the display menu holds the list controls, without the pages or Customize sections', async () => {
@@ -189,12 +209,12 @@ describe('SidebarHeader', () => {
     await act(async () => {
       save!.click();
       const editor = useSidebarSectionsUiStore.getState();
-      expect(editor.managerOpen).toBe(true);
+      expect(editor.managerOwner).not.toBeNull();
       expect(editor.draftIsNew).toBe(true);
       expect(editor.draft?.name).toBe(query);
       expect(editor.draft?.filter.text).toEqual([query]);
       expect(useSessionDisplayStore.getState().sections).toBe(savedSections);
-      closeSectionsManager();
+      closeManager();
     });
     expect(closed).toBe(1);
   });

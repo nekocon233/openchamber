@@ -56,7 +56,6 @@ import { keepRowInList, ROW_DRAG_AUTO_SCROLL, ROW_SORT_TRANSITION, useRowDragSen
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import {
   canAddSidebarSection,
-  closeSectionsManager,
   commitSectionDraft,
   deleteSidebarPinList,
   deleteSidebarSection,
@@ -127,13 +126,14 @@ const toggleIn = <T extends string>(list: readonly T[], value: T): T[] => (
 );
 
 export const SidebarSectionsManager: React.FC<{
+  open: boolean;
+  onClose: () => void;
   anchor: React.RefObject<HTMLElement | null>;
   trigger: React.RefObject<HTMLElement | null>;
   pages: boolean;
-}> = ({ anchor, trigger, pages }) => {
+}> = ({ open, onClose, anchor, trigger, pages }) => {
   const { t } = useI18n();
-  const open = useSidebarSectionsUiStore((state) => state.managerOpen);
-  const draft = useSidebarSectionsUiStore((state) => state.draft);
+  const draft = useSidebarSectionsUiStore((state) => open ? state.draft : null);
   return (
     <Popover.Root
       open={open}
@@ -150,7 +150,7 @@ export const SidebarSectionsManager: React.FC<{
           details.allowPropagation();
           return;
         }
-        closeSectionsManager();
+        onClose();
       }}
     >
       <Popover.Portal>
