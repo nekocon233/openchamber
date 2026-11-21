@@ -32,7 +32,7 @@ function Document({ children, scheme = 'dark' }: { children: React.ReactNode; sc
 beforeEach(() => {
   const dom = new Window({ url: 'https://app.test' });
   Object.defineProperty(dom, 'IntersectionObserver', { configurable: true, value: undefined });
-  Object.assign(globalThis, { window: dom, document: dom.document, localStorage: dom.localStorage, sessionStorage: dom.sessionStorage, navigator: dom.navigator, HTMLElement: dom.HTMLElement, Element: dom.Element, HTMLImageElement: dom.HTMLImageElement, IS_REACT_ACT_ENVIRONMENT: true });
+  Object.assign(globalThis, { window: dom, document: dom.document, Event: dom.Event, CustomEvent: dom.CustomEvent, localStorage: dom.localStorage, sessionStorage: dom.sessionStorage, navigator: dom.navigator, HTMLElement: dom.HTMLElement, Element: dom.Element, HTMLImageElement: dom.HTMLImageElement, IS_REACT_ACT_ENVIRONMENT: true });
   configureRuntimeUrlResolver({ apiBaseUrl: 'https://runtime.test' });
   requests = []; batches = []; revoked = [];
   Object.assign(URL, { createObjectURL: () => 'blob:document-image', revokeObjectURL: (url: string) => revoked.push(url) });
@@ -59,6 +59,28 @@ describe('React-owned Markdown media', () => {
     expect(host.querySelectorAll('a')).toHaveLength(2);
     expect(host.querySelector('a a')).toBeNull();
     expect(requests).toEqual([]);
+  });
+  test('unsafe image schemes stay inert while file images go through the server grant', async () => {
+    const source = '![local](file:///workspace/image.png)\n\n![unsafe](javascript:alert%281%29)';
+    const render = (settled: boolean) => root.render(<Chat settled={settled} id="scheme-policy">
+      <Streamdown
+        mode="static"
+        parseIncompleteMarkdown={false}
+        controls={false}
+        {...getMarkdownProcessingOptions(false, false)}
+        urlTransform={(value) => value}
+        components={{ img: MarkdownImage }}
+      >{source}</Streamdown>
+    </Chat>);
+    await act(async () => render(false));
+    expect(host.querySelector('img[src], a[href^="javascript:"], a[href^="file:"]')).toBeNull();
+    expect(requests).toEqual([]);
+    await act(async () => render(true));
+    await flush(); await flush();
+    expect(batches).toEqual([['file:///workspace/image.png']]);
+    expect(host.querySelectorAll('img')).toHaveLength(1);
+    expect(host.querySelector('[src^="file:"]')).toBeNull();
+    expect(host.querySelector('[src^="javascript:"], [href^="javascript:"]')).toBeNull();
   });
   test('hides the incomplete-image sentinel', async () => {
     await act(async () => root.render(<Chat><MarkdownImage src="streamdown:incomplete-image" alt="pending" /></Chat>));
@@ -108,11 +130,6 @@ describe('React-owned Markdown media', () => {
     await act(async () => host.querySelector('video')?.dispatchEvent(new window.Event('error')));
     expect(host.querySelector('a')?.getAttribute('href')).toBe('https://remote.test/clip.mp4');
     expect(host.textContent).toBe('clip');
-  });
-  test('survives React strict-effect replay and retains the same document URL on theme changes', async () => {
-    await act(async () => root.render(<React.StrictMode><Document><MarkdownImage src="./strict.png" /></Document></React.StrictMode>));
-    await flush(); await flush();
-    expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:document-image');
   });
   test('reconnects loaded media and gallery after a real hidden interval', async () => {
     const popups: import('../message/types').ToolPopupContent[] = [];

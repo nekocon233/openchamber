@@ -6,34 +6,28 @@ import { Icon } from '@/components/icon/Icon';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useI18n } from '@/lib/i18n';
 import { sessionActionSupport } from '@/lib/native-agents/capabilities';
-import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/opencode/model';
+import { cn } from '@/lib/utils';
 
 export const ROW_ACTION_SLOT_WIDTH = 48;
 
-// Four slots every session row has: archive, delete, rename and Copy ID.
-// Top-level rows add one slot each for Pin and Track / Done when enabled.
 export const ROW_ACTIONS_WIDTH = 4 * ROW_ACTION_SLOT_WIDTH;
 
-export type MobileSessionWorkAction = { inWork: boolean; onToggle: () => void };
-export type MobileSessionPinAction = { pinned: boolean; onToggle: () => void };
+type MobileSessionWorkAction = { inWork: boolean; onToggle: () => void };
+type MobileSessionPinAction = { pinned: boolean; onToggle: () => void };
 const ROW_SWIPE_SNAP_MS = 180;
 
-/** Generic swipe-to-reveal wrapper for drawer rows (sessions, projects,
-    worktrees): horizontal intent detection, imperative transform during the
-    drag, snap on release. The actions sit at the row's start (left, or right
-    in RTL) and the row slides toward its end, so the opposite direction stays
-    free for the drawer's own close swipe. */
+const setActionsShown = (actions: HTMLElement | null, shown: boolean) => {
+  if (actions) actions.style.visibility = shown ? 'visible' : 'hidden';
+};
+
 export const MobileSwipeActionsRow: React.FC<{
   actionsWidth: number;
   actions: React.ReactNode;
   revealed: boolean;
   onRevealedChange: (revealed: boolean) => void;
-  /** Marks the row as the current session so the sheet's open-time
-      auto-scroll can find it. */
   dataActiveSession?: boolean;
-  /** Classes for the transformed content element. The default suits a plain
-      header row; session rows pass their own layout and active background. */
+  sessionId?: string;
   contentClassName?: string;
   children: React.ReactNode;
 }> = ({
@@ -42,13 +36,14 @@ export const MobileSwipeActionsRow: React.FC<{
   revealed,
   onRevealedChange,
   dataActiveSession,
+  sessionId,
   contentClassName = 'relative flex w-full items-center bg-background',
   children,
 }) => {
   const { direction } = useI18n();
-  // Offsets are measured toward the row's end; in RTL that is leftward.
   const sign = direction === 'rtl' ? -1 : 1;
   const contentRef = React.useRef<HTMLDivElement>(null);
+  const actionsRef = React.useRef<HTMLDivElement>(null);
   const startRef = React.useRef<{ x: number; y: number } | null>(null);
   const draggingRef = React.useRef(false);
   const offsetRef = React.useRef(0);
@@ -57,12 +52,17 @@ export const MobileSwipeActionsRow: React.FC<{
   const applyOffset = React.useCallback((px: number, animate: boolean) => {
     const el = contentRef.current;
     if (!el) return;
+    setActionsShown(actionsRef.current, px !== 0 || (animate && px !== offsetRef.current));
     el.style.transition = animate ? `transform ${ROW_SWIPE_SNAP_MS}ms ease-out` : 'none';
     el.style.transform = px === 0 ? 'none' : `translateX(${px * sign}px)`;
     offsetRef.current = px;
   }, [sign]);
 
-  React.useEffect(() => {
+  const handleTransitionEnd = (event: React.TransitionEvent) => {
+    if (event.target === contentRef.current && event.propertyName === 'transform' && offsetRef.current === 0) setActionsShown(actionsRef.current, false);
+  };
+
+  React.useLayoutEffect(() => {
     revealedRef.current = revealed;
     applyOffset(revealed ? actionsWidth : 0, true);
   }, [actionsWidth, applyOffset, revealed]);
@@ -99,28 +99,24 @@ export const MobileSwipeActionsRow: React.FC<{
   return (
     <div
       data-active-session={dataActiveSession || undefined}
-      className="relative overflow-hidden"
+      data-mobile-session-row={sessionId}
+      className="relative oc-row-clip rounded-lg"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
-      // Vertical panning stays native; horizontal moves reach the swipe handler.
       style={{ touchAction: 'pan-y' }}
     >
-      <div className="absolute inset-y-0 inset-s-0 flex items-stretch" style={{ width: actionsWidth }} aria-hidden={!revealed}>
+      <div ref={actionsRef} className="absolute inset-y-0 inset-s-0 flex items-stretch" style={{ width: actionsWidth }} aria-hidden={!revealed}>
         {actions}
       </div>
-      <div ref={contentRef} className={contentClassName}>
+      <div ref={contentRef} className={`${contentClassName} rounded-[inherit]`} onTransitionEnd={handleTransitionEnd} onTransitionCancel={handleTransitionEnd}>
         {children}
       </div>
     </div>
   );
 };
 
-/** The session swipe actions, shared by every mobile session row. Ordered
-    left to right by how often they are used on a phone: the leftmost slot is
-    the one a short drag exposes first, so archive leads and the destructive
-    delete never sits under a partial swipe. Copy ID stays in the final slot. */
 export const MobileSessionRowActions: React.FC<{
   sessionId: string;
   sessionMetadata?: Session['metadata'];
@@ -132,9 +128,7 @@ export const MobileSessionRowActions: React.FC<{
   onConfirmDelete?: () => void;
   onRequestRename?: () => void;
   onRevealedChange?: (revealed: boolean) => void;
-  /** Track / Done, when the feature is on and the row is a top-level session. */
   work?: MobileSessionWorkAction;
-  /** Pin / Unpin, on top-level rows. */
   pin?: MobileSessionPinAction;
 }> = ({
   sessionId,
@@ -166,8 +160,6 @@ export const MobileSessionRowActions: React.FC<{
 
   return (
     <>
-      {/* Icon-only actions on the row's own background — they read as the row
-          extending to reveal extra controls, not a separate panel. */}
       <button
         type="button"
         tabIndex={tabIndex}
@@ -202,27 +194,28 @@ export const MobileSessionRowActions: React.FC<{
           onClick={() => { work.onToggle(); onRevealedChange?.(false); }}
           style={{ touchAction: 'manipulation' }}
         >
-          {/* The check glyph draws smaller than the others at the same box. */}
           <Icon name={work.inWork ? 'check' : 'eye'} className={work.inWork ? 'size-5' : 'size-[18px]'} />
         </button>
       ) : null}
-      {sessionActionSupport(sessionId, sessionMetadata).delete ? <button
-        type="button"
-        tabIndex={tabIndex}
-        className={cn(
-          'flex flex-1 items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive',
-          confirmingDelete
-            ? 'rounded-lg bg-destructive text-destructive-foreground'
-            : 'text-[var(--status-error)] active:opacity-80',
-        )}
-        aria-label={confirmingDelete
-          ? t('mobile.sessions.confirmDeleteSessionAria', { title })
-          : t('mobile.sessions.deleteSessionAria', { title })}
-        onClick={confirmingDelete ? onConfirmDelete : onRequestDelete}
-        style={{ touchAction: 'manipulation' }}
-      >
-        <RiDeleteBinLine className="size-[18px]" />
-      </button> : null}
+      {sessionActionSupport(sessionId, sessionMetadata).delete ? (
+        <button
+          type="button"
+          tabIndex={tabIndex}
+          className={cn(
+            'flex flex-1 items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive',
+            confirmingDelete
+              ? 'rounded-lg bg-destructive text-destructive-foreground'
+              : 'text-[var(--status-error)] active:opacity-80',
+          )}
+          aria-label={confirmingDelete
+            ? t('mobile.sessions.confirmDeleteSessionAria', { title })
+            : t('mobile.sessions.deleteSessionAria', { title })}
+          onClick={confirmingDelete ? onConfirmDelete : onRequestDelete}
+          style={{ touchAction: 'manipulation' }}
+        >
+          <RiDeleteBinLine className="size-[18px]" />
+        </button>
+      ) : null}
       <button
         type="button"
         tabIndex={tabIndex}

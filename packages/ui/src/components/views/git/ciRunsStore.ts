@@ -2,7 +2,7 @@ import * as React from 'react';
 import { create } from 'zustand';
 
 import type { IconName } from '@/components/icon/icons';
-import { useGitHubReadContext } from '@/components/references/referenceSources';
+import { useRepositoryReadContext } from '@/components/references/referenceSources';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type {
   CiJobLogResult,
@@ -586,7 +586,7 @@ export const useBranchLatestCiRun = (
   enabled: boolean,
 ): BranchLatestCiRunState => {
   const { sourceControl } = useRuntimeAPIs();
-  const rawContext = useGitHubReadContext(enabled ? directory : null);
+  const rawContext = useRepositoryReadContext(enabled ? directory : null);
   const context = rawContext && rawContext !== 'missing' && rawContext.provider === 'github' ? rawContext : null;
   const trimmedBranch = branch?.trim() ?? '';
   const active = Boolean(enabled && context && trimmedBranch);

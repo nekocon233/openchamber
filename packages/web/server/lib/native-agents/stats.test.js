@@ -49,7 +49,7 @@ describe('native statistics accounting', () => {
       const snapshot = await store.loadStatistics(`nag_${nativeId}`, directory, { tools: 'detail' });
       expect(snapshot.records.flatMap((record) => record.parts).every((part) => !('input' in (part.state ?? {})) && !('metadata' in (part.state ?? {})))).toBe(true);
       const db = new DatabaseSync(path.join(home, 'conversation_summaries.db'));
-      db.exec("insert into conversation_summaries values ('invalid-id', 'Bad row', '', 'bad date', '[]', '')");
+      db.exec("insert into conversation_summaries (conversation_id, title, preview, last_modified_time, workspace_uris, parent_conversation_id) values ('invalid-id', 'Bad row', '', 'bad date', '[]', '')");
       db.close();
       expect((await read()).backends.antigravity).toMatchObject({ status: 'partial', stats: { steps: 2, coverage: { failedSessions: 1 } } });
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

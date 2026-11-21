@@ -1,24 +1,3 @@
-/**
- * OpenCode's experimental usage route (`session.stats`,
- * `GET /api/experimental/session/stats`), translated into the shape the usage
- * page reads.
- *
- * Route semantics (OpenCode 2.0.15, `packages/core/src/session/stats.ts`):
- * - `from`/`to` are epoch milliseconds, `from` inclusive, `to` exclusive.
- *   `to` defaults to now; without `from` the range starts at the oldest
- *   message. `from >= to` is a 400.
- * - `project` is an OpenCode project id, not a directory; without it every
- *   project on the server is counted.
- * - `timezone` is an IANA zone used to bucket `activity` into `YYYY-MM-DD`
- *   days (defaults to UTC, so we always send the viewer's zone).
- * - `tools` selects the tool-call breakdown. Reports use `"none"`; a separate
- *   on-demand `"detail"` read adds per-tool counts and median durations.
- * - Activity exposes step counts only. Per-day token totals come from bounded
- *   SDK reads for active dates, with the same project, zone and fixed window.
- *
- * A failed read throws; it is never a zeroed report.
- */
-
 import type { SessionStatsInfo } from "@opencode/client"
 import { CronDate } from "cron-parser"
 import { normalizeOpencodeError, opencodeClient } from "./client"
@@ -35,6 +14,7 @@ export interface UsageTokens {
 export interface UsageModel {
   providerID: string
   modelID: string
+  variant?: string
   steps: number
   tokens: UsageTokens
   cost: number
@@ -63,27 +43,22 @@ export interface UsageActivityDay {
   tokensComplete: boolean
 }
 
-/** Tool-call counts for the whole report. */
 interface UsageToolTotals {
   calls: number
   succeeded: number
   failed: number
-  /** Neither completed nor errored: interrupted, pending or unknown state. */
   unfinished: number
 }
 
-/** One tool's counts; `detail` reports carry these per tool. */
 interface UsageToolUsage {
   name: string
   calls: number
   succeeded: number
   failed: number
   unfinished: number
-  /** Median duration of completed calls in ms; absent when none completed. */
   durationP50: number | null
 }
 
-/** The tool-call breakdown the request mode produced; `none` carries nothing. */
 export type UsageTools = (
   | { mode: "none" }
   | { mode: "summary"; totals: UsageToolTotals }
@@ -100,11 +75,8 @@ export interface UsageStats {
   cost: number
   tools: UsageTools
   activeDays: number
-  /** Longest run of consecutive active days inside the range. */
   streak: number
-  /** Active days only, ascending; days with no model steps are absent. */
   activity: UsageActivityDay[]
-  /** Sorted by total tokens, largest first. */
   models: UsageModel[]
   coverage?: UsageCoverage
   sources?: UsageSourceState[]
@@ -113,7 +85,6 @@ export interface UsageStats {
 interface UsageStatsQuery {
   from?: number
   to?: number
-  /** OpenCode project id; omit for every project. */
   projectID?: string
   timezone: string
 }
@@ -248,8 +219,6 @@ const readDailyTokens = (read: () => Promise<number>, signal: AbortSignal): Prom
 }
 
 const dailyWindow = (date: string, timezone: string, range: UsageStats['range']): UsageStats['range'] => {
-  // Advance the calendar date in UTC, then interpret both midnights in the
-  // requested zone. A local day can contain 23 or 25 hours.
   const next = new Date(`${date}T00:00:00Z`)
   next.setUTCDate(next.getUTCDate() + 1)
   return {
@@ -257,12 +226,6 @@ const dailyWindow = (date: string, timezone: string, range: UsageStats['range'])
     to: Math.min(range.to, new CronDate(`${next.toISOString().slice(0, 10)}T00:00:00`, timezone).getTime()),
   }
 }
-
-/**
- * The report without tool calls: `tools: "none"` keeps OpenCode from scanning
- * every tool call in the range, a cost that grows with history. The server
- * defaults to `summary`, so the mode is always sent.
- */
 export async function fetchUsageStats(query: UsageStatsQuery, signal?: AbortSignal): Promise<UsageStats> {
   const report = toUsageStats(await requestStats(query, "none", signal))
   if (!report.activity.length) return report
@@ -285,16 +248,10 @@ export async function fetchUsageStats(query: UsageStatsQuery, signal?: AbortSign
   return report
 }
 
-/**
- * Tool calls for a report, on request. There is no tools-only mode: the route
- * recomputes the whole report and only `tools` is kept. Pass the loaded
- * report's `range` so the numbers cover the same window as the page.
- */
 export async function fetchUsageTools(query: UsageStatsQuery, signal?: AbortSignal): Promise<UsageTools> {
   return toTools((await requestStats(query, "detail", signal)).tools)
 }
 
-/** The OpenCode project id a directory belongs to, for the `project` filter. */
 export async function resolveUsageProjectID(directory: string): Promise<string> {
   const project = await opencodeClient.getCurrentProject(directory)
   return project.id

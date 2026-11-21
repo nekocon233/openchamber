@@ -39,7 +39,7 @@ test('live activity orders unopened sessions and follows hierarchy, background w
       useBackgroundShellsStore.setState({ sessionIds: new Set(['shell']) });
       useSessionBackgroundTasksStore.setState({ tasksBySession: new Map([['task', [{ id: '1', type: 'job', description: 'one' }]]]) });
       useWorkflowActivityStore.setState({ runningSessionIds: new Set(['workflow']) });
-      usePrWatchStore.setState({ bySession: new Map([['watch', { sessionID: 'watch', directory: '/repo', url: 'https://example.test/pr/1', number: 1, title: '', status: 'pending', startedAt: 1 }]]) });
+      usePrWatchStore.setState({ bySession: new Map([['watch', [{ sessionID: 'watch', directory: '/repo', url: 'https://example.test/pr/1', number: 1, title: '', status: 'pending', startedAt: 1 }]]]) });
       root.render(<Harness />);
     });
     expect([...captured.current ?? []].sort()).toEqual(['child', 'shell', 'task', 'watch', 'workflow']);

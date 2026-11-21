@@ -1,33 +1,44 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import type { Model } from '@/lib/opencode/model';
 import {
   DndContext,
+  DragOverlay,
+  MeasuringStrategy,
   MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core';
-import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { CSS as DndCSS } from '@dnd-kit/utilities';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { defaultRangeExtractor, observeElementRect, useVirtualizer, type Range, type VirtualItem } from '@tanstack/react-virtual';
 import { Icon } from '@/components/icon/Icon';
 import { Input } from '@/components/ui/input';
+import { PICKER_SEARCH_INPUT_CLASS } from '@/components/ui/MobileSheetList';
 import { matchesRankQuery } from '@/lib/search/fuzzySearch';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { handleDropdownNavigationKey } from '@/components/ui/dropdown-navigation';
-import { getCurrentIntlLocale } from '@/lib/i18n';
 import { mergeModelMetadataWithLiveModel } from '@/lib/modelMetadata';
 import { getModelDisplayName as getSharedModelDisplayName } from '@/lib/modelDisplay';
 import { formatCompactNumber } from '@/lib/numberFormat';
 import { cn } from '@/lib/utils';
+import { swallowGestureClick } from '@/lib/swallowGestureClick';
 import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
-import { SortablePickerRows } from './SortablePickerRows';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useModelPickerSectionsStore } from '@/stores/useModelPickerSectionsStore';
-import type { ModelMetadata } from '@/types';
+import type {
+  IndexSelectionStore,
+  ModelPickerAction,
+  NavigationItem,
+  SortableShell,
+  ModelPickerListProps,
+} from './ModelPickerRows';
+import { ModelPickerRowCard, ModelPickerRowHighlight, ModelPickerFooter, SortableRow } from './ModelPickerRows';
+import { createIndexSelectionStore, LEADING_ACTION_SLOT, entryOf } from './modelPickerNavigation';
 
 type ProviderModel = Pick<Model, 'id' | 'name'> & Partial<Model>;
 
@@ -46,24 +57,6 @@ export type ModelPickerEntry = {
   | { kind: 'auto'; model: Pick<ProviderModel, 'id' | 'name'> }
 );
 
-type ModelPickerFavoriteEntry = ModelPickerEntry;
-
-type HiddenModel = { providerID: string; modelID: string };
-
-type IndexSelectionStore = {
-  getSnapshot: () => number;
-  subscribe: (listener: () => void) => () => void;
-  subscribeIndex: (index: number, listener: () => void) => () => void;
-  set: (value: number) => void;
-};
-
-const formatUsdCurrency = (value: number) => new Intl.NumberFormat(getCurrentIntlLocale(), {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 4,
-  minimumFractionDigits: 2,
-}).format(value);
-
 const getModelDisplayName = (model: Pick<ProviderModel, 'id' | 'name'>) => {
   return getSharedModelDisplayName({ id: model.id, name: model.name }, undefined, { maxLength: 40 });
 };
@@ -75,425 +68,43 @@ const formatModelContextTokens = (value?: number | null) => {
   return formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
 };
 
-const formatCost = (value?: number | null) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  return formatUsdCurrency(value);
+type SectionKind = 'leading' | 'fav' | 'recent' | 'provider';
+
+type PickerRow =
+  | { kind: 'not-selected'; key: string; group: null }
+  | { kind: 'no-results'; key: string; group: null }
+  | { kind: 'leading-action'; key: string; group: null; navIndex: number }
+  | { kind: 'picker-action'; key: string; group: RowGroup; action: ModelPickerAction; navIndex: number; sortableId?: string }
+  | { kind: 'header'; key: string; group: RowGroup; sectionKey: string; spaced: boolean; collapsed: boolean; providerId?: string }
+  | { kind: 'model'; key: string; group: RowGroup | null; section: SectionKind; entry: ModelPickerEntry; navIndex: number; sortableId?: string };
+
+type RowGroup = { key: string; label: string };
+
+type RowSizeKind = 'model' | 'header' | 'header-spaced' | 'action' | 'not-selected' | 'no-results';
+
+const rowSizeKind = (row: PickerRow): RowSizeKind => {
+  if (row.kind === 'header') return row.spaced ? 'header-spaced' : 'header';
+  if (row.kind === 'leading-action' || row.kind === 'picker-action') return 'action';
+  return row.kind;
 };
 
-const hasTooltipMetadata = (metadata?: ModelMetadata) => {
-  if (!metadata) return false;
-  return Boolean(
-    metadata.tool_call ||
-    metadata.reasoning ||
-    metadata.cost?.input !== undefined ||
-    metadata.cost?.output !== undefined ||
-    (metadata.modalities?.input?.length ?? 0) > 0 ||
-    (metadata.modalities?.output?.length ?? 0) > 0,
-  );
-};
-
-// The row sits inside the list's padding, so the card's offset from the row
-// has to clear that padding too, or the card covers the picker's edge.
-const ROW_TOOLTIP_OFFSET = 16;
-
-// Card width (max-w-xs) plus its offset from the row. Narrower room on both
-// sides means the card would land on top of the list it describes.
-const ROW_TOOLTIP_ROOM = 320 + ROW_TOOLTIP_OFFSET;
-
-/** The side with room for the details card, or null when neither side has it. */
-const pickRowTooltipSide = (row: Element | null): 'right' | 'left' | null => {
-  if (!row) return null;
-  const rect = row.getBoundingClientRect();
-  if (window.innerWidth - rect.right >= ROW_TOOLTIP_ROOM) return 'right';
-  if (rect.left >= ROW_TOOLTIP_ROOM) return 'left';
-  return null;
-};
-
-const ModelPickerRowTooltip: React.FC<{
-  metadata?: ModelMetadata;
-  active: boolean;
-  labels: ModelPickerListProps['labels'];
-  children: React.ReactElement;
-}> = ({ metadata, active, labels, children }) => {
-  const triggerRef = React.useRef<Element | null>(null);
-  const setTriggerRef = React.useCallback((node: Element | null) => { triggerRef.current = node; }, []);
-  // Null until the hover delay passes, then the side the card fits on.
-  const [side, setSide] = React.useState<'right' | 'left' | null>(null);
-
-  React.useEffect(() => {
-    if (!active) {
-      setSide(null);
-      return;
-    }
-    const timeout = window.setTimeout(() => setSide(pickRowTooltipSide(triggerRef.current)), 450);
-    return () => window.clearTimeout(timeout);
-  }, [active]);
-
-  if (!hasTooltipMetadata(metadata)) return children;
-
-  const inputModalities = metadata?.modalities?.input ?? [];
-  const outputModalities = metadata?.modalities?.output ?? [];
-  const capabilities = [
-    metadata?.tool_call ? labels.capabilityToolCalling : null,
-    metadata?.reasoning ? labels.capabilityReasoning : null,
-  ].filter(Boolean);
-
-  return (
-    <Tooltip delayDuration={0} open={active && side !== null} onOpenChange={() => {}}>
-      <TooltipTrigger asChild ref={setTriggerRef}>{children}</TooltipTrigger>
-      {active && side ? (
-        <TooltipContent side={side} sideOffset={ROW_TOOLTIP_OFFSET} className="max-w-xs text-start transition-none data-[starting-style]:opacity-100 data-[starting-style]:scale-100 data-[ending-style]:opacity-100 data-[ending-style]:scale-100">
-          <div className="flex flex-col gap-2 text-start text-xs">
-            {capabilities.length > 0 ? (
-              <div className="flex items-center justify-between gap-3 text-muted-foreground">
-                <span className="typography-meta font-medium">{labels.capabilities}</span>
-                <span className="typography-meta text-foreground">{capabilities.join(', ')}</span>
-              </div>
-            ) : null}
-            {inputModalities.length > 0 ? (
-              <div className="flex items-center justify-between gap-3 text-muted-foreground">
-                <span className="typography-meta font-medium">{labels.input}</span>
-                <span className="typography-meta text-foreground">{inputModalities.join(', ')}</span>
-              </div>
-            ) : null}
-            {outputModalities.length > 0 ? (
-              <div className="flex items-center justify-between gap-3 text-muted-foreground">
-                <span className="typography-meta font-medium">{labels.output}</span>
-                <span className="typography-meta text-foreground">{outputModalities.join(', ')}</span>
-              </div>
-            ) : null}
-            {(metadata?.cost?.input !== undefined || metadata?.cost?.output !== undefined) ? (
-              <div className="flex items-center justify-between gap-3 text-muted-foreground">
-                <span className="typography-meta font-medium">{labels.costPerMillion}</span>
-                <span className="typography-meta text-foreground">In {formatCost(metadata?.cost?.input)} · Out {formatCost(metadata?.cost?.output)}</span>
-              </div>
-            ) : null}
-          </div>
-        </TooltipContent>
-      ) : null}
-    </Tooltip>
-  );
-};
-
-const createIndexSelectionStore = (): IndexSelectionStore => {
-  let value = 0;
-  const listeners = new Set<() => void>();
-  const listenersByIndex = new Map<number, Set<() => void>>();
-  const notify = (index: number) => {
-    const listeners = listenersByIndex.get(index);
-    if (!listeners) return;
-    for (const listener of listeners) listener();
-  };
-
-  return {
-    getSnapshot: () => value,
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeIndex: (index, listener) => {
-      let listeners = listenersByIndex.get(index);
-      if (!listeners) {
-        listeners = new Set();
-        listenersByIndex.set(index, listeners);
-      }
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0) listenersByIndex.delete(index);
-      };
-    },
-    set: (nextValue) => {
-      if (value === nextValue) return;
-      const previousValue = value;
-      value = nextValue;
-      notify(previousValue);
-      notify(nextValue);
-      for (const listener of listeners) listener();
-    },
-  };
-};
-
-const ModelPickerRowHighlight: React.FC<{
-  store: IndexSelectionStore;
-  index: number;
-  renderVersion?: number;
-  children: (isHighlighted: boolean) => React.ReactNode;
-}> = React.memo(({ store, index, children }) => {
-  const [isHighlighted, setIsHighlighted] = React.useState(() => store.getSnapshot() === index);
-
-  React.useEffect(() => {
-    const sync = () => setIsHighlighted(store.getSnapshot() === index);
-    sync();
-    return store.subscribeIndex(index, sync);
-  }, [index, store]);
-
-  return <>{children(isHighlighted)}</>;
-});
-
-// The leading action's place in the keyboard list: it is highlighted and
-// chosen like a row, but it is not a model entry.
-const LEADING_ACTION_SLOT = 'leading-action';
-export type ModelPickerAction = { id: string; label: string; onSelect: () => void; icon?: React.ReactNode; disabled?: boolean; selected?: boolean; favorite?: boolean; onToggleFavorite?: () => void };
-type NavigationItem = ModelPickerEntry | typeof LEADING_ACTION_SLOT | { kind: 'action'; action: ModelPickerAction };
-
-const entryOf = (item: NavigationItem | undefined): ModelPickerEntry | undefined => (
-  item === LEADING_ACTION_SLOT || item?.kind === 'action' ? undefined : item
-);
-
-const ModelPickerFooter: React.FC<{
-  store: IndexSelectionStore;
-  navigationList: NavigationItem[];
-  footerContent: ModelPickerListProps['footerContent'];
-  fallback: React.ReactNode;
-}> = ({ store, navigationList, footerContent, fallback }) => {
-  const [selectedIndex, setSelectedIndex] = React.useState(() => store.getSnapshot());
-
-  React.useEffect(() => store.subscribe(() => setSelectedIndex(store.getSnapshot())), [store]);
-
-  const activeEntry = entryOf(navigationList[selectedIndex]);
-  return <>{typeof footerContent === 'function' ? footerContent(activeEntry) : (footerContent ?? fallback)}</>;
-};
-
-type SortableSectionHandleProps = {
-  attributes: ReturnType<typeof useSortable>['attributes'];
-  listeners: ReturnType<typeof useSortable>['listeners'];
-  setActivatorNodeRef: ReturnType<typeof useSortable>['setActivatorNodeRef'];
-  isDragging: boolean;
-};
-
-const SortableProviderSection: React.FC<{
-  id: string;
-  disabled?: boolean;
-  children: (dragHandleProps: SortableSectionHandleProps) => React.ReactNode;
-}> = ({ id, disabled = false, children }) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id, disabled });
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        transform: DndCSS.Translate.toString(transform),
-        transition,
-      }}
-      className={cn(isDragging && 'opacity-60')}
-    >
-      {children({ attributes, listeners, setActivatorNodeRef, isDragging })}
-    </div>
-  );
-};
-
-// A provider section this long mounts only the rows near the viewport.
-// Aggregators (OpenRouter, Kilo) list hundreds of models, and with every row
-// mounted each highlight change restyles all of them (#4003). Shorter sections
-// keep plain rendering.
-const VIRTUAL_SECTION_MIN_ROWS = 40;
-// The row height at the default font size. The measured height is kept for
-// the next mount, so a section that opens again is laid out right at once and
-// a row revealed below it is not pushed away by estimated rows growing.
-let lastMeasuredRowHeight = 31;
-
-interface VirtualSectionHandle {
-  base: number;
-  count: number;
-  scrollToIndex: (index: number) => void;
-}
-
-const VirtualProviderRows: React.FC<{
-  sectionKey: string;
-  entries: ModelPickerEntry[];
-  base: number;
-  sections: Map<string, VirtualSectionHandle>;
-  renderRow: (entry: ModelPickerEntry, rowIndex: number) => React.ReactNode;
-}> = ({ sectionKey, entries, base, sections, renderRow }) => {
-  const listRef = React.useRef<HTMLDivElement | null>(null);
-  const [scrollMargin, setScrollMargin] = React.useState(0);
-  // Rows are single-line and share one height, which follows the UI font
-  // size. One mounted row is measured instead of observing every row: per-row
-  // observers re-measured the whole window on each frame of the menu's open
-  // animation and cost more than the rows they saved.
-  const [rowHeight, setRowHeight] = React.useState(lastMeasuredRowHeight);
-  // Found from the DOM: the overlay publishes its ref only after this
-  // section's first layout pass, and waiting for it would re-render the list.
-  const getScrollElement = React.useCallback(
-    () => listRef.current?.closest<HTMLElement>('.overlay-scrollbar-target') ?? null,
-    [],
-  );
-  const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
-    count: entries.length,
-    getScrollElement,
-    estimateSize: () => rowHeight,
-    overscan: 10,
-    scrollMargin,
-    getItemKey: (index) => `${entries[index]?.providerID}-${entries[index]?.modelID}`,
-  });
-
-  // The list's offset inside the scroller moves when sections above it
-  // collapse, filter or reorder: all of those resize the scroller's content or
-  // change this section's first index. Reading it on every render instead
-  // forces a layout per render while the menu opens.
-  React.useLayoutEffect(() => {
-    const list = listRef.current;
-    const scrollElement = getScrollElement();
-    const content = scrollElement?.firstElementChild;
-    if (!list || !scrollElement) return;
-    const measure = () => {
-      const next = list.getBoundingClientRect().top - scrollElement.getBoundingClientRect().top + scrollElement.scrollTop;
-      setScrollMargin((previous) => (Math.abs(previous - next) < 0.5 ? previous : next));
-      const row = list.firstElementChild?.firstElementChild;
-      const height = row instanceof HTMLElement ? row.offsetHeight : 0;
-      if (height > 0) {
-        lastMeasuredRowHeight = height;
-        setRowHeight(height);
-      }
-    };
-    measure();
-    if (!content) return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [base, getScrollElement]);
-
-  React.useLayoutEffect(() => {
-    sections.set(sectionKey, {
-      base,
-      count: entries.length,
-      scrollToIndex: (index) => virtualizer.scrollToIndex(index, { align: 'auto' }),
-    });
-    return () => { sections.delete(sectionKey); };
-  }, [base, entries.length, sectionKey, sections, virtualizer]);
-
-  React.useLayoutEffect(() => { virtualizer.measure(); }, [rowHeight, virtualizer]);
-
-  return (
-    <div ref={listRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-      {virtualizer.getVirtualItems().map((item) => {
-        const entry = entries[item.index];
-        if (!entry) return null;
-        return (
-          <div
-            key={item.key}
-            className="absolute inset-s-0 top-0 w-full"
-            style={{ height: item.size, transform: `translateY(${item.start - scrollMargin}px)` }}
-          >
-            {renderRow(entry, base + item.index)}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
+const measuredRowHeights = {
+  model: 31,
+  header: 30,
+  'header-spaced': 38,
+  action: 31,
+  'not-selected': 31,
+  'no-results': 56,
+} satisfies Record<RowSizeKind, number>;
 
 const STICKY_HEADER_OFFSET = 32;
 const STICKY_FADE_MAX_SIZE = 52;
 const STICKY_FADE_MIN_SIZE = 36;
 const STICKY_FADE_CLEAR_MAX_SIZE = 28;
 
-const scrollIntoView = (container: HTMLElement | null, node: HTMLElement | null) => {
-  if (!node) return;
-  if (!container) {
-    node.scrollIntoView({ block: 'nearest' });
-    return;
-  }
-
-  const containerRect = container.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  const top = nodeRect.top - containerRect.top + container.scrollTop;
-  const bottom = top + nodeRect.height;
-  const viewTop = container.scrollTop;
-  const viewBottom = viewTop + container.clientHeight;
-  const viewTopWithHeader = viewTop + STICKY_HEADER_OFFSET;
-  const target = top < viewTopWithHeader
-    ? top - STICKY_HEADER_OFFSET
-    : bottom > viewBottom
-      ? bottom - container.clientHeight
-      : viewTop;
-  const max = Math.max(0, container.scrollHeight - container.clientHeight);
-  container.scrollTop = Math.max(0, Math.min(target, max));
-};
-
-interface ModelPickerListProps {
-  providers: ModelPickerProvider[];
-  favoriteModels: ModelPickerFavoriteEntry[];
-  favoriteActions?: ModelPickerAction[];
-  favoriteOrder?: string[];
-  onReorderFavoriteItem?: (active: string, over: string) => void;
-  onReorderAction?: (active: string, over: string) => void;
-  recentModels: ModelPickerFavoriteEntry[];
-  searchQuery: string;
-  onSearchQueryChange: (value: string) => void;
-  onSelect: (entry: ModelPickerEntry) => void;
-  labels: {
-    searchPlaceholder: string;
-    noResults: string;
-    favorites: string;
-    recent: string;
-    keyboardHint: string;
-    notSelected?: string;
-    favorite?: string;
-    unfavorite?: string;
-    capabilities?: string;
-    capabilityToolCalling?: string;
-    capabilityReasoning?: string;
-    input?: string;
-    output?: string;
-    costPerMillion?: string;
-  };
-  selectedModel?: { providerID: string; modelID: string } | null;
-  /**
-   * A row pinned above favorites and providers: the Auto routing entry. It is
-   * not one of `providers`, takes part in keyboard navigation like any row,
-   * and is filtered by the search query on its display name.
-   */
-  leadingEntry?: ModelPickerEntry | null;
-  /**
-   * An action pinned right after the leading entry (the composer's "Run on
-   * several models"). It is not a model, but it looks and navigates like a
-   * row: arrows and the pointer highlight it, Enter runs it. It hides while a
-   * search query is typed.
-   */
-  leadingAction?: { label: string; icon: React.ReactNode; onSelect: () => void } | null;
-  /** Named non-model selections share the model list's search and keyboard navigation. */
-  actionGroup?: { id: string; label: string; icon?: React.ReactNode; actions: ModelPickerAction[] };
-  hiddenModels?: HiddenModel[];
-  allowedProviderIds?: string[];
-  /**
-   * Per-model gate, for callers whose feature needs a capability rather than a
-   * provider (e.g. structured output). Applied on top of `allowedProviderIds`.
-   */
-  isModelAllowed?: (providerID: string, modelID: string) => boolean;
-  includeNotSelected?: boolean;
-  onSelectNone?: () => void;
-  selectionCount?: (entry: ModelPickerEntry) => number;
-  disabled?: boolean;
-  maxHeightClassName?: string;
-  maxHeightStyle?: React.CSSProperties;
-  sectionHeaderClassName?: string;
-  rowClassName?: string;
-  stickyHeaders?: boolean;
-  autoFocus?: boolean;
-  onEscape?: () => void;
-  isFavorite?: (entry: ModelPickerEntry) => boolean;
-  onToggleFavorite?: (entry: ModelPickerEntry) => void;
-  renderRowEnd?: (entry: ModelPickerEntry, state: { isHighlighted: boolean; isSelected: boolean }) => React.ReactNode;
-  onActiveKeyDown?: (event: React.KeyboardEvent, entry: ModelPickerEntry | undefined) => void;
-  onActiveEntryChange?: (entry: ModelPickerEntry | undefined) => void;
-  onVariantKey?: (event: React.KeyboardEvent, entry: ModelPickerEntry) => boolean;
-  providerOrder?: string[];
-  onReorderProvider?: (orderedProviderIDs: string[]) => void;
-  reorderProviderTitle?: string;
-  footerContent?: React.ReactNode | ((activeEntry: ModelPickerEntry | undefined) => React.ReactNode);
-  renderVersion?: number;
-  tooltipsEnabled?: boolean;
-}
+const favoriteSortId = (entry: ModelPickerEntry) => `${entry.providerID}:${entry.modelID}`;
+const PROVIDER_SORT_PREFIX = 'provider:';
+const ACTION_GROUP_SORT_PREFIX = 'action-group:';
 
 export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   providers,
@@ -511,6 +122,10 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   leadingEntry = null,
   leadingAction = null,
   actionGroup,
+  searchAction = null,
+  onEntryDetails,
+  providersStartCollapsed = false,
+  showKeyboardHints = true,
   hiddenModels = [],
   allowedProviderIds,
   isModelAllowed,
@@ -521,6 +136,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   maxHeightClassName = 'max-h-[min(400px,calc(100dvh-12rem))] flex-1',
   maxHeightStyle,
   sectionHeaderClassName,
+  sheetCaptions = false,
   rowClassName,
   stickyHeaders = true,
   autoFocus = true,
@@ -531,6 +147,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   onActiveKeyDown,
   onActiveEntryChange,
   onVariantKey,
+  onReorderFavorite,
   providerOrder,
   onReorderProvider,
   reorderProviderTitle,
@@ -538,9 +155,6 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   renderVersion,
   tooltipsEnabled = true,
 }) => {
-  // getModelMetadata falls back to the provider's own model record for models
-  // models.dev does not list. Subscribe to both sources it reads so rows
-  // re-render when either arrives.
   const getModelMetadata = useConfigStore((state) => state.getModelMetadata);
   useConfigStore((state) => state.modelsMetadata);
   useConfigStore((state) => state.providers);
@@ -549,39 +163,93 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   const selectionStore = selectionStoreRef.current;
   const itemRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const scrollRef = React.useRef<HTMLElement | null>(null);
+  const [scrollElement, setScrollElement] = React.useState<HTMLElement | null>(null);
+  const attachScroller = React.useCallback((element: HTMLElement | null) => {
+    scrollRef.current = element;
+    setScrollElement(element);
+  }, []);
+  const listRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
-  const virtualSectionsRef = React.useRef<Map<string, VirtualSectionHandle>>(new Map());
+  const listboxId = React.useId();
+  const optionId = (index: number) => `${listboxId}-option-${index}`;
   const stickyFadeSizeRef = React.useRef(0);
-  const sectionHeaderSentinelRefs = React.useRef<Map<string, HTMLDivElement | null>>(new Map());
-  const [stuckSectionHeaders, setStuckSectionHeaders] = React.useState<Set<string>>(new Set());
   const keyboardOwnsSelectionRef = React.useRef(false);
   const lastMousePositionRef = React.useRef<{ x: number; y: number } | null>(null);
+  const suppressClickRef = React.useRef(false);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
+  // external: https://developer.mozilla.org/en-US/docs/Web/API/Element/contextmenu_event Android can report a long press as a context menu too; open details once.
+  const longPressRef = React.useRef<{ timer: number; x: number; y: number } | null>(null);
+  const detailsOpenedAtRef = React.useRef(0);
+  const cancelLongPress = () => {
+    if (longPressRef.current) window.clearTimeout(longPressRef.current.timer);
+    longPressRef.current = null;
+  };
+  React.useEffect(() => () => {
+    if (longPressRef.current) window.clearTimeout(longPressRef.current.timer);
+  }, []);
+  const openDetails = (entry: ModelPickerEntry) => {
+    if (!onEntryDetails || performance.now() - detailsOpenedAtRef.current < 700) return;
+    detailsOpenedAtRef.current = performance.now();
+    onEntryDetails(entry);
+  };
+  const detailsHandlers = (entry: ModelPickerEntry): React.HTMLAttributes<HTMLDivElement> => (onEntryDetails ? {
+    onPointerDown: (event) => {
+      cancelLongPress();
+      if (event.pointerType !== 'touch') return;
+      const timer = window.setTimeout(() => {
+        longPressRef.current = null;
+        swallowGestureClick();
+        openDetails(entry);
+      }, 500);
+      longPressRef.current = { timer, x: event.clientX, y: event.clientY };
+    },
+    onPointerMove: (event) => {
+      const press = longPressRef.current;
+      if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) cancelLongPress();
+    },
+    onPointerUp: cancelLongPress,
+    onPointerCancel: cancelLongPress,
+    onContextMenu: (event) => {
+      event.preventDefault();
+      cancelLongPress();
+      openDetails(entry);
+    },
+  } : {});
   const collapsedRecord = useModelPickerSectionsStore((state) => state.collapsedSections);
-  const toggleSection = useModelPickerSectionsStore((state) => state.toggleSection);
-  const collapsedSections = React.useMemo(
-    () => new Set(Object.keys(collapsedRecord).filter((key) => collapsedRecord[key])),
-    [collapsedRecord],
-  );
-  // Desktop-only provider reordering: a MouseSensor (no TouchSensor) keeps the
-  // section headers tappable/scrollable on touch devices while enabling
-  // click-and-drag with a mouse.
-  const providerSectionSensors = useSensors(
+  const toggleStoredSection = useModelPickerSectionsStore((state) => state.toggleSection);
+  const setSectionCollapsed = useModelPickerSectionsStore((state) => state.setSectionCollapsed);
+  const searching = searchQuery.trim().length > 0;
+  const selectedProviderKey = selectedModel ? `provider:${selectedModel.providerID}` : null;
+  const isSectionCollapsed = React.useCallback((key: string) => {
+    const startsCollapsed = providersStartCollapsed && key.startsWith('provider:');
+    if (startsCollapsed && searching) return false;
+    if (collapsedRecord[key]) return true;
+    return startsCollapsed && !collapsedRecord[`open:${key}`] && key !== selectedProviderKey;
+  }, [collapsedRecord, providersStartCollapsed, searching, selectedProviderKey]);
+  const toggleSection = React.useCallback((key: string) => {
+    if (providersStartCollapsed && key.startsWith('provider:')) setSectionCollapsed(key, !isSectionCollapsed(key));
+    else toggleStoredSection(key);
+  }, [isSectionCollapsed, providersStartCollapsed, setSectionCollapsed, toggleStoredSection]);
+  const sortSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
   );
 
   const allowedProviderSet = React.useMemo(() => {
-    // undefined = no restriction; [] = allow none. Treating empty like
-    // "unrestricted" would resurface providers without a login in pickers that
-    // intentionally pass the authenticated-only list.
     if (!allowedProviderIds) return null;
     return new Set(allowedProviderIds);
   }, [allowedProviderIds]);
 
   const providerById = React.useMemo(() => new Map(providers.map((provider) => [provider.id, provider])), [providers]);
 
-  const isHidden = React.useCallback((providerID: string, modelID: string) => {
-    return hiddenModels.some((hidden) => hidden.providerID === providerID && hidden.modelID === modelID);
-  }, [hiddenModels]);
+  const hiddenKeys = React.useMemo(
+    () => new Set(hiddenModels.map((hidden) => `${hidden.providerID}:${hidden.modelID}`)),
+    [hiddenModels],
+  );
+  const isHidden = React.useCallback(
+    (providerID: string, modelID: string) => hiddenKeys.has(`${providerID}:${modelID}`),
+    [hiddenKeys],
+  );
 
   const matchesQuery = React.useCallback(
     (modelName: string, providerName: string, modelID?: string) =>
@@ -597,13 +265,18 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     return matchesQuery(getModelDisplayName(model), providerName, modelID);
   }), [allowedProviderSet, favoriteModels, isHidden, isModelAllowed, matchesQuery, providerById]);
 
-  const filteredRecents = React.useMemo(() => recentModels.filter(({ model, providerID, modelID }) => {
-    if (allowedProviderSet && !allowedProviderSet.has(providerID)) return false;
-    if (isModelAllowed && !isModelAllowed(providerID, modelID)) return false;
-    if (isHidden(providerID, modelID)) return false;
-    const providerName = providerById.get(providerID)?.name || providerID;
-    return matchesQuery(getModelDisplayName(model), providerName, modelID);
-  }), [allowedProviderSet, isHidden, isModelAllowed, matchesQuery, providerById, recentModels]);
+  const filteredRecents = React.useMemo(() => {
+    const favoriteIds = new Set(favoriteModels.map(favoriteSortId));
+    return recentModels.filter((entry) => {
+      const { model, providerID, modelID } = entry;
+      if (favoriteIds.has(favoriteSortId(entry))) return false;
+      if (allowedProviderSet && !allowedProviderSet.has(providerID)) return false;
+      if (isModelAllowed && !isModelAllowed(providerID, modelID)) return false;
+      if (isHidden(providerID, modelID)) return false;
+      const providerName = providerById.get(providerID)?.name || providerID;
+      return matchesQuery(getModelDisplayName(model), providerName, modelID);
+    });
+  }, [allowedProviderSet, favoriteModels, isHidden, isModelAllowed, matchesQuery, providerById, recentModels]);
 
   const orderedProviders = React.useMemo(() => {
     if (!providerOrder || providerOrder.length === 0) return providers;
@@ -629,78 +302,33 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     })
     .filter((provider) => provider.models.length > 0), [allowedProviderSet, isHidden, isModelAllowed, matchesQuery, orderedProviders]);
 
-  const filteredActions = React.useMemo(() => actionGroup?.actions.filter((action) => matchesRankQuery([action.label, actionGroup.label], searchQuery)) ?? [], [actionGroup, searchQuery]);
-  const filteredFavoriteActions = React.useMemo(() => favoriteActions.filter((action) => matchesRankQuery([action.label, actionGroup?.label], searchQuery)), [favoriteActions, actionGroup?.label, searchQuery]);
-  const hasFavorites = filteredFavorites.length > 0 || filteredFavoriteActions.length > 0;
+  const filteredActions = React.useMemo(
+    () => actionGroup?.actions.filter((action) => matchesRankQuery([action.label, actionGroup.label], searchQuery)) ?? [],
+    [actionGroup, searchQuery],
+  );
+  const filteredFavoriteActions = React.useMemo(
+    () => favoriteActions.filter((action) => matchesRankQuery([action.label, actionGroup?.label], searchQuery)),
+    [favoriteActions, actionGroup?.label, searchQuery],
+  );
 
-  const visibleSectionKeys = React.useMemo(() => [
-    ...(hasFavorites ? ['favorites'] : []),
-    ...(filteredRecents.length > 0 ? ['recent'] : []),
-    ...(actionGroup && filteredActions.length ? [actionGroup.id] : []),
-    ...filteredProviders.map((provider) => `provider:${provider.id}`),
-  ], [actionGroup, filteredActions.length, hasFavorites, filteredProviders, filteredRecents.length]);
-
-  React.useEffect(() => {
-    if (!stickyHeaders || !scrollRef.current) {
-      setStuckSectionHeaders((previous) => previous.size === 0 ? previous : new Set());
-      return;
-    }
-
-    const root = scrollRef.current;
-    const observer = new IntersectionObserver((entries) => {
-      setStuckSectionHeaders((previous) => {
-        const next = new Set(previous);
-        let changed = false;
-        for (const entry of entries) {
-          const sectionKey = (entry.target as HTMLElement).dataset.modelSectionKey;
-          if (!sectionKey) continue;
-          const rootTop = entry.rootBounds?.top ?? root.getBoundingClientRect().top;
-          const isAboveScroller = !entry.isIntersecting && entry.boundingClientRect.top < rootTop;
-          if (next.has(sectionKey) === isAboveScroller) continue;
-          changed = true;
-          if (isAboveScroller) next.add(sectionKey);
-          else next.delete(sectionKey);
-        }
-        return changed ? next : previous;
-      });
-    }, { root, threshold: 0 });
-
-    sectionHeaderSentinelRefs.current.forEach((element) => {
-      if (element) observer.observe(element);
-    });
-    return () => observer.disconnect();
-  }, [stickyHeaders, visibleSectionKeys]);
-
-  const syncStickyFade = React.useCallback((scroller: HTMLElement) => {
-    const hasTopScroll = scroller.scrollTop > 1;
-    const fadeSize = hasTopScroll
-      ? Math.min(STICKY_FADE_MIN_SIZE + scroller.scrollTop, STICKY_FADE_MAX_SIZE)
-      : 0;
-    stickyFadeSizeRef.current = fadeSize;
-    const fadeRoot = scroller.closest<HTMLElement>('.oc-sticky-fade-root');
-    fadeRoot?.style.setProperty('--scroll-shadow-top-size', `${fadeSize}px`);
-    fadeRoot?.style.setProperty(
-      '--scroll-shadow-top-clear-size',
-      `${Math.min(Math.max(fadeSize - 8, 0), STICKY_FADE_CLEAR_MAX_SIZE)}px`,
-    );
-  }, []);
-
-  const blockStickyFadeInteraction = React.useCallback((
-    event: React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement>,
-  ) => {
-    if ((event.target as Element).closest('[data-overlay-scrollbar-thumb], [data-model-picker-sticky-header]')) return;
-    // Enter or Space on a focused button clicks with no pointer position (detail 0,
-    // coordinates 0), which would otherwise read as a click on the fade.
-    if (event.type === 'click' && event.detail === 0) return;
-    const eventY = event.clientY - event.currentTarget.getBoundingClientRect().top;
-    if (eventY >= stickyFadeSizeRef.current) return;
-    event.preventDefault();
-    event.stopPropagation();
-  }, []);
-
-  React.useLayoutEffect(() => {
-    if (stickyHeaders && scrollRef.current) syncStickyFade(scrollRef.current);
-  }, [stickyHeaders, syncStickyFade, visibleSectionKeys]);
+  const favoriteItems = React.useMemo(() => {
+    const items = [
+      ...filteredFavorites.map((entry) => ({
+        kind: 'model' as const,
+        id: onReorderFavoriteItem ? modelPickerModelKey(entry) : favoriteSortId(entry),
+        orderKey: modelPickerModelKey(entry),
+        entry,
+      })),
+      ...filteredFavoriteActions.map((action) => ({
+        kind: 'action' as const,
+        id: modelPickerActionKey(action.id),
+        orderKey: modelPickerActionKey(action.id),
+        action,
+      })),
+    ];
+    return favoriteOrder.length > 0 ? orderPickerItems(items, favoriteOrder, (item) => item.orderKey) : items;
+  }, [filteredFavorites, filteredFavoriteActions, favoriteOrder, onReorderFavoriteItem]);
+  const hasFavorites = favoriteItems.length > 0;
 
   const visibleLeadingEntry = React.useMemo(() => {
     if (!leadingEntry) return null;
@@ -708,93 +336,264 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   }, [leadingEntry, matchesQuery]);
 
   const showLeadingAction = Boolean(leadingAction) && !searchQuery.trim();
-
-  const favoriteItems = React.useMemo(() => orderPickerItems([
-    ...filteredFavorites.map((entry) => ({ kind: 'model' as const, id: modelPickerModelKey(entry), label: getModelDisplayName(entry.model), disabled, entry })),
-    ...filteredFavoriteActions.map((action) => ({ kind: 'action' as const, id: modelPickerActionKey(action.id), label: action.label, disabled: disabled || action.disabled, action })),
-  ], favoriteOrder, (item) => item.id), [filteredFavorites, filteredFavoriteActions, favoriteOrder, disabled]);
-
-  const flatModelList = React.useMemo(() => {
-    const items: NavigationItem[] = [];
-    if (visibleLeadingEntry) items.push(visibleLeadingEntry);
-    if (showLeadingAction) items.push(LEADING_ACTION_SLOT);
-    if (!collapsedSections.has('favorites')) favoriteItems.forEach((item) => {
-      if (item.kind === 'model') items.push(item.entry);
-      else if (!item.action.disabled) items.push({ kind: 'action', action: item.action });
-    });
-    if (!collapsedSections.has('recent')) filteredRecents.forEach((entry) => items.push(entry));
-    if (actionGroup && (!collapsedSections.has(actionGroup.id) || searchQuery.trim())) filteredActions.forEach((action) => { if (!action.disabled) items.push({ kind: 'action', action }); });
-    filteredProviders.forEach((provider) => {
-      if (collapsedSections.has(`provider:${provider.id}`)) return;
-      provider.models.forEach((model) => items.push({ model, providerID: provider.id, modelID: model.id }));
-    });
-    return items;
-  }, [actionGroup, collapsedSections, filteredActions, favoriteItems, filteredProviders, filteredRecents, searchQuery, showLeadingAction, visibleLeadingEntry]);
-
-  const hasResults = filteredActions.length > 0 || filteredFavoriteActions.length > 0 || flatModelList.some((item) => item !== LEADING_ACTION_SLOT);
-  const favoriteSortingEnabled = Boolean(onReorderFavoriteItem) && searchQuery.trim().length === 0;
+  const favoriteSortingEnabled = Boolean(onReorderFavoriteItem || onReorderFavorite)
+    && searchQuery.trim().length === 0
+    && (onReorderFavoriteItem ? favoriteItems.length > 1 : filteredFavorites.length > 1);
+  const actionSortingEnabled = Boolean(onReorderAction) && searchQuery.trim().length === 0 && filteredActions.length > 1;
   const providerSortingEnabled = Boolean(onReorderProvider) && searchQuery.trim().length === 0 && !allowedProviderSet && filteredProviders.length > 1;
-  const selectedModelIndex = searchQuery.trim() ? 0 : flatModelList.findIndex((item) => {
-    if (item !== LEADING_ACTION_SLOT && item.kind === 'action') return item.action.selected;
+  const draggingProvider = draggingId?.startsWith(PROVIDER_SORT_PREFIX) ?? false;
+
+  const { rows, navigation, navToRow } = React.useMemo(() => {
+    const rows: PickerRow[] = [];
+    const navigation: NavigationItem[] = [];
+    const navToRow: number[] = [];
+    const pushModel = (key: string, group: RowGroup | null, section: SectionKind, entry: ModelPickerEntry, sortableId?: string) => {
+      navToRow.push(rows.length);
+      rows.push({ kind: 'model', key, group, section, entry, navIndex: navigation.length, sortableId });
+      navigation.push(entry);
+    };
+    const pushPickerAction = (key: string, group: RowGroup, action: ModelPickerAction, sortableId?: string) => {
+      if (action.disabled) {
+        rows.push({ kind: 'picker-action', key, group, action, navIndex: -1, sortableId });
+        return;
+      }
+      navToRow.push(rows.length);
+      rows.push({ kind: 'picker-action', key, group, action, navIndex: navigation.length, sortableId });
+      navigation.push({ kind: 'action', action });
+    };
+    if (includeNotSelected) rows.push({ kind: 'not-selected', key: 'not-selected', group: null });
+    const hasModels = Boolean(visibleLeadingEntry)
+      || hasFavorites
+      || filteredRecents.length > 0
+      || filteredActions.length > 0
+      || filteredProviders.length > 0;
+    if (!hasModels) rows.push({ kind: 'no-results', key: 'no-results', group: null });
+    if (visibleLeadingEntry) {
+      pushModel(`leading-${visibleLeadingEntry.providerID}-${visibleLeadingEntry.modelID}`, null, 'leading', visibleLeadingEntry);
+    }
+    if (leadingAction && showLeadingAction) {
+      navToRow.push(rows.length);
+      rows.push({ kind: 'leading-action', key: 'leading-action', group: null, navIndex: navigation.length });
+      navigation.push(LEADING_ACTION_SLOT);
+    }
+    const pushSection = (sectionKey: string, label: string, section: SectionKind, entries: ModelPickerEntry[], collapsed: boolean, providerId?: string) => {
+      const group = { key: sectionKey, label };
+      rows.push({ kind: 'header', key: `header:${sectionKey}`, group, sectionKey, spaced: rows.length > 0, collapsed, providerId });
+      if (collapsed) return;
+      for (const entry of entries) {
+        pushModel(`${section}-${entry.providerID}-${entry.modelID}`, group, section, entry);
+      }
+    };
+    if (hasFavorites) {
+      const group = { key: 'favorites', label: labels.favorites };
+      const collapsed = isSectionCollapsed('favorites');
+      rows.push({ kind: 'header', key: 'header:favorites', group, sectionKey: 'favorites', spaced: rows.length > 0, collapsed });
+      if (!collapsed) {
+        for (const item of favoriteItems) {
+          if (item.kind === 'model') {
+            pushModel(
+              `fav-${item.entry.providerID}-${item.entry.modelID}`,
+              group,
+              'fav',
+              item.entry,
+              favoriteSortingEnabled ? item.id : undefined,
+            );
+          } else {
+            pushPickerAction(
+              `fav-action-${item.action.id}`,
+              group,
+              item.action,
+              favoriteSortingEnabled && onReorderFavoriteItem ? item.id : undefined,
+            );
+          }
+        }
+      }
+    }
+    if (filteredRecents.length > 0) pushSection('recent', labels.recent, 'recent', filteredRecents, isSectionCollapsed('recent'));
+    if (actionGroup && filteredActions.length > 0) {
+      const group = { key: actionGroup.id, label: actionGroup.label };
+      const collapsed = !searching && isSectionCollapsed(actionGroup.id);
+      rows.push({ kind: 'header', key: `header:${actionGroup.id}`, group, sectionKey: actionGroup.id, spaced: rows.length > 0, collapsed });
+      if (!collapsed) {
+        for (const action of filteredActions) {
+          pushPickerAction(
+            `action-group-${actionGroup.id}-${action.id}`,
+            group,
+            action,
+            actionSortingEnabled ? `${ACTION_GROUP_SORT_PREFIX}${action.id}` : undefined,
+          );
+        }
+      }
+    }
+    for (const provider of filteredProviders) {
+      const sectionKey = `provider:${provider.id}`;
+      const collapsed = draggingProvider || isSectionCollapsed(sectionKey);
+      const entries = provider.models.map((model) => ({ model, providerID: provider.id, modelID: model.id }));
+      pushSection(sectionKey, provider.name || provider.id, 'provider', entries, collapsed, provider.id);
+    }
+    return { rows, navigation, navToRow };
+  }, [
+    actionGroup,
+    actionSortingEnabled,
+    draggingProvider,
+    favoriteItems,
+    favoriteSortingEnabled,
+    filteredActions,
+    filteredProviders,
+    filteredRecents,
+    hasFavorites,
+    includeNotSelected,
+    isSectionCollapsed,
+    labels.favorites,
+    labels.recent,
+    leadingAction,
+    onReorderFavoriteItem,
+    searching,
+    showLeadingAction,
+    visibleLeadingEntry,
+  ]);
+
+  const favoriteLookup: Map<string, ModelPickerEntry> = React.useMemo(() => new Map(
+    filteredFavorites.map((entry) => [favoriteSortId(entry), entry] as const),
+  ), [filteredFavorites]);
+  const favoriteItemIds = React.useMemo(() => new Set(favoriteItems.map((item) => item.id)), [favoriteItems]);
+
+  const [scrollMargin, setScrollMargin] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !scrollElement) return;
+    const next = list.getBoundingClientRect().top - scrollElement.getBoundingClientRect().top + scrollElement.scrollTop;
+    setScrollMargin((previous) => (Math.abs(previous - next) < 0.5 ? previous : next));
+  }, [scrollElement]);
+
+  const draggingRowIndex = React.useMemo(() => {
+    if (!draggingId) return -1;
+    return rows.findIndex((row) => (row.kind === 'header' && row.providerId && `${PROVIDER_SORT_PREFIX}${row.providerId}` === draggingId)
+      || ((row.kind === 'model' || row.kind === 'picker-action') && row.sortableId === draggingId));
+  }, [draggingId, rows]);
+  const rangeExtractor = React.useCallback((range: Range) => {
+    const indexes = defaultRangeExtractor(range);
+    if (draggingRowIndex < 0 || indexes.includes(draggingRowIndex)) return indexes;
+    return [...indexes, draggingRowIndex].sort((a, b) => a - b);
+  }, [draggingRowIndex]);
+
+  const initialHeight = typeof window !== 'undefined' ? window.innerHeight : 600;
+  const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    initialRect: { width: 0, height: initialHeight },
+    estimateSize: (index) => {
+      const row = rows[index];
+      return row ? measuredRowHeights[rowSizeKind(row)] : measuredRowHeights.model;
+    },
+    getItemKey: (index) => rows[index]?.key ?? index,
+    overscan: 8,
+    scrollMargin,
+    scrollPaddingStart: stickyHeaders ? STICKY_HEADER_OFFSET : 0,
+    rangeExtractor,
+    observeElementRect: (instance, callback) => observeElementRect(instance, (rect) => {
+      callback({ width: rect.width, height: Math.min(rect.height, typeof window !== 'undefined' ? window.innerHeight : 600) });
+    }),
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+
+  const measuredKindsRef = React.useRef(new Set<RowSizeKind>());
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    let changed = false;
+    for (const element of list.querySelectorAll<HTMLElement>('[data-row-size-kind]')) {
+      const kind = element.dataset.rowSizeKind as RowSizeKind;
+      if (measuredKindsRef.current.has(kind)) continue;
+      const height = element.offsetHeight;
+      if (height <= 0) continue;
+      measuredKindsRef.current.add(kind);
+      if (Math.abs(measuredRowHeights[kind] - height) >= 0.5) {
+        measuredRowHeights[kind] = height;
+        changed = true;
+      }
+    }
+    if (changed) virtualizer.measure();
+  });
+
+  const hasResults = filteredActions.length > 0 || filteredFavoriteActions.length > 0 || navigation.some((item) => item !== LEADING_ACTION_SLOT);
+  const selectedModelIndex = searchQuery.trim() ? 0 : navigation.findIndex((item) => {
+    if (item !== LEADING_ACTION_SLOT && item.kind === 'action') return Boolean(item.action.selected);
     const entry = entryOf(item);
     return Boolean(selectedModel && entry?.providerID === selectedModel.providerID && entry.modelID === selectedModel.modelID);
   });
   const initialSelectionIndex = Math.max(0, selectedModelIndex);
-  // Scrolling to the current model answers opening the list, a new query, or a
-  // new selection, once the model has a row. A star or a collapsed section only
-  // shifts rows around the pointer, so it must not scroll again.
   const revealRequest = `${searchQuery}\n${selectedModel?.providerID ?? ''}\n${selectedModel?.modelID ?? ''}`;
   const revealedRequestRef = React.useRef<string | null>(null);
 
-  // A row inside a virtualized section may not be mounted yet: scroll its
-  // section there first, then align it once it renders.
-  const revealIndex = React.useCallback((index: number) => {
-    const node = itemRefs.current[index];
-    if (node) {
-      scrollIntoView(scrollRef.current, node);
-      return;
-    }
-    for (const section of virtualSectionsRef.current.values()) {
-      if (index < section.base || index >= section.base + section.count) continue;
-      section.scrollToIndex(index - section.base);
-      requestAnimationFrame(() => scrollIntoView(scrollRef.current, itemRefs.current[index] ?? null));
-      return;
-    }
-  }, []);
+  const navToRowRef = React.useRef(navToRow);
+  React.useLayoutEffect(() => {
+    navToRowRef.current = navToRow;
+  }, [navToRow]);
+  const revealIndex = React.useCallback((navIndex: number) => {
+    const rowIndex = navToRowRef.current[navIndex];
+    if (rowIndex === undefined || !scrollRef.current) return;
+    virtualizer.scrollToIndex(rowIndex, { align: 'auto' });
+  }, [virtualizer]);
 
   React.useLayoutEffect(() => {
     selectionStore.set(initialSelectionIndex);
-    // Opening or scrolling the list must not let a stationary pointer replace the current model.
     keyboardOwnsSelectionRef.current = true;
     lastMousePositionRef.current = null;
     if (revealedRequestRef.current === revealRequest) return;
-    // Models can load after the list opens: keep the request until the current
-    // model's row exists. Until then there is nothing to scroll to.
-    if (selectedModelIndex < 0) return;
+    if (selectedModelIndex < 0 || !scrollElement) return;
     revealedRequestRef.current = revealRequest;
     revealIndex(selectedModelIndex);
-  }, [initialSelectionIndex, revealIndex, revealRequest, selectedModelIndex, selectionStore]);
+  }, [initialSelectionIndex, revealIndex, revealRequest, scrollElement, selectedModelIndex, selectionStore]);
 
   const selectIndex = React.useCallback((index: number) => {
     selectionStore.set(index);
-    onActiveEntryChange?.(entryOf(flatModelList[index]));
-  }, [flatModelList, onActiveEntryChange, selectionStore]);
+    onActiveEntryChange?.(entryOf(navigation[index]));
+  }, [navigation, onActiveEntryChange, selectionStore]);
 
   const moveSelection = React.useCallback((direction: 1 | -1) => {
-    const total = flatModelList.length;
+    const total = navigation.length;
     if (total === 0) return;
     keyboardOwnsSelectionRef.current = true;
     lastMousePositionRef.current = null;
     const currentIndex = selectionStore.getSnapshot();
     const nextIndex = (currentIndex + direction + total) % total;
     selectionStore.set(nextIndex);
-    onActiveEntryChange?.(entryOf(flatModelList[nextIndex]));
+    onActiveEntryChange?.(entryOf(navigation[nextIndex]));
     requestAnimationFrame(() => revealIndex(nextIndex));
-  }, [flatModelList, onActiveEntryChange, revealIndex, selectionStore]);
+  }, [navigation, onActiveEntryChange, revealIndex, selectionStore]);
 
   React.useEffect(() => {
-    onActiveEntryChange?.(entryOf(flatModelList[selectionStore.getSnapshot()]));
-  }, [flatModelList, initialSelectionIndex, onActiveEntryChange, selectionStore]);
+    onActiveEntryChange?.(entryOf(navigation[selectionStore.getSnapshot()]));
+  }, [navigation, initialSelectionIndex, onActiveEntryChange, selectionStore]);
+
+  const syncActiveDescendant = React.useCallback(() => {
+    const input = searchInputRef.current;
+    if (!input) return;
+    const id = itemRefs.current[selectionStore.getSnapshot()]?.id;
+    if (!id) input.removeAttribute('aria-activedescendant');
+    else if (input.getAttribute('aria-activedescendant') !== id) input.setAttribute('aria-activedescendant', id);
+  }, [selectionStore]);
+
+  React.useEffect(() => {
+    syncActiveDescendant();
+    return selectionStore.subscribe(syncActiveDescendant);
+  }, [selectionStore, syncActiveDescendant]);
+
+  const itemRefSettersRef = React.useRef(new Map<number, (element: HTMLDivElement | null) => void>());
+  const getItemRef = (rowIndex: number) => {
+    let setter = itemRefSettersRef.current.get(rowIndex);
+    if (!setter) {
+      setter = (element: HTMLDivElement | null) => {
+        itemRefs.current[rowIndex] = element;
+        if (rowIndex !== selectionStore.getSnapshot()) return;
+        if (element) syncActiveDescendant();
+        else queueMicrotask(syncActiveDescendant);
+      };
+      itemRefSettersRef.current.set(rowIndex, setter);
+    }
+    return setter;
+  };
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent) => {
     if (event.defaultPrevented) return;
@@ -802,7 +601,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
       moveSelection(navigationKey === 'ArrowDown' ? 1 : -1);
     })) return;
     event.stopPropagation();
-    const activeItem = flatModelList[selectionStore.getSnapshot()];
+    const activeItem = navigation[selectionStore.getSnapshot()];
     const activeEntry = entryOf(activeItem);
     if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       if (activeEntry && onVariantKey?.(event, activeEntry)) return;
@@ -823,7 +622,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
       event.preventDefault();
       if (disabled) return;
       if (activeItem === LEADING_ACTION_SLOT) leadingAction?.onSelect();
-      else if (activeItem?.kind === 'action') activeItem.action.onSelect();
+      else if (activeItem && activeItem.kind === 'action') activeItem.action.onSelect();
       else if (activeEntry) onSelect(activeEntry);
       return;
     }
@@ -831,15 +630,45 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
       event.preventDefault();
       onEscape?.();
     }
-  }, [disabled, flatModelList, leadingAction, moveSelection, onActiveKeyDown, onEscape, onSelect, onVariantKey, selectionStore]);
+  }, [disabled, leadingAction, moveSelection, navigation, onActiveKeyDown, onEscape, onSelect, onVariantKey, selectionStore]);
 
+  const syncStickyFade = React.useCallback((scroller: HTMLElement) => {
+    const hasTopScroll = scroller.scrollTop > 1;
+    const fadeSize = hasTopScroll
+      ? Math.min(STICKY_FADE_MIN_SIZE + scroller.scrollTop, STICKY_FADE_MAX_SIZE)
+      : 0;
+    stickyFadeSizeRef.current = fadeSize;
+    const fadeRoot = scroller.closest<HTMLElement>('.oc-sticky-fade-root');
+    fadeRoot?.style.setProperty('--scroll-shadow-top-size', `${fadeSize}px`);
+    fadeRoot?.style.setProperty(
+      '--scroll-shadow-top-clear-size',
+      `${Math.min(Math.max(fadeSize - 8, 0), STICKY_FADE_CLEAR_MAX_SIZE)}px`,
+    );
+  }, []);
+
+  const blockStickyFadeInteraction = React.useCallback((
+    event: React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement>,
+  ) => {
+    if ((event.target as Element).closest('[data-overlay-scrollbar-thumb], [data-model-picker-sticky-header]')) return;
+    if (event.type === 'click' && event.detail === 0) return;
+    const eventY = event.clientY - event.currentTarget.getBoundingClientRect().top;
+    if (eventY >= stickyFadeSizeRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (stickyHeaders && scrollRef.current) syncStickyFade(scrollRef.current);
+  }, [stickyHeaders, syncStickyFade, rows]);
+
+  const captionClassName = sheetCaptions
+    ? 'typography-micro font-semibold uppercase tracking-wider'
+    : 'typography-meta font-medium';
   const headerClassName = cn(
-    'typography-micro font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2 px-2 py-1.5',
-    stickyHeaders && 'sticky top-0 z-20',
+    'text-muted-foreground flex items-center gap-2 px-2 py-1.5',
+    captionClassName,
     sectionHeaderClassName,
   );
-
-  let currentFlatIndex = 0;
 
   const highlightOnPointer = (event: React.MouseEvent, rowIndex: number) => {
     const nextPosition = { x: event.clientX, y: event.clientY };
@@ -854,51 +683,97 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   };
 
   const rowHighlightClassName = (isHighlighted: boolean, rowDisabled = disabled) => cn(
-    'w-full text-start px-2 py-1.5 rounded-md typography-meta flex items-center gap-2 cursor-pointer',
+    'w-full text-start px-2 py-1.5 rounded-md typography-meta flex items-center gap-2 cursor-pointer [@media(pointer:coarse)]:min-h-11',
     !rowDisabled && (isHighlighted
-      ? 'bg-interactive-selection text-interactive-selection-foreground'
+      ? 'oc-selected text-interactive-selection-foreground'
       : 'hover:bg-interactive-hover/50'),
     rowDisabled && 'cursor-not-allowed opacity-60',
     rowClassName,
   );
 
-  const renderAction = (action: Omit<ModelPickerAction, 'id'>, rowIndex: number, key: string) => (
-    <ModelPickerRowHighlight key={key} store={selectionStore} index={rowIndex} renderVersion={renderVersion}>
-      {(isHighlighted) => (
-        <div
-          ref={(el) => { if (rowIndex >= 0) itemRefs.current[rowIndex] = el; }}
-          role="option"
-          aria-selected={action.selected ?? false}
-          aria-disabled={disabled || action.disabled || undefined}
-          tabIndex={-1}
-          onClick={() => { if (!disabled && !action.disabled) action.onSelect(); }}
-          onMouseEnter={(event) => { if (!action.disabled) highlightOnPointer(event, rowIndex); }}
-          onMouseMove={(event) => { if (!action.disabled) highlightOnPointer(event, rowIndex); }}
-          className={rowHighlightClassName(isHighlighted, disabled || action.disabled)}
-        >
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
-            {action.icon}
-            <span dir="auto" className="oc-ui-start-align font-medium truncate">{action.label}</span>
-          </div>
-          {action.selected ? <Icon name="check" className="size-3.5 shrink-0" /> : null}
-          {action.onToggleFavorite ? <button type="button" disabled={disabled || action.disabled}
-            onMouseDown={(event) => event.preventDefault()}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter' && event.key !== ' ') return;
-              event.preventDefault(); event.stopPropagation();
-              searchInputRef.current?.focus(); action.onToggleFavorite?.();
-            }}
-            onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget === document.activeElement) searchInputRef.current?.focus(); action.onToggleFavorite?.(); }}
-            className={cn('model-favorite-button flex size-4 items-center justify-center hover:text-primary/80 shrink-0 disabled:pointer-events-none', action.favorite ? 'text-primary' : 'text-muted-foreground')}
-            aria-label={action.favorite ? labels.unfavorite : labels.favorite} title={action.favorite ? labels.unfavorite : labels.favorite}>
-            <Icon name={action.favorite ? 'star-fill' : 'star'} className="size-3.5" />
-          </button> : null}
-        </div>
-      )}
-    </ModelPickerRowHighlight>
-  );
+  const describeEntry = React.useCallback((entry: ModelPickerEntry) => ({
+    metadata: entry.kind === 'auto'
+      ? undefined
+      : mergeModelMetadataWithLiveModel(entry.providerID, entry.model, getModelMetadata(entry.providerID, entry.modelID)),
+    providerName: entry === visibleLeadingEntry ? null : providerById.get(entry.providerID)?.name || entry.providerID,
+  }), [getModelMetadata, providerById, visibleLeadingEntry]);
 
-  const renderRow = (entry: ModelPickerEntry, keyPrefix: string, showProviderLogo: boolean, rowIndex: number) => {
+  const renderAction = (action: Omit<ModelPickerAction, 'id'>, navIndex: number, shell?: SortableShell) => {
+    const rowDisabled = disabled || Boolean(action.disabled);
+    const itemRef = navIndex >= 0 ? getItemRef(navIndex) : undefined;
+    const rowId = navIndex >= 0 ? optionId(navIndex) : undefined;
+
+    return (
+      <ModelPickerRowHighlight store={selectionStore} index={navIndex} renderVersion={renderVersion}>
+        {(isHighlighted) => (
+          <div
+            ref={shell
+              ? (element) => { itemRef?.(element); shell.setNodeRef(element); shell.setActivatorNodeRef(element); }
+              : itemRef}
+            {...(shell?.listeners ?? {})}
+            style={shell?.style}
+            id={rowId}
+            role="option"
+            aria-selected={action.selected ?? false}
+            aria-disabled={rowDisabled || undefined}
+            tabIndex={-1}
+            onClick={() => { if (!suppressClickRef.current && !rowDisabled) action.onSelect(); }}
+            onMouseEnter={(event) => { if (!rowDisabled && navIndex >= 0) highlightOnPointer(event, navIndex); }}
+            onMouseMove={(event) => { if (!rowDisabled && navIndex >= 0) highlightOnPointer(event, navIndex); }}
+            className={cn(
+              rowHighlightClassName(isHighlighted, rowDisabled),
+              'group/row',
+              shell && 'select-none',
+              shell?.isDragging && 'opacity-60',
+            )}
+          >
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              {action.icon}
+              <span dir="auto" className="oc-ui-start-align font-medium truncate">{action.label}</span>
+            </div>
+            {action.selected ? <Icon name="check" className="h-4 w-4 text-inherit flex-shrink-0" /> : null}
+            {action.onToggleFavorite ? (
+              <button
+                type="button"
+                disabled={rowDisabled}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onTouchStart={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  searchInputRef.current?.focus();
+                  action.onToggleFavorite?.();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (event.currentTarget === document.activeElement) searchInputRef.current?.focus();
+                  action.onToggleFavorite?.();
+                }}
+                className={cn(
+                  'model-favorite-button flex h-4 w-4 items-center justify-center hover:text-primary/80 flex-shrink-0 disabled:pointer-events-none',
+                  action.favorite ? 'text-primary' : 'text-muted-foreground',
+                  !action.favorite && !isHighlighted && 'opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100',
+                )}
+                aria-label={action.favorite ? labels.unfavorite : labels.favorite}
+                title={action.favorite ? labels.unfavorite : labels.favorite}
+              >
+                <Icon name={action.favorite ? 'star-fill' : 'star'} className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        )}
+      </ModelPickerRowHighlight>
+    );
+  };
+
+  const renderModelRow = (row: Extract<PickerRow, { kind: 'model' }>, shell?: SortableShell) => {
+    const { entry, section, navIndex } = row;
+    const showProviderLogo = section === 'fav' || section === 'recent';
     const metadata = entry.kind === 'auto'
       ? undefined
       : mergeModelMetadataWithLiveModel(entry.providerID, entry.model, getModelMetadata(entry.providerID, entry.modelID));
@@ -906,23 +781,32 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     const count = selectionCount?.(entry) ?? 0;
     const isSelected = selectedModel?.providerID === entry.providerID && selectedModel.modelID === entry.modelID;
     const favorite = isFavorite?.(entry) ?? false;
-
-    const handleMouseActivity = (event: React.MouseEvent) => highlightOnPointer(event, rowIndex);
+    const providerName = section === 'leading' ? null : providerById.get(entry.providerID)?.name || entry.providerID;
+    const handleMouseActivity = (event: React.MouseEvent) => highlightOnPointer(event, navIndex);
+    const rowId = optionId(navIndex);
+    const itemRef = getItemRef(navIndex);
 
     return (
-      <ModelPickerRowHighlight key={`${keyPrefix}-${entry.providerID}-${entry.modelID}`} store={selectionStore} index={rowIndex} renderVersion={renderVersion}>
+      <ModelPickerRowHighlight store={selectionStore} index={navIndex} renderVersion={renderVersion}>
         {(isHighlighted) => {
-          const rowElement = (
+          const rowEnd = renderRowEnd?.(entry, { isHighlighted, isSelected });
+          return (
             <div
-              ref={(el) => { itemRefs.current[rowIndex] = el; }}
+              ref={shell ? (element) => { itemRef(element); shell.setNodeRef(element); shell.setActivatorNodeRef(element); } : itemRef}
+              {...detailsHandlers(entry)}
+              {...(shell?.listeners ?? {})}
+              style={shell?.style}
+              id={rowId}
               role="option"
+              aria-labelledby={`${rowId}-name ${rowId}-provider ${rowId}-context ${rowId}-count ${rowId}-end`}
               aria-selected={isSelected}
               aria-disabled={disabled || undefined}
               tabIndex={-1}
-              onClick={() => { if (!disabled) onSelect(entry); }}
+              onClick={() => {
+                if (suppressClickRef.current || disabled) return;
+                onSelect(entry);
+              }}
               onKeyDown={(event) => {
-                // Keys pressed on a control inside the row (the star, the drag handle)
-                // belong to that control, not to choosing the model.
                 if (disabled || event.target !== event.currentTarget) return;
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
@@ -931,164 +815,57 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
               }}
               onMouseEnter={handleMouseActivity}
               onMouseMove={handleMouseActivity}
-              className={rowHighlightClassName(isHighlighted)}
+              className={cn(
+                rowHighlightClassName(isHighlighted),
+                'group/row',
+                (shell || onEntryDetails) && 'select-none',
+                onEntryDetails && '[-webkit-touch-callout:none]',
+                shell?.isDragging && 'opacity-60',
+              )}
             >
               <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                {keyPrefix === 'leading' ? <Icon name="openchamber" className="h-3.5 w-3.5 flex-shrink-0" /> : null}
+                {section === 'leading' ? <Icon name="openchamber" className="h-3.5 w-3.5 flex-shrink-0" /> : null}
                 {showProviderLogo ? <ProviderLogo providerId={entry.providerID} className="h-3.5 w-3.5 flex-shrink-0" /> : null}
-                <span className="font-medium truncate">{getModelDisplayName(entry.model)}</span>
-                {contextTokens ? <span className={cn('typography-micro flex-shrink-0', isHighlighted ? 'text-interactive-selection-foreground/70' : 'text-muted-foreground')}>{contextTokens}</span> : null}
+                <span id={`${rowId}-name`} className="font-medium truncate">{getModelDisplayName(entry.model)}</span>
+                {showProviderLogo && providerName ? <span id={`${rowId}-provider`} className="sr-only">{providerName}</span> : null}
+                {contextTokens ? <span id={`${rowId}-context`} className={cn('typography-micro flex-shrink-0', isHighlighted ? 'text-interactive-selection-foreground/70' : 'text-muted-foreground')}>{contextTokens}</span> : null}
               </div>
-              {count > 0 ? <span className={cn('typography-micro flex-shrink-0', isHighlighted ? 'text-interactive-selection-foreground/70' : 'text-muted-foreground')}>x{count}</span> : null}
-              {renderRowEnd?.(entry, { isHighlighted, isSelected })}
+              {count > 0 ? <span id={`${rowId}-count`} className={cn('typography-micro flex-shrink-0', isHighlighted ? 'text-interactive-selection-foreground/70' : 'text-muted-foreground')}>x{count}</span> : null}
+              {rowEnd ? <span id={`${rowId}-end`} className="flex">{rowEnd}</span> : null}
               {isSelected ? <Icon name="check" className="h-4 w-4 text-inherit flex-shrink-0" /> : null}
-              {onToggleFavorite && keyPrefix !== 'leading' ? (
-                // Unstarring can remove this row. A focused star would take focus with it,
-                // and the popup would hand focus to its last button, scrolling the list to
-                // the bottom; focus stays in, or returns to, the search field instead.
-                <button type="button" disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget === document.activeElement) searchInputRef.current?.focus(); onToggleFavorite(entry); }} className={cn('model-favorite-button flex h-4 w-4 items-center justify-center hover:text-primary/80 flex-shrink-0 disabled:pointer-events-none', favorite ? 'text-primary' : 'text-muted-foreground')} aria-label={favorite ? labels.unfavorite : labels.favorite} title={favorite ? labels.unfavorite : labels.favorite}>
+              {onToggleFavorite && section !== 'leading' ? (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onTouchStart={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget === document.activeElement) searchInputRef.current?.focus(); onToggleFavorite(entry); }}
+                  className={cn(
+                    'model-favorite-button flex h-4 w-4 items-center justify-center hover:text-primary/80 flex-shrink-0 disabled:pointer-events-none',
+                    favorite ? 'text-primary' : 'text-muted-foreground',
+                    !favorite && !isHighlighted && 'opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100',
+                    onEntryDetails && '[@media(hover:none)]:hidden',
+                  )}
+                  aria-label={favorite ? labels.unfavorite : labels.favorite}
+                  title={favorite ? labels.unfavorite : labels.favorite}
+                >
                   <Icon name={favorite ? 'star-fill' : 'star'} className="h-3.5 w-3.5" />
                 </button>
               ) : null}
             </div>
           );
-
-          return <ModelPickerRowTooltip metadata={metadata} active={tooltipsEnabled && isHighlighted} labels={labels}>{rowElement}</ModelPickerRowTooltip>;
         }}
       </ModelPickerRowHighlight>
     );
   };
 
-  const handleProviderDragEnd = (event: DragEndEvent) => {
-    if (!onReorderProvider) return;
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const ids = orderedProviders.map((provider) => provider.id);
-    const from = ids.indexOf(String(active.id));
-    const to = ids.indexOf(String(over.id));
-    if (from === -1 || to === -1) return;
-
-    onReorderProvider(arrayMove(ids, from, to));
-  };
-
-  const isSectionCollapsed = (key: string) => collapsedSections.has(key);
-  const toggleSectionCollapsed = (key: string) => toggleSection(key);
-
-  const renderSectionSentinel = (key: string) => stickyHeaders ? (
-    <div
-      ref={(element) => { sectionHeaderSentinelRefs.current.set(key, element); }}
-      data-model-section-key={key}
-      className="pointer-events-none absolute top-0 h-px w-full"
-      aria-hidden="true"
-    />
-  ) : null;
-
-  const renderSectionHeader = (key: string, icon: React.ReactNode, label: React.ReactNode, headerDragProps?: SortableSectionHandleProps) => {
-    const collapsed = isSectionCollapsed(key);
-    const toggleKeyDown = (event: React.KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        toggleSectionCollapsed(key);
-      }
-    };
-
-    // When the section is reorderable, the whole header acts as the drag
-    // activator (desktop mouse, with an 8px threshold so a plain click still
-    // toggles collapse). A <button> cannot be the activator because dnd-kit's
-    // attributes/listeners turn it into a draggable widget, so render a div
-    // with button semantics. The drag listeners are spread first so our
-    // onClick/onKeyDown collapse handlers take precedence.
-    if (headerDragProps) {
-      return (
-        <div
-          ref={headerDragProps.setActivatorNodeRef}
-          {...headerDragProps.attributes}
-          {...headerDragProps.listeners}
-          role="button"
-          tabIndex={0}
-          aria-expanded={!collapsed}
-          title={reorderProviderTitle}
-          data-model-picker-sticky-header={stickyHeaders ? 'true' : undefined}
-          className={cn(headerClassName, 'w-full text-start cursor-grab select-none active:cursor-grabbing')}
-          onClick={() => toggleSectionCollapsed(key)}
-          onKeyDown={toggleKeyDown}
-        >
-          <Icon name="draggable" className="size-3.5 flex-shrink-0 text-muted-foreground/70" />
-          {icon}
-          <span className="min-w-0 truncate">{label}</span>
-          <span className="ms-auto flex size-4 flex-shrink-0 items-center justify-center text-muted-foreground">
-            <Icon name={collapsed ? 'arrow-right-s' : 'arrow-down-s'} className="size-4" />
-          </span>
-        </div>
-      );
-    }
-
-    return (
-      <button
-        type="button"
-        data-model-picker-sticky-header={stickyHeaders ? 'true' : undefined}
-        className={cn(headerClassName, 'w-full text-start cursor-pointer')}
-        onClick={() => toggleSectionCollapsed(key)}
-        aria-expanded={!collapsed}
-      >
-        {icon}
-        <span className="min-w-0 truncate">{label}</span>
-        <span className="ms-auto flex size-4 flex-shrink-0 items-center justify-center text-muted-foreground">
-          <Icon name={collapsed ? 'arrow-right-s' : 'arrow-down-s'} className="size-4" />
-        </span>
-      </button>
-    );
-  };
-
-  const renderProviderRows = (provider: (typeof filteredProviders)[number], sectionKey: string) => {
-    // SAFETY: filteredProviders keeps only models whose id is a non-empty string.
-    const entries = provider.models.map((model) => ({ model, providerID: provider.id, modelID: model.id as string }));
-    if (entries.length < VIRTUAL_SECTION_MIN_ROWS) {
-      return entries.map((entry) => renderRow(entry, 'provider', false, currentFlatIndex++));
-    }
-    const base = currentFlatIndex;
-    currentFlatIndex += entries.length;
-    return (
-      <VirtualProviderRows
-        sectionKey={sectionKey}
-        entries={entries}
-        base={base}
-        sections={virtualSectionsRef.current}
-        renderRow={(entry, rowIndex) => renderRow(entry, 'provider', false, rowIndex)}
-      />
-    );
-  };
-
-  const renderProviderSection = (
-    provider: (typeof filteredProviders)[number],
-    providerIndex: number,
-    headerDragProps?: SortableSectionHandleProps,
-  ) => {
-    const sectionKey = `provider:${provider.id}`;
-    return (
-      <>
-        {providerIndex > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
-        <div className="relative">
-          {renderSectionSentinel(sectionKey)}
-          {renderSectionHeader(sectionKey, <ProviderLogo providerId={provider.id} className="h-4 w-4 flex-shrink-0" />, provider.name || provider.id, headerDragProps)}
-          {!isSectionCollapsed(sectionKey) ? renderProviderRows(provider, sectionKey) : null}
-        </div>
-      </>
-    );
-  };
-
-  let stuckSectionKey: string | null = null;
-  for (const sectionKey of visibleSectionKeys) {
-    if (stuckSectionHeaders.has(sectionKey)) stuckSectionKey = sectionKey;
-  }
-  // The sidebar can seed its overlay with the first section because its first
-  // header starts flush with the scroller. `Not selected` may precede the
-  // first model section here, so wait for that section's sentinel rather than
-  // showing its identity while the leading action is still visible.
-  const leadingSectionKey = stuckSectionKey ?? (!includeNotSelected ? visibleSectionKeys[0] ?? null : null);
   const renderSectionIdentity = (sectionKey: string): React.ReactNode => {
-    if (sectionKey === actionGroup?.id) return <>{actionGroup.icon}<span className="min-w-0 truncate">{actionGroup.label}</span></>;
+    if (actionGroup && sectionKey === actionGroup.id) {
+      return <>{actionGroup.icon}<span className="min-w-0 truncate">{actionGroup.label}</span></>;
+    }
     if (sectionKey === 'favorites') {
       return <><Icon name="star-fill" className="h-4 w-4 flex-shrink-0 text-primary" /><span className="min-w-0 truncate">{labels.favorites}</span></>;
     }
@@ -1101,10 +878,219 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     return <><ProviderLogo providerId={providerId} className="h-4 w-4 flex-shrink-0" /><span className="min-w-0 truncate">{provider.name || provider.id}</span></>;
   };
 
+  const renderChevron = (collapsed: boolean) => (
+    <span className={cn('ms-auto flex size-4 flex-shrink-0 items-center justify-center text-muted-foreground', !collapsed && 'opacity-0 group-hover/header:opacity-100 group-focus-visible/header:opacity-100')}>
+      <Icon name={collapsed ? 'arrow-right-s' : 'arrow-down-s'} className="size-4" />
+    </span>
+  );
+
+  const renderHeader = (row: Extract<PickerRow, { kind: 'header' }>, shell?: SortableShell) => {
+    const toggle = () => {
+      if (suppressClickRef.current) return;
+      toggleSection(row.sectionKey);
+    };
+    const collapsed = isSectionCollapsed(row.sectionKey);
+    if (shell) {
+      return (
+        <div
+          ref={(element) => { shell.setNodeRef(element); shell.setActivatorNodeRef(element); }}
+          {...shell.listeners}
+          style={shell.style}
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
+          title={reorderProviderTitle}
+          className={cn(headerClassName, 'group/header w-full text-start cursor-pointer select-none', shell.isDragging && 'opacity-0')}
+          onClick={toggle}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggleSection(row.sectionKey);
+            }
+          }}
+        >
+          {renderSectionIdentity(row.sectionKey)}
+          {renderChevron(collapsed)}
+        </div>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className={cn(headerClassName, 'group/header w-full text-start cursor-pointer')}
+        onClick={toggle}
+        aria-expanded={!collapsed}
+      >
+        {renderSectionIdentity(row.sectionKey)}
+        {renderChevron(collapsed)}
+      </button>
+    );
+  };
+
+  const renderRowContent = (row: PickerRow): React.ReactNode => {
+    switch (row.kind) {
+      case 'not-selected':
+        return (
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 typography-meta text-muted-foreground hover:bg-interactive-hover/50"
+            onClick={onSelectNone}
+          >
+            <Icon name="close" className="h-3.5 w-3.5" />
+            <span>{labels.notSelected}</span>
+            {!selectedModel ? <Icon name="check" className="h-4 w-4 text-inherit ms-auto" /> : null}
+          </button>
+        );
+      case 'no-results':
+        return <div className="px-2 py-4 text-center typography-meta text-muted-foreground">{labels.noResults}</div>;
+      case 'leading-action':
+        return leadingAction ? renderAction(leadingAction, row.navIndex) : null;
+      case 'picker-action':
+        if (row.sortableId) {
+          return (
+            <SortableRow id={row.sortableId} disabled={disabled || Boolean(row.action.disabled)}>
+              {(shell) => renderAction(row.action, row.navIndex, shell)}
+            </SortableRow>
+          );
+        }
+        return renderAction(row.action, row.navIndex);
+      case 'header':
+        if (row.providerId && providerSortingEnabled) {
+          return (
+            <SortableRow id={`${PROVIDER_SORT_PREFIX}${row.providerId}`} disabled={disabled}>
+              {(shell) => renderHeader(row, shell)}
+            </SortableRow>
+          );
+        }
+        return renderHeader(row);
+      case 'model':
+        if (row.sortableId) {
+          return (
+            <SortableRow id={row.sortableId} disabled={disabled}>
+              {(shell) => renderModelRow(row, shell)}
+            </SortableRow>
+          );
+        }
+        return renderModelRow(row);
+    }
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setDraggingId(String(event.active.id));
+  };
+
+  const finishDrag = () => {
+    setDraggingId(null);
+    suppressClickRef.current = true;
+    window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    finishDrag();
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (activeId.startsWith(PROVIDER_SORT_PREFIX)) {
+      if (!onReorderProvider || !overId.startsWith(PROVIDER_SORT_PREFIX)) return;
+      const ids = orderedProviders.map((provider) => provider.id);
+      const from = ids.indexOf(activeId.slice(PROVIDER_SORT_PREFIX.length));
+      const to = ids.indexOf(overId.slice(PROVIDER_SORT_PREFIX.length));
+      if (from === -1 || to === -1) return;
+      onReorderProvider(arrayMove(ids, from, to));
+      return;
+    }
+    if (activeId.startsWith(ACTION_GROUP_SORT_PREFIX)) {
+      if (!onReorderAction || !overId.startsWith(ACTION_GROUP_SORT_PREFIX)) return;
+      onReorderAction(activeId.slice(ACTION_GROUP_SORT_PREFIX.length), overId.slice(ACTION_GROUP_SORT_PREFIX.length));
+      return;
+    }
+    if (onReorderFavoriteItem) {
+      if (!favoriteItemIds.has(activeId) || !favoriteItemIds.has(overId)) return;
+      onReorderFavoriteItem(activeId, overId);
+      return;
+    }
+    const activeFavorite = favoriteLookup.get(activeId);
+    const overFavorite = favoriteLookup.get(overId);
+    if (!onReorderFavorite || !activeFavorite || !overFavorite) return;
+    onReorderFavorite(activeFavorite, overFavorite);
+  };
+
+  const stuckSectionKey = (() => {
+    if (!stickyHeaders) return null;
+    const offset = (virtualizer.scrollOffset ?? 0) - scrollMargin;
+    const topItem = virtualItems.find((item) => item.end - scrollMargin > offset + 1);
+    let section: string | null = null;
+    if (topItem) {
+      for (let index = topItem.index; index >= 0; index -= 1) {
+        const row = rows[index];
+        if (row?.kind === 'header') { section = row.sectionKey; break; }
+      }
+    }
+    if (section) return section;
+    if (includeNotSelected) return null;
+    const firstHeader = rows.find((row) => row.kind === 'header');
+    return firstHeader?.kind === 'header' ? firstHeader.sectionKey : null;
+  })();
+
+  const groupedItems: { group: RowGroup | null; items: VirtualItem[] }[] = [];
+  for (const item of virtualItems) {
+    const group = rows[item.index]?.group ?? null;
+    const last = groupedItems[groupedItems.length - 1];
+    if (last && last.group?.key === group?.key) last.items.push(item);
+    else groupedItems.push({ group, items: [item] });
+  }
+  const renderVirtualItem = (item: VirtualItem) => {
+    const row = rows[item.index];
+    if (!row) return null;
+    const sizeKind = rowSizeKind(row);
+    return (
+      <div
+        key={item.key}
+        data-row-size-kind={sizeKind}
+        className={cn('absolute inset-s-0 top-0 w-full', sizeKind === 'header-spaced' && 'pt-2')}
+        style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
+      >
+        {renderRowContent(row)}
+      </div>
+    );
+  };
+
+  const sortableIds = React.useMemo(() => {
+    const ids: string[] = [];
+    if (favoriteSortingEnabled) {
+      for (const item of favoriteItems) {
+        if (item.kind === 'model' || onReorderFavoriteItem) ids.push(item.id);
+      }
+    }
+    if (actionSortingEnabled) {
+      for (const action of filteredActions) ids.push(`${ACTION_GROUP_SORT_PREFIX}${action.id}`);
+    }
+    if (providerSortingEnabled) for (const provider of filteredProviders) ids.push(`${PROVIDER_SORT_PREFIX}${provider.id}`);
+    return ids;
+  }, [actionSortingEnabled, favoriteItems, favoriteSortingEnabled, filteredActions, filteredProviders, onReorderFavoriteItem, providerSortingEnabled]);
+
+  const list = (
+    <div className="px-1">
+      <div
+        ref={listRef}
+        id={listboxId}
+        role="listbox"
+        aria-label={labels.list}
+        className="relative w-full"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {groupedItems.map(({ group, items }) => (group
+          ? <div key={`group:${group.key}`} role="group" aria-label={group.label} className="contents">{items.map(renderVirtualItem)}</div>
+          : items.map(renderVirtualItem)))}
+      </div>
+    </div>
+  );
+
   return (
     <>
-      <div className="px-2 py-1 border-b border-border/40">
-        <div className="relative">
+      <div className="flex items-center gap-2 px-2 py-1 border-b border-edge-muted">
+        <div className="relative min-w-0 flex-1">
           <Icon name="search" className="absolute inset-s-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             ref={searchInputRef}
@@ -1113,10 +1099,24 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
             value={searchQuery}
             onChange={(event) => onSearchQueryChange(event.target.value)}
             onKeyDown={handleKeyDown}
-            className="h-7 rounded-none bg-transparent ps-8 pe-0 typography-meta ring-0 hover:[&:not(:focus)]:bg-transparent focus:ring-0 focus-visible:ring-0"
+            role="combobox"
+            aria-expanded
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            className={PICKER_SEARCH_INPUT_CLASS}
             autoFocus={autoFocus}
           />
         </div>
+        {searchAction ? (
+          <button
+            type="button"
+            onClick={searchAction.onSelect}
+            className="flex flex-shrink-0 items-center gap-1 whitespace-nowrap pe-1 typography-micro text-muted-foreground hover:text-foreground"
+          >
+            <Icon name={searchAction.icon} className="size-3.5" />
+            {searchAction.label}
+          </button>
+        ) : null}
       </div>
 
       <div
@@ -1128,121 +1128,71 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
         onContextMenuCapture={stickyHeaders ? blockStickyFadeInteraction : undefined}
       >
         <ScrollableOverlay
-          ref={scrollRef}
-          useScrollShadow={stickyHeaders}
-          hideBottomScrollShadow
+          ref={attachScroller}
+          useScrollShadow
           scrollShadowSize={12}
           outerClassName={maxHeightClassName}
           className="oc-sticky-fade-scroller overlay-scrollbar-target--no-gutter"
           style={maxHeightStyle}
           onScroll={stickyHeaders ? (event) => syncStickyFade(event.currentTarget) : undefined}
         >
-          <div className="px-1">
-          {includeNotSelected ? (
-            <>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 typography-meta text-muted-foreground hover:bg-interactive-hover/50"
-                onClick={onSelectNone}
-              >
-                <Icon name="close" className="h-3.5 w-3.5" />
-                <span>{labels.notSelected}</span>
-                {!selectedModel ? <Icon name="check" className="h-4 w-4 text-inherit ms-auto" /> : null}
-              </button>
-              <div className="h-px bg-border/40 my-1" />
-            </>
-          ) : null}
-
-          {!hasResults ? (
-            <div className="px-2 py-4 text-center typography-meta text-muted-foreground">{labels.noResults}</div>
-          ) : null}
-
-          {visibleLeadingEntry ? (
-            <>
-              {renderRow(visibleLeadingEntry, 'leading', false, currentFlatIndex++)}
-              {!showLeadingAction && (hasFavorites || filteredRecents.length > 0 || filteredProviders.length > 0) ? <div className="h-px bg-border/40 my-1" /> : null}
-            </>
-          ) : null}
-
-          {leadingAction && showLeadingAction ? (
-            <>
-              {renderAction(leadingAction, currentFlatIndex++, 'leading-action')}
-              <div className="h-px bg-border/40 my-1" />
-            </>
-          ) : null}
-
-
-
-          {hasFavorites ? (
-            <div className="relative" role="group" aria-label={labels.favorites}>
-              {renderSectionSentinel('favorites')}
-              {renderSectionHeader('favorites', <Icon name="star-fill" className="h-4 w-4 text-primary" />, labels.favorites)}
-              {!isSectionCollapsed('favorites') ? <SortablePickerRows items={favoriteItems}
-                onReorder={favoriteSortingEnabled ? onReorderFavoriteItem : undefined}>
-                {(item) => item.kind === 'model'
-                  ? renderRow(item.entry, 'fav', true, currentFlatIndex++)
-                  : renderAction(item.action, item.action.disabled ? -1 : currentFlatIndex++, item.id)}
-              </SortablePickerRows> : null}
-            </div>
-          ) : null}
-
-          {filteredRecents.length > 0 ? (
-            <>
-              {hasFavorites ? <div className="h-px bg-border/40 my-1" /> : null}
-              <div className="relative">
-                {renderSectionSentinel('recent')}
-                {renderSectionHeader('recent', <Icon name="time" className="h-4 w-4" />, labels.recent)}
-                {!isSectionCollapsed('recent') ? filteredRecents.map((entry) => renderRow(entry, 'recent', true, currentFlatIndex++)) : null}
-              </div>
-            </>
-          ) : null}
-
-          {actionGroup && filteredActions.length > 0 ? <>
-            {hasFavorites || filteredRecents.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
-            <div className="relative" role="group" aria-label={actionGroup.label}>
-            {renderSectionSentinel(actionGroup.id)}
-            {renderSectionHeader(actionGroup.id, actionGroup.icon, actionGroup.label)}
-            {!isSectionCollapsed(actionGroup.id) ? <SortablePickerRows items={filteredActions.map((action) => ({ ...action, disabled: disabled || action.disabled }))}
-              onReorder={searchQuery.trim() ? undefined : onReorderAction}>
-              {(action) => renderAction(action, action.disabled ? -1 : currentFlatIndex++, action.id)}
-            </SortablePickerRows> : null}
-            </div>
-          </> : null}
-
-          {(hasFavorites || filteredRecents.length > 0 || filteredActions.length > 0) && filteredProviders.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
-
-          {providerSortingEnabled ? (
-            <DndContext sensors={providerSectionSensors} collisionDetection={closestCenter} onDragEnd={handleProviderDragEnd}>
-              <SortableContext items={filteredProviders.map((provider) => provider.id)} strategy={verticalListSortingStrategy}>
-                {filteredProviders.map((provider, providerIndex) => (
-                  <SortableProviderSection key={provider.id} id={provider.id} disabled={disabled}>
-                    {(dragHandleProps) => renderProviderSection(provider, providerIndex, dragHandleProps)}
-                  </SortableProviderSection>
-                ))}
+          {sortableIds.length > 0 ? (
+            <DndContext
+              sensors={sortSensors}
+              collisionDetection={closestCenter}
+              measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={finishDrag}
+            >
+              <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                {list}
               </SortableContext>
+              {typeof document !== 'undefined' ? createPortal(
+                <DragOverlay>
+                  {draggingProvider && draggingId ? (
+                    <div className={cn(headerClassName, 'oc-glass-popover oc-glass-floating rounded-md')}>
+                      {renderSectionIdentity(`provider:${draggingId.slice(PROVIDER_SORT_PREFIX.length)}`)}
+                    </div>
+                  ) : null}
+                </DragOverlay>,
+                document.body,
+              ) : null}
             </DndContext>
-          ) : (
-            filteredProviders.map((provider, providerIndex) => (
-              <div key={provider.id}>
-                {renderProviderSection(provider, providerIndex)}
-              </div>
-            ))
-          )}
-          </div>
+          ) : list}
         </ScrollableOverlay>
-        {stickyHeaders && leadingSectionKey ? (
-          <div
-            className="oc-sticky-fade-overlay pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-2 px-3 py-1.5 typography-micro font-semibold uppercase tracking-wider text-muted-foreground"
+        {stickyHeaders && stuckSectionKey ? (
+          <button
+            type="button"
+            tabIndex={-1}
             aria-hidden="true"
+            data-model-picker-sticky-header="true"
+            onClick={() => toggleSection(stuckSectionKey)}
+            className={cn('oc-sticky-fade-overlay absolute inset-x-0 top-0 z-30 flex items-center gap-2 px-3 py-1.5 text-start text-muted-foreground', captionClassName)}
           >
-            {renderSectionIdentity(leadingSectionKey)}
-          </div>
+            {renderSectionIdentity(stuckSectionKey)}
+          </button>
         ) : null}
       </div>
 
-      <div className="px-3 pt-1 pb-1.5 border-t border-border/40 typography-micro text-muted-foreground">
-        <ModelPickerFooter store={selectionStore} navigationList={flatModelList} footerContent={footerContent} fallback={labels.keyboardHint} />
-      </div>
+      {showKeyboardHints ? (
+        <div className="px-3 pt-1 pb-1.5 border-t border-edge-muted typography-micro text-muted-foreground [@media(pointer:coarse)]:hidden">
+          <ModelPickerFooter store={selectionStore} navigationList={navigation} footerContent={footerContent} fallback={labels.keyboardHint} />
+        </div>
+      ) : null}
+
+      <ModelPickerRowCard
+        store={selectionStore}
+        navigation={navigation}
+        itemRefs={itemRefs}
+        active={tooltipsEnabled && hasResults}
+        layoutVersion={`${virtualItems[0]?.index ?? 0}:${virtualItems.length}:${rows.length}`}
+        describe={describeEntry}
+        labels={labels}
+      />
     </>
   );
 };
+
+export type { ModelPickerAction } from './ModelPickerRows';
+export { ModelPickerCardBody } from './ModelPickerRows';

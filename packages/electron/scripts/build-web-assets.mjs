@@ -78,9 +78,6 @@ const copyDir = async (src, dst) => {
 
 const bunExe = resolveBun();
 
-// The bundled server imports @openchamber/sdk from its built `dist`, which
-// nothing else in packaging rebuilds: a stale one makes the app quit at start
-// once the server needs an export added since the last SDK build.
 console.log('[electron] building @openchamber/sdk dist...');
 run(bunExe, ['run', 'build'], sdkDir);
 
@@ -93,13 +90,13 @@ await fs.copyFile(path.join(webDir, 'server/lib/native-agents/delegation-mcp.mjs
 run(bunExe, ['build', 'server/lib/native-agents/antigravity/checklist-mcp.mjs', '--target=node', '--format=esm',
   '--outfile', path.join(resourcesDir, 'native-agy-checklist-mcp.mjs')], webDir);
 console.log('[electron] bundling the native memory hook...');
-run(bunExe, ['build', 'server/lib/agent-memory/native-hook.js', '--target=node', '--format=esm',
+run(bunExe, ['build', 'server/lib/agent-memory/native-hook.ts', '--target=node', '--format=esm',
   '--outfile', path.join(resourcesDir, 'native-memory-hook.mjs')], webDir);
 run(bunExe, ['build', 'server/lib/agent-memory/native-cli.mjs', '--target=node', '--format=esm',
   '--outfile', path.join(resourcesDir, 'native-memory-cli.mjs')], webDir);
 for (const [source, destination] of [
   ['maintenance-worker.mjs', 'deepseek-maintenance-worker.mjs'],
-  ['maintenance-plugin.js', 'deepseek-maintenance-plugin.mjs'],
+  ['maintenance-plugin.ts', 'deepseek-maintenance-plugin.mjs'],
 ]) {
   run(bunExe, ['build', `server/lib/native-agents/deepseek/${source}`, '--target=node', '--format=esm',
     '--outfile', path.join(resourcesDir, destination)], webDir);
@@ -110,7 +107,6 @@ try {
   await removeDir(resourcesWebDistDir);
   await fs.rename(stagedWebDistDir, resourcesWebDistDir);
 } catch (error) {
-  // A failed copy (a full disk, say) must not leave a half-staged dir behind.
   await removeDir(stagedWebDistDir);
   throw error;
 }

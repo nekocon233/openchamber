@@ -1,12 +1,13 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
-import { formatWindowLabel, getQuotaProviderList } from '@/lib/quota';
+import { formatWindowLabel } from '@/lib/quota';
 import { getDisplayModelName } from '@/lib/quota/model-families';
 import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
 import { formatMagpieError } from '@/lib/quota/magpie';
-import { useQuotaStore } from '@/stores/useQuotaStore';
+import { useQuotaProviders, useQuotaStore } from '@/stores/useQuotaStore';
 import type { QuotaProviderId, UsageWindow } from '@/types';
 import type { QuotaAccount } from '@/types/quota';
+import { selectVisibleModelEntries } from './usageModelSelection';
 
 export type UsageLimitRow = {
   key: string;
@@ -19,6 +20,7 @@ export type UsageProviderGroup = {
   providerId: QuotaProviderId;
   providerName: string;
   planLabel?: string | null;
+  accountLabel?: string | null;
   rows: UsageLimitRow[];
   accounts?: QuotaAccount[];
   /** Provider-level message: a fetch error, or "nothing reported". */
@@ -41,10 +43,24 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
   const selectedQuotaModels = useQuotaStore((state) => state.selectedModels);
+  const providers = useQuotaProviders();
 
   return React.useMemo<UsageProviderGroup[]>(() => {
     const resultsByProvider = new Map(quotaResults.map((result) => [result.providerId, result]));
-    return getQuotaProviderList(nativeProviders)
+    const seenProviderIds = new Set<QuotaProviderId>();
+    const allProviders = [
+      ...providers.map((provider) => (
+        provider.id === 'kimi-for-coding' && nativeProviders.length > 0 && !provider.name.endsWith(' / OpenCode')
+          ? { ...provider, name: `${provider.name} / OpenCode` }
+          : provider
+      )),
+      ...nativeProviders,
+    ].filter((provider) => {
+      if (seenProviderIds.has(provider.id)) return false;
+      seenProviderIds.add(provider.id);
+      return true;
+    });
+    return allProviders
       .filter((providerMeta) => dropdownProviderIds.includes(providerMeta.id))
       .filter((providerMeta) => {
         const result = resultsByProvider.get(providerMeta.id);
@@ -60,9 +76,7 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
 
         const modelEntries = Object.entries(result?.usage?.models ?? {});
         const providerSelectedModels = selectedQuotaModels[providerMeta.id] ?? [];
-        const visibleModelEntries = providerSelectedModels.length > 0
-          ? modelEntries.filter(([modelName]) => providerSelectedModels.includes(modelName))
-          : modelEntries;
+        const visibleModelEntries = selectVisibleModelEntries(providerMeta.id, modelEntries, providerSelectedModels);
         for (const [modelName, modelUsage] of visibleModelEntries) {
           const entries = Object.entries(modelUsage.windows ?? {});
           if (entries.length === 0) continue;
@@ -97,10 +111,11 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
           providerId: providerMeta.id,
           providerName: providerMeta.name,
           planLabel: result?.planLabel,
+          accountLabel: result?.accountLabel,
           rows,
           accounts: result?.usage?.accounts,
           status,
         };
       });
-  }, [dropdownProviderIds, nativeProviders, quotaResults, refreshErrors, selectedQuotaModels, t]);
+  }, [dropdownProviderIds, nativeProviders, providers, quotaResults, refreshErrors, selectedQuotaModels, t]);
 };

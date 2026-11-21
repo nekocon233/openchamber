@@ -12,6 +12,7 @@ import {
   TUNNEL_PROVIDER_CLOUDFLARE,
   TUNNEL_PROVIDER_FRPC,
   TunnelServiceError,
+  normalizeOptionalPath,
   normalizeTunnelMode,
   normalizeTunnelProvider,
 } from './types.js';
@@ -1320,5 +1321,48 @@ describe('FRPC tunnel routes', () => {
     } finally {
       delete process.env.OPENCHAMBER_ENTERPRISE_MODE;
     }
+  });
+});
+
+describe('tunnel doctor required fields', () => {
+  it('retains truthiness checks for inherited dictionary members', async () => {
+    const routes = new Map();
+    const provider = {
+      capabilities: {
+        provider: 'cloudflare',
+        modes: [{ key: 'quick', requires: ['constructor', 'toString', 'hostname', 'token', 'configPath'] }],
+      },
+    };
+    const runtime = createTunnelRoutesRuntime({
+      URL,
+      TunnelServiceError,
+      TUNNEL_PROVIDER_CLOUDFLARE: 'cloudflare',
+      tunnelProviderRegistry: { get: () => provider },
+      tunnelService: { checkAvailability: async () => ({ available: true }) },
+      readSettingsFromDiskMigrated: async () => ({}),
+      readManagedRemoteTunnelConfigFromDisk: async () => ({ tunnels: [] }),
+      normalizeTunnelProvider,
+      normalizeOptionalPath,
+      normalizeManagedRemoteTunnelHostname: () => undefined,
+      resolveManagedRemoteTunnelToken: async () => '',
+      getRuntimeManagedRemoteTunnelHostname: () => undefined,
+      getRuntimeManagedRemoteTunnelToken: () => '',
+    });
+    runtime.registerRoutes({
+      get: (path, handler) => routes.set(`GET ${path}`, handler),
+      post: (path, handler) => routes.set(`POST ${path}`, handler),
+      put: (path, handler) => routes.set(`PUT ${path}`, handler),
+    });
+    let result;
+    await routes.get('GET /api/openchamber/tunnel/doctor')(
+      { query: { provider: 'cloudflare' }, body: {} },
+      { json: (body) => { result = body; } },
+    );
+    const checks = result.modes[0].checks;
+    expect(checks.find((check) => check.id === 'requirement_constructor').status).toBe('pass');
+    expect(checks.find((check) => check.id === 'requirement_toString').status).toBe('pass');
+    expect(checks.find((check) => check.id === 'requirement_hostname').status).toBe('fail');
+    expect(checks.find((check) => check.id === 'requirement_token').status).toBe('fail');
+    expect(checks.find((check) => check.id === 'requirement_configPath').status).toBe('fail');
   });
 });

@@ -32,7 +32,7 @@ describe('notification trigger directory context', () => {
   });
 
   it('prefers the global event directory for web targets while keeping native payloads opaque', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
     const sendPushToAllUiSessions = vi.fn(async () => undefined);
     const sendApnsToAllUiSessions = vi.fn(async () => undefined);
     const runtime = createRuntime({ sendPushToAllUiSessions, sendApnsToAllUiSessions });
@@ -60,13 +60,17 @@ describe('notification trigger directory context', () => {
     expect(target.searchParams.get('directory')).toBe('C:\\work\\project');
 
     expect(sendApnsToAllUiSessions).toHaveBeenCalledTimes(1);
-    expect(sendApnsToAllUiSessions.mock.calls[0][0].data).toEqual({
-      sessionId: 'ses_outer_directory',
-    });
+    const nativeData = sendApnsToAllUiSessions.mock.calls[0][0].data;
+    expect(nativeData.sessionId).toBe('ses_outer_directory');
+    expect(nativeData.tag).toBe('ready-ses_outer_directory');
+    expect(nativeData.nid).toEqual(expect.any(String));
+    expect(nativeData).not.toHaveProperty('directory');
+    expect(nativeData).not.toHaveProperty('url');
+    expect(nativeData).not.toHaveProperty('sessionName');
   });
 
   it('preserves the directory while converting idle events into completion notifications', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
     const sendPushToAllUiSessions = vi.fn(async () => undefined);
     const runtime = createRuntime({
       sendPushToAllUiSessions,
@@ -85,7 +89,7 @@ describe('notification trigger directory context', () => {
   });
 
   it('reads a native session through the native runtime, whose active goal silences per-turn pushes', async () => {
-    const fetchImpl = vi.fn(async () => ({ ok: false }));
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal('fetch', fetchImpl);
     const sendPushToAllUiSessions = vi.fn(async () => undefined);
     const nativeSessions = {

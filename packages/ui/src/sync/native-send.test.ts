@@ -152,6 +152,21 @@ describe("native prompt parts", () => {
     expect(nativeSendMessageId(SESSION, undefined).startsWith("ncl_u_")).toBe(true)
     expect(() => nativeSendMessageId("ses_opencode", undefined)).toThrow("Not a native session")
   })
+
+  test("reclaimed OpenCode queue IDs resolve to the same CLI message on every backend", () => {
+    const claimId = 'msg_0198b4f3c001AbCdEfGhIjKlMn'
+    const uuid = '1b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f'
+    for (const prefix of ['ncl', 'ncx', 'nag', 'ndh']) {
+      const session = prefix === 'ndh' ? `ndh_${'c'.repeat(24)}` : `${prefix}_${uuid}`
+      const id = nativeSendMessageId(session, claimId)
+      expect(nativeSendMessageId(session, 'legacy-message-a')).toBe(nativeSendMessageId(session, 'legacy-message-a'))
+      expect(id).toBe(nativeSendMessageId(session, claimId))
+      expect(id).toBe(nativeSendMessageId(session, id))
+      expect(id).not.toBe(nativeSendMessageId(session, claimId + '2'))
+      if (prefix === 'ndh') expect(id.startsWith(`ndh_u_${'c'.repeat(24)}_`)).toBe(true)
+    }
+    expect(nativeSendMessageId(`ncv_${uuid}`, claimId)).toBe(claimId)
+  })
 })
 
 describe('manual Antigravity queued sends', () => {
@@ -168,6 +183,18 @@ describe('manual Antigravity queued sends', () => {
     id: sessionId, projectID: '', directory: DIRECTORY, title: 'Force send', time: { created: 1, updated: 2 },
     metadata: { openchamber: { native: { kind: 'unified', backend, sourceSessionID, preparing, switchReady,
       revision: 1, recordRevision: 1, historyRevision: 0 } } },
+  })
+
+  test('leaves a replacement AGY source running when the composer observed a different source', async () => {
+    const calls: string[] = []
+    const api = createTestNativeAgentsAPI({
+      prompt: async () => { calls.push('prompt'); throw busy },
+      getSession: async () => { calls.push('read'); return session(false) },
+      abort: async () => { calls.push('abort'); return true },
+    })
+    const failure = await sendNativePrompt(api, sessionId, request, true, 'nag_previous').catch((error: unknown) => error)
+    expect(failure).toBe(busy)
+    expect(calls).toEqual(['prompt', 'read'])
   })
 
   test('waits for confirmed interruption before sending the same captured payload and identity', async () => {

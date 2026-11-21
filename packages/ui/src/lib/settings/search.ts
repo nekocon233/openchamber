@@ -1,5 +1,6 @@
 import type { I18nKey, I18nParams } from '@/lib/i18n/store';
 import { getCustomizableShortcutActions } from '@/lib/shortcuts';
+import { canKeepScreenAwake } from '@/lib/platform';
 import { isIsolatedSpacesPageVisible } from '@/lib/spaces/release';
 import { useUIStore } from '@/stores/useUIStore';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -11,17 +12,13 @@ import type { TrackerDescriptor } from '@/lib/trackers/types';
 import type { ChangeRequestTerm, SourceControlProviderDescriptor } from '@/lib/source-control/providers/descriptor';
 import type { SettingsPageSlug, SettingsRuntimeContext } from './metadata';
 import { getSettingsPageMeta } from './metadata';
+import { OPENCHAMBER_TOOLS_SEARCH_ITEMS } from './search-openchamber-tools';
 
-/**
- * A title is a translated key, or a literal for an entry named after a
- * product the server describes (a source-control provider's label), since
- * product names stay untranslated in every locale.
- */
 type SettingsSearchTitle =
   | { titleKey: I18nKey; titleParams?: I18nParams; literalTitle?: never }
   | { literalTitle: string; titleKey?: never; titleParams?: never };
 
-type SettingsSearchItem = SettingsSearchTitle & {
+export type SettingsSearchItem = SettingsSearchTitle & {
   id: string;
   page: SettingsPageSlug;
   descriptionKey?: I18nKey;
@@ -42,17 +39,14 @@ export interface SettingsSearchAvailabilityContext extends SettingsRuntimeContex
   isMobile: boolean;
   workspaceLayout?: 'classic' | 'editor';
   isDesktopLocalOrigin: boolean;
-  // macOS desktop shell — for controls that only render on darwin (e.g. dock badge).
   isMac: boolean;
-  // Windows desktop shell — for controls that only render on win32.
   isWindows: boolean;
-  // Linux desktop shell — for controls that only render on linux.
   isLinux: boolean;
 }
 
 const isTunnelManagementAvailable = (ctx: SettingsSearchAvailabilityContext): boolean => !ctx.enterpriseMode;
 
-export const shortcutSearchItemId = (actionId: string): string => `shortcuts.binding.${actionId}`;
+export const shortcutSearchItemId = (actionId: string): string => `shortcuts.action.${actionId}`;
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
@@ -139,6 +133,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['calendar', 'monday', 'sunday'],
   },
   {
+    id: 'appearance.color-mode',
+    page: 'appearance',
+    titleKey: 'settings.openchamber.visual.section.colorMode',
+    keywords: ['theme', 'system', 'light mode', 'dark mode', 'appearance'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'appearance.light-theme',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.lightTheme',
@@ -157,25 +158,40 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'appearance',
     titleKey: 'settings.themeImport.action',
     descriptionKey: 'settings.themeImport.catalogHint',
-    keywords: ['theme', 'import', 'vscode', 'open vsx', 'openvsx', 'json', 'jsonc', 'syntax', 'palette'],
+    keywords: ['theme', 'import', 'browse', 'catalog', 'vs code', 'vscode', 'open vsx', 'openvsx', 'json', 'jsonc', 'syntax', 'palette'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'appearance.dock-badge',
-    page: 'appearance',
+    page: 'general',
     titleKey: 'settings.openchamber.visual.field.dockBadge',
     descriptionKey: 'settings.openchamber.visual.field.dockBadgeHint',
     keywords: ['dock', 'badge', 'unread', 'unseen', 'counter', 'count', 'notification', 'macos'],
-    // Exactly matches the render guard in OpenChamberVisualSettings: any darwin
-    // Electron shell (isMac already implies isDesktopShell), local or remote host.
     isAvailable: (ctx) => ctx.isMac,
   },
   {
+    id: 'general.keep-screen-awake',
+    page: 'general',
+    titleKey: 'settings.mobileApp.keepScreenAwake.label',
+    descriptionKey: 'settings.mobileApp.keepScreenAwake.info',
+    keywords: ['screen', 'display', 'sleep', 'lock', 'awake', 'wake lock', 'timeout', 'battery', 'phone'],
+    isAvailable: () => canKeepScreenAwake(),
+  },
+  {
     id: 'appearance.scrollbars',
+    page: 'general',
+    titleKey: 'settings.openchamber.visual.field.alwaysShowScrollbars',
+    descriptionKey: 'settings.openchamber.visual.field.alwaysShowScrollbarsHint',
+    keywords: ['scrollbar', 'scrollbars', 'scroll', 'mouse', 'wheel', 'accessibility', 'always visible'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
+    id: 'appearance.scrollbars-vscode',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.alwaysShowScrollbars',
     descriptionKey: 'settings.openchamber.visual.field.alwaysShowScrollbarsHint',
     keywords: ['scrollbar', 'scrollbars', 'scroll', 'mouse', 'wheel', 'accessibility', 'always visible'],
+    isAvailable: (ctx) => ctx.isVSCode,
   },
   {
     id: 'appearance.pwa-install-name',
@@ -216,6 +232,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isMobile,
   },
   {
+    id: 'appearance.chat-font-size',
+    page: 'appearance',
+    titleKey: 'settings.openchamber.visual.field.chatFontSize',
+    keywords: ['chat', 'font', 'text size', 'messages'],
+    isAvailable: (ctx) => !ctx.isMobile,
+  },
+  {
     id: 'appearance.interface-font-weight',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.interfaceFontWeight',
@@ -246,6 +269,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'appearance.terminal-open-on-project-action',
+    page: 'general',
+    titleKey: 'settings.openchamber.visual.field.terminalOpenOnProjectAction',
+    descriptionKey: 'settings.openchamber.visual.field.terminalOpenOnProjectActionInfo',
+    keywords: ['terminal', 'project action', 'run', 'open', 'panel', 'dev server'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+  },
+  {
     id: 'appearance.editor-font-size',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.editorFontSize',
@@ -263,7 +294,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.visual.field.inputBarOffset',
     descriptionKey: 'settings.openchamber.visual.field.inputBarOffsetTooltip',
     keywords: ['input', 'home bar', 'offset'],
-    // Only the mobile composer applies this offset (ChatInput gates on isMobile).
     isAvailable: (ctx) => ctx.isMobile,
   },
   {
@@ -400,7 +430,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.visual.field.sessionReviewOffer',
     descriptionKey: 'settings.openchamber.visual.field.sessionReviewOfferInfo',
     keywords: ['review', 'walkthrough', 'changes', 'diff', 'jev', 'classification'],
-    // Jev runs on the OpenChamber server; VS Code has no such offer.
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -469,10 +498,11 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['collapse', 'expand', 'clamp', 'long messages', 'user messages'],
   },
   {
-    id: 'chat.wide-layout',
+    id: 'chat.width',
     page: 'chat',
-    titleKey: 'settings.openchamber.visual.field.wideChatLayout',
-    keywords: ['layout', 'wide', 'messages'],
+    titleKey: 'settings.openchamber.visual.field.chatWidth',
+    descriptionKey: 'settings.openchamber.visual.field.chatWidthInfo',
+    keywords: ['layout', 'wide', 'wider', 'full', 'width', 'column', 'messages'],
   },
   {
     id: 'chat.message-appearance',
@@ -499,6 +529,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.visual.field.copyMessagesAsPlainText',
     descriptionKey: 'settings.openchamber.visual.field.copyMessagesAsPlainTextInfo',
     keywords: ['copy', 'clipboard', 'plain text', 'markdown', 'selection'],
+  },
+  {
+    id: 'chat.selection-approval-text',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.selectionApprovalText',
+    descriptionKey: 'settings.openchamber.visual.field.selectionApprovalTextInfo',
+    keywords: ['lgtm', 'sounds good', 'approval', 'feedback', 'selection', 'citation', 'comment', 'thumbs up', '👍'],
   },
   {
     id: 'chat.inline-assistant-actions',
@@ -576,6 +613,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.visual.section.followUpBehavior',
     descriptionKey: 'settings.openchamber.visual.field.followUpBehaviorDescription',
     keywords: ['follow up', 'queue', 'steer', 'send immediately'],
+  },
+  {
+    id: 'chat.questions-placement',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.questionsPlacement',
+    descriptionKey: 'settings.openchamber.visual.field.questionsPlacementInfo',
+    keywords: ['question', 'form', 'ask', 'pop-up', 'popup', 'dock', 'inline', 'in the chat'],
   },
   {
     id: 'chat.input-history-scope',
@@ -718,7 +762,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'sessions',
     titleKey: 'settings.openchamber.defaults.compaction.background',
     descriptionKey: 'settings.openchamber.defaults.compaction.backgroundInfo',
-    keywords: ['compaction', 'compact', 'background', 'experimental', 'precompute', 'summary', 'background_compaction'],
+    keywords: ['compaction', 'compact', 'background', 'precompute', 'summary'],
   },
   {
     id: 'sessions.permission-default',
@@ -726,7 +770,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.sessions.permissions.defaultMode',
     descriptionKey: 'settings.sessions.permissions.defaultModeInfo',
     keywords: ['permissions', 'auto-accept', 'accept', 'safety net', 'ask', 'shield', 'approval', 'new session'],
-    // The server writes the default onto new sessions; VS Code has none.
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -776,7 +819,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.finishedWorktrees.field.archiveOnDone',
     descriptionKey: 'settings.openchamber.finishedWorktrees.info',
     keywords: ['done', 'finish', 'in work', 'worktree', 'archive', 'cleanup', 'remove'],
-    // The section renders everywhere but VS Code, which has no archives.
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -785,7 +827,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.mergedWorktreeCleanup.field.enable',
     descriptionKey: 'settings.openchamber.finishedWorktrees.info',
     keywords: ['pr', 'pull request', 'merged', 'worktree', 'branch', 'archive', 'cleanup', 'remove'],
-    // The section renders everywhere but VS Code, which has no archives.
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -793,6 +834,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'sessions',
     titleKey: 'settings.layout.sessions.retention.target',
     keywords: ['archive', 'archived', 'only', 'delete', 'cleanup', 'retention'],
+  },
+  {
+    id: 'sessions.retention-include-in-work',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.sessionRetention.field.includeInWork',
+    descriptionKey: 'settings.openchamber.sessionRetention.field.includeInWorkInfo',
+    keywords: ['in work', 'done', 'cleanup', 'retention', 'archive', 'delete'],
+    isAvailable: () => useUIStore.getState().sessionWorkEnabled,
   },
   {
     id: 'sessions.retention-period',
@@ -924,94 +973,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['opencode', 'cli', 'updates'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
-  {
-    id: 'sessions.agent-control-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentControlTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentControlToolInfo',
-    keywords: ['agent', 'tool', 'orchestration', 'openchamber', 'sessions', 'worktree', 'control'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-schedule-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentScheduleTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentScheduleToolInfo',
-    keywords: ['agent', 'tool', 'schedule', 'scheduled', 'task', 'cron', 'recurring', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-web-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentWebTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentWebToolInfo',
-    keywords: ['agent', 'tool', 'web', 'browser', 'page', 'preview', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.browser-provider',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.browserProvider.label',
-    descriptionKey: 'settings.openchamber.tools.browserProvider.info',
-    keywords: ['agent', 'browser', 'provider', 'extension', 'chrome', 'server', 'headless'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-notify-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentNotifyTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentNotifyToolInfo',
-    keywords: ['agent', 'tool', 'notify', 'notification', 'alert', 'ping', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-image-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentImageTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentImageToolInfo',
-    keywords: ['agent', 'tool', 'image', 'picture', 'generate', 'draw', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-image-model',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.imageModel.label',
-    descriptionKey: 'settings.openchamber.tools.imageModel.info',
-    keywords: ['agent', 'image', 'model', 'picture', 'generate', 'draw'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-render-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentRenderTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentRenderToolInfo',
-    keywords: ['agent', 'tool', 'render', 'page', 'html', 'chart', 'table', 'diagram', 'generative', 'ui', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-secret-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentSecretTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentSecretToolInfo',
-    keywords: ['agent', 'tool', 'secret', 'token', 'api key', 'password', 'credential', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
-  {
-    id: 'sessions.agent-knowledge-tool',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentKnowledgeTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentKnowledgeToolInfo',
-    keywords: ['agent', 'tool', 'project', 'knowledge', 'notes', 'todos', 'plans', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
-  },
+  ...OPENCHAMBER_TOOLS_SEARCH_ITEMS,
   {
     id: 'general.isolated-spaces',
     page: 'isolated-spaces',
     titleKey: 'settings.openchamber.spaces.field.enabled',
     descriptionKey: 'settings.openchamber.spaces.field.enabledInfo',
     keywords: ['isolated', 'space', 'spaces', 'container', 'docker', 'sandbox', 'agent'],
-    // Never in VS Code: the feature has no entry point there (decision 16 of the design).
-    // Before the feature's first release only with the key on, like the page itself.
     isAvailable: (ctx) => !ctx.isVSCode && isIsolatedSpacesPageVisible(),
   },
   {
@@ -1020,7 +988,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.spaces.idleStop.enabled',
     descriptionKey: 'settings.openchamber.spaces.idleStop.enabledInfo',
     keywords: ['idle', 'stop', 'space', 'spaces', 'container', 'hours', 'timeout', 'sleep'],
-    // Rendered only while the switch is on, and never in VS Code.
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().isolatedSpacesEnabled,
   },
   {
@@ -1029,14 +996,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.spaces.places.machine.label',
     descriptionKey: 'settings.openchamber.spaces.places.machine.info',
     keywords: ['machine', 'ssh', 'remote', 'docker', 'space', 'spaces', 'host', 'server'],
-    // Rendered only while the switch is on, and never in VS Code.
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().isolatedSpacesEnabled,
   },
   {
     id: 'sessions.agent-memory-tool',
     page: 'general',
     titleKey: 'settings.openchamber.tools.field.agentMemoryTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentMemoryToolInfo',
+    descriptionKey: 'settings.openchamber.tools.field.agentMemoryToolSummary',
     keywords: ['agent', 'tool', 'memory', 'remember', 'recall', 'preferences', 'openchamber', 'claude', 'codex', 'cli', 'handoff'],
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentMemoryFeatureAvailable,
   },
@@ -1044,7 +1010,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'sessions.agent-workflow-tool',
     page: 'general',
     titleKey: 'settings.openchamber.tools.field.agentWorkflowTool',
-    descriptionKey: 'settings.openchamber.tools.field.agentWorkflowToolInfo',
+    descriptionKey: 'settings.openchamber.tools.field.agentWorkflowToolSummary',
     keywords: ['agent', 'tool', 'workflow', 'workflows', 'subagents', 'fan out', 'parallel', 'openchamber'],
     // Only where an OpenChamber server backs workflows, like memory.
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentWorkflowFeatureAvailable,
@@ -1056,14 +1022,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     descriptionKey: 'settings.routing.token.info',
     keywords: ['jev', 'typesafe', 'api key', 'token', 'routing'],
     isAvailable: (ctx) => !ctx.isVSCode && ctx.routingAvailable,
-  },
-  {
-    id: 'sessions.agent-tools-code-mode',
-    page: 'general',
-    titleKey: 'settings.openchamber.tools.field.agentToolsCodeMode',
-    descriptionKey: 'settings.openchamber.tools.field.agentToolsCodeModeInfo',
-    keywords: ['agent', 'tool', 'code mode', 'codemode', 'execute', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'routing.enabled',
@@ -1196,6 +1154,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['worktree', 'branch', 'repository'],
   },
   {
+    id: 'projects.worktree.create',
+    page: 'projects',
+    titleKey: 'settings.openchamber.worktrees.create.title',
+    descriptionKey: 'settings.openchamber.worktrees.create.info',
+    keywords: ['worktree', 'create', 'copy-on-write', 'cow', 'reflink', 'clone', 'git worktree add', 'node_modules', 'disk'],
+  },
+  {
     id: 'projects.worktree.setup.wait',
     page: 'projects',
     titleKey: 'settings.openchamber.worktrees.setup.waitForCommands',
@@ -1208,11 +1173,25 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['worktree', 'setup commands', 'shared', 'team', 'only mine'],
   },
   {
+    id: 'projects.worktree.teardown',
+    page: 'projects',
+    titleKey: 'settings.openchamber.worktrees.teardown.title',
+    keywords: ['worktree', 'teardown', 'cleanup', 'delete', 'docker', 'stop'],
+  },
+  {
     id: 'projects.environment',
     page: 'projects',
     titleKey: 'settings.projects.environment.title',
     descriptionKey: 'settings.projects.environment.info',
     keywords: ['environment', 'env', 'variables', 'direnv', 'devenv', 'nix', 'envrc', 'path', 'terminal', 'git hooks'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
+    id: 'projects.notes-todos.repository',
+    page: 'projects',
+    titleKey: 'settings.projects.notesTodos.inRepository',
+    descriptionKey: 'settings.projects.notesTodos.inRepositoryDescription',
+    keywords: ['notes', 'todos', 'repository', 'git', 'sync', '.openchamber', 'notes-todos.json'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -1447,12 +1426,11 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['add provider', 'connect provider', 'credentials'],
   },
   {
-    // Opens the Classification providers sub-page (SettingsView sets the request).
     id: 'providers.classification',
     page: 'providers',
     titleKey: 'settings.classification.page.title',
     descriptionKey: 'settings.classification.page.description',
-    keywords: ['jev', 'typesafe', 'zen', 'api key', 'token', 'safety net', 'auto', 'routing', 'classification', 'promotion', 'off', 'disable', 'privacy', 'custom endpoint', 'base url', 'openai-compatible', 'system one', 'self-hosted', 'proxy'],
+    keywords: ['jev', 'typesafe', 'zen', 'api key', 'token', 'safety net', 'auto', 'routing', 'classification', 'promotion', 'off', 'disable', 'privacy', 'custom endpoint', 'base url', 'openai-compatible', 'system one', 'self-hosted', 'proxy', 'gemini', 'google', 'decisions'],
     isAvailable: (ctx) => !ctx.isVSCode && ctx.routingAvailable,
   },
   {
@@ -1460,13 +1438,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'providers',
     titleKey: 'settings.providers.page.custom.title',
     descriptionKey: 'settings.providers.page.custom.description',
-    keywords: ['other', 'custom', 'openai-compatible', 'base url', 'api key'],
+    keywords: ['other', 'custom', 'openai-compatible', 'base url', 'api key', 'client certificate', 'mtls', 'mutual tls', 'gateway'],
   },
   {
     id: 'providers.auth',
     page: 'providers',
     titleKey: 'settings.providers.accounts.title',
     keywords: ['api key', 'oauth', 'credentials', 'accounts', 'switch account', 'disconnect'],
+  },
+  {
+    id: 'providers.logo',
+    page: 'providers',
+    titleKey: 'settings.providers.page.logo.title',
+    keywords: ['logo', 'image', 'upload', 'icon', 'picture', 'svg', 'png'],
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'providers.models',
@@ -1565,8 +1550,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     descriptionKey: 'settings.openchamber.keyboardShortcuts.tooltip',
     keywords: ['keyboard', 'hotkeys', 'bindings'],
   },
-  // Every in-app shortcut the Shortcuts page lists, by its own name. The
-  // system-wide ones (category `desktop`) live on General.
   ...getCustomizableShortcutActions()
     .filter((action) => action.category !== 'desktop')
     .map((action): SettingsSearchItem => ({
@@ -1574,6 +1557,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
       page: 'shortcuts',
       titleKey: action.settingsLabelKey,
       keywords: ['shortcut', 'hotkey', 'keyboard', 'keybinding'],
+      isAvailable: (ctx) => !('nativeMenu' in action) || (ctx.isDesktop && (action.nativeMenu === 'all' || !ctx.isMac)),
     })),
   {
     id: 'voice.playback',
@@ -1627,7 +1611,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'tunnel.overview',
     page: 'tunnel',
     titleKey: 'settings.page.tunnel.title',
-    descriptionKey: 'settings.page.tunnel.description',
     keywords: ['tunnel', 'remote access', 'cloudflare', 'frpc', 'frps', 'qr', 'share'],
   },
   {
@@ -1764,7 +1747,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'extensions.overview',
     page: 'extensions',
     titleKey: 'settings.page.extensions.title',
-    descriptionKey: 'settings.page.extensions.description',
     keywords: ['remote desktop', 'vnc', 'tigervnc', 'desktop', 'extension', 'extensions'],
     isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
   },
@@ -1782,7 +1764,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.extensions.add.label',
     descriptionKey: 'settings.extensions.add.info',
     keywords: ['folder', 'path', 'zip', 'git', 'url', 'install', 'guest', 'panel'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'integrations.third-party.opencode-cursor-oauth',
@@ -1792,33 +1774,46 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['cursor', 'oauth', 'subscription', 'openai compatible', '@openchamber/opencode-cursor'],
   },
   {
+    id: 'extensions.browse',
+    page: 'extensions',
+    titleKey: 'settings.extensions.browse.label',
+    descriptionKey: 'settings.extensions.browse.hint',
+    keywords: ['community', 'catalog', 'marketplace', 'store', 'gallery', 'website', 'discover', 'find', 'extension'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+  },
+  {
     id: 'extensions.gitIdentity',
     page: 'extensions',
     titleKey: 'settings.extensions.identity.title',
     descriptionKey: 'settings.extensions.add.info',
     keywords: ['ssh', 'key', 'identity', 'git', 'private', 'clone', 'extension'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'extensions.updates.check',
     page: 'extensions',
     titleKey: 'settings.extensions.updates.check',
     keywords: ['update', 'upgrade', 'version', 'git', 'extension', 'guest', 'refresh'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
 ] as const;
 
-/** Static anchors used to seed the first-install baseline. */
 export const SETTINGS_ANCHOR_PAGES: ReadonlyMap<string, SettingsPageSlug> = new Map(
   SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item.page] as const),
 );
 
 export const getAvailableSettingsAnchorPages = (ctx: SettingsSearchAvailabilityContext): ReadonlyMap<string, SettingsPageSlug> => new Map(
-  SETTINGS_SEARCH_ITEMS.filter((item) => {
-    const page = getSettingsPageMeta(item.page);
-    return page && (!page.isAvailable || page.isAvailable(ctx)) && (!item.isAvailable || item.isAvailable(ctx));
-  }).map((item) => [item.id, item.page] as const),
+  SETTINGS_SEARCH_ITEMS.filter((item) => isSettingsAnchorAvailable(item.id, ctx)).map((item) => [item.id, item.page] as const),
 );
+
+const SETTINGS_SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
+
+export const isSettingsAnchorAvailable = (anchorId: string, ctx: SettingsSearchAvailabilityContext): boolean => {
+  const item = SETTINGS_SEARCH_ITEMS_BY_ID.get(anchorId);
+  if (!item) return false;
+  const page = getSettingsPageMeta(item.page);
+  return Boolean(page) && (!page?.isAvailable || page.isAvailable(ctx)) && (!item.isAvailable || item.isAvailable(ctx));
+};
 
 interface BuildSettingsSearchResultsOptions {
   query: string;
@@ -1826,9 +1821,7 @@ interface BuildSettingsSearchResultsOptions {
   visiblePageSlugs?: SettingsPageSlug[];
   t: (key: I18nKey, params?: I18nParams) => string;
   getPageTitle: (slug: SettingsPageSlug) => string;
-  /** The trackers the connected server serves; each adds its own entries. */
   trackers?: readonly TrackerDescriptor[];
-  /** The source-control providers the connected server serves; each adds its card and connect entries. */
   sourceControlProviders?: readonly SourceControlProviderDescriptor[];
 }
 
@@ -1838,12 +1831,6 @@ const CHANGE_REQUEST_SEARCH_NOUNS = {
   change: ['change', 'code review', 'patchset'],
 } satisfies Record<ChangeRequestTerm, string[]>;
 
-/**
- * Each served source-control provider's entries on the Integrations page: its
- * card, `integrations.source-control.<id>`, and the connect block inside it,
- * `.connect`. The card is the anchor `SourceControlProviderCard` renders, so a
- * provider the server adds is searchable with no entry of its own here.
- */
 function sourceControlSearchItems(providers: readonly SourceControlProviderDescriptor[]): SettingsSearchItem[] {
   const notInVSCode = (ctx: SettingsSearchAvailabilityContext) => !ctx.isVSCode;
   return providers.flatMap((descriptor) => {
@@ -1880,12 +1867,6 @@ function sourceControlSearchItems(providers: readonly SourceControlProviderDescr
   });
 }
 
-/**
- * Each served tracker's entries on the Integrations page: the tracker itself,
- * adding an account and its project mapping where its capabilities offer
- * them. Ids are `integrations.<tracker>[.add-workspace|.mapping]`, the ids
- * Linear's entries always had. A tracker without words of its own has none.
- */
 function trackerSearchItems(trackers: readonly TrackerDescriptor[]): SettingsSearchItem[] {
   const notInVSCode = (ctx: SettingsSearchAvailabilityContext) => !ctx.isVSCode;
   return trackers.flatMap((descriptor) => {

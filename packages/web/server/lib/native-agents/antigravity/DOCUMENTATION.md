@@ -147,7 +147,14 @@ valid for turn timing.
 Native generation starts refine live message creation times when the stream
 arrived later. Accepted user sends retain their admission time, and ordered
 steps in one native second shift tool intervals together to preserve duration.
+When a streamed reply precedes recovery of an earlier reasoning step, the live
+record list follows the recovered transcript's step order.
 Recovered tools therefore stay within their owning generation's window.
+The native send registry records a request fingerprint before writing to AGY
+and acknowledges the pipe write before returning success. A replay of a saved
+ID with the same fingerprint reuses its confirmed delivery. A reservation with
+an unknown outcome returns `NATIVE_PROMPT_OUTCOME_UNKNOWN`. The registry keeps
+the most recent 200 sends per session.
 `measurements.js` saves stream-only counters, completion times and part intervals
 with the accepted send. It stores IDs and text hashes, without text, inputs or
 outputs. Native parent/message identity and compatible usage gate restoration;

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRemoteClientAuthRuntime } from '../client-auth/remote-clients.js';
 import { createUiAuth } from '../ui-auth/ui-auth.js';
 import { createApnsRuntime } from './apns-runtime.js';
+import { configureNotificationAuthValidator, createClientNotificationAuth, createUiSessionNotificationAuth } from './auth-runtime.js';
 import { createClientPushAccess } from './client-push-access.js';
 import { createPushRuntime } from './push-runtime.js';
 import { clientSessionKeyFor, sessionKeyFor } from './session-key.js';
@@ -24,8 +25,12 @@ describe('client push access', () => {
 
   const clientToken = (client) => `client:${client.id}`;
   const pair = async (label) => (await clients.createClient({ label })).client;
-  const registerPhone = (sessionToken, deviceToken) => apns.addOrUpdateApnsToken(sessionToken, deviceToken);
-  const registerBrowser = (sessionToken, endpoint) => push.addOrUpdatePushSubscription(sessionToken, { endpoint, p256dh: 'p', auth: 'a' });
+  const cookieIdentities = new Set(['older-cookie-session', 'cookie-session'].map((token) => createUiSessionNotificationAuth(token).identity));
+  const authFor = (token) => token.startsWith('client:')
+    ? createClientNotificationAuth(token.slice('client:'.length))
+    : createUiSessionNotificationAuth(token);
+  const registerPhone = (sessionToken, deviceToken) => apns.addOrUpdateApnsToken(authFor(sessionToken), deviceToken);
+  const registerBrowser = (sessionToken, endpoint) => push.addOrUpdatePushSubscription(authFor(sessionToken), { endpoint, p256dh: 'p', auth: 'a' });
 
   const notify = async () => {
     relayedTokens.length = 0;
@@ -48,6 +53,10 @@ describe('client push access', () => {
     }));
 
     clients = createRemoteClientAuthRuntime({ fsPromises: fs, path, crypto, storePath: path.join(dir, 'remote-clients.json') });
+    const uiAuth = createUiAuth({ password: null, clientAuthController: clients });
+    configureNotificationAuthValidator((auth) => auth.kind === 'client'
+      ? uiAuth.validateNotificationAuth(auth)
+      : cookieIdentities.has(auth.identity));
     const getInvalidSessionKeys = () => access.invalidSessionKeys();
     apns = createApnsRuntime({
       fsPromises: fs,
@@ -78,10 +87,15 @@ describe('client push access', () => {
     access = createClientPushAccess({
       listClients: clients.listClients,
       removeDevicesOfSessions: [apns.removeApnsDevicesOfSessions, push.removePushDevicesOfSessions],
+      authenticateBearerClient: async (req) => {
+        const token = req.headers.authorization?.replace(/^Bearer /, '');
+        return token ? (await clients.authenticateBearerToken(token, req))?.client ?? null : null;
+      },
     });
   });
 
   afterEach(async () => {
+    configureNotificationAuthValidator(null);
     vi.unstubAllGlobals();
     delete process.env.OPENCHAMBER_PUSH_RELAY_URL;
     await fs.rm(dir, { recursive: true, force: true });
@@ -116,8 +130,8 @@ describe('client push access', () => {
       phones: ['phone-cookie', 'phone-valid'],
       browsers: ['https://push.test/cookie', 'https://push.test/valid'],
     });
-    expect(Object.keys(await stored('apns-tokens.json', 'tokensBySession'))).not.toContain(clientSessionKeyFor(revoked.id));
-    expect(Object.keys(await stored('push-subscriptions.json', 'subscriptionsBySession'))).not.toContain(clientSessionKeyFor(revoked.id));
+    expect(Object.keys(await stored('apns-tokens.json', 'registrationsByIdentity'))).not.toContain(createClientNotificationAuth(revoked.id).identity);
+    expect(Object.keys(await stored('push-subscriptions.json', 'registrationsByIdentity'))).not.toContain(createClientNotificationAuth(revoked.id).identity);
   });
 
   it('keeps a device that is also registered under a client that is still valid', async () => {
@@ -144,9 +158,43 @@ describe('client push access', () => {
     await registerBrowser(clientToken(expired), 'https://push.test/expired');
     await registerBrowser('cookie-session', 'https://push.test/cookie');
 
+    await registerPhone('older-cookie-session', 'phone-revoked');
+    await registerBrowser('older-cookie-session', 'https://push.test/revoked');
     await clients.revokeClient(revoked.id);
 
     expect(await notify()).toEqual({ phones: ['phone-cookie'], browsers: ['https://push.test/cookie'] });
+  });
+
+  it('sends nothing to a device paired for the home network only, until it reaches the server through the relay', async () => {
+    const created = await clients.createClient({ label: 'Home phone', localOnly: true });
+    const anywhere = await pair('Anywhere phone');
+    await registerPhone(clientToken(created.client), 'phone-home');
+    await registerPhone(clientToken(anywhere), 'phone-anywhere');
+    await registerBrowser(clientToken(created.client), 'https://push.test/home');
+
+    const noBearer = { headers: {} };
+    expect(await access.isLocalOnlyRequest(noBearer, clientToken(created.client))).toBe(true);
+    expect(await access.isLocalOnlyRequest(noBearer, clientToken(anywhere))).toBe(false);
+    expect(await access.isLocalOnlyRequest(noBearer, 'cookie-session')).toBe(false);
+    expect(await access.isLocalOnlyRequest({ headers: { authorization: `Bearer ${created.token}` } }, 'cookie-session')).toBe(true);
+    expect(await notify()).toEqual({ phones: ['phone-anywhere'], browsers: [] });
+
+    await clients.authenticateBearerToken(created.token, { headers: { 'x-openchamber-relay-connection': '1' } });
+
+    expect(await access.isLocalOnlyRequest(noBearer, clientToken(created.client))).toBe(false);
+    expect(await notify()).toEqual({ phones: ['phone-anywhere', 'phone-home'], browsers: ['https://push.test/home'] });
+  });
+
+  it('stops a phone that pairs again for the home network only from receiving through its replaced pairing', async () => {
+    const first = await clients.createClient({ label: 'Phone', dedupeKey: 'install-1' });
+    await registerPhone('older-cookie-session', 'same-phone');
+    await registerPhone(clientToken(first.client), 'same-phone');
+
+    const again = await clients.createClient({ label: 'Phone', dedupeKey: 'install-1', localOnly: true });
+    expect(again.replacedClientIds).toEqual([first.client.id]);
+    await access.removeDevicesOfClients(again.replacedClientIds);
+
+    expect(await notify()).toEqual({ phones: [], browsers: [] });
   });
 
   it('sends nothing when the client list cannot be read', async () => {

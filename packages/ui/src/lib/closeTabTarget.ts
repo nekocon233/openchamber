@@ -1,23 +1,7 @@
 import { hasDesktopInvoke, invokeDesktop } from '@/lib/desktop';
 import { isMacOS } from '@/lib/utils';
 
-/**
- * What Cmd/Ctrl+W closes in the desktop and web app.
- *
- * A surface with a tab of its own (a file open in the editor, a terminal, a
- * browser tab) registers here; the desktop shell is told whether one is
- * registered, and while one is, the shortcut arrives as an
- * `openchamber:close-tab` event or a captured `Mod+W` keydown instead of
- * closing the window.
- *
- * The surface the user clicked or focused last wins. A surface's place is the
- * zone or editor host it sits in (`[data-context-zone], [data-file-editor]`),
- * so a click on the zone's or editor's tab strip counts as much as one in its
- * content. When places nest, such as the header's session tabs registered on
- * the whole page around a zone or editor with tabs, a click counts for the
- * innermost one.
- */
-type Target = { close: () => void; area: { current: Element | null }; usedAt: number };
+type Target = { close: () => void; area: { current: Element | null }; usedAt: number; priority: number };
 
 const targets: Target[] = [];
 let clock = 0;
@@ -40,8 +24,6 @@ const markUsedForNode = (node: Node | null): void => {
     const place = area ? placeOf(area) : null;
     if (place?.contains(node)) hits.push({ target, place });
   }
-  // Only the innermost places count: a click in a zone or editor with tabs goes
-  // to them, not to a target around the whole page.
   for (const hit of hits) {
     const outer = hits.some((other) => other.place !== hit.place && hit.place.contains(other.place));
     if (!outer) hit.target.usedAt = ++clock;
@@ -61,7 +43,8 @@ const handleCloseTab = (): void => {
   }
   let latest: Target | undefined;
   for (const target of targets) {
-    if (!latest || target.usedAt > latest.usedAt) latest = target;
+    if (!latest || target.priority > latest.priority) { latest = target; continue; }
+    if (target.priority === latest.priority && target.usedAt > latest.usedAt) latest = target;
   }
   latest?.close();
 };
@@ -81,17 +64,19 @@ const handleKeyDown = (event: KeyboardEvent): void => {
   handleCloseTab();
 };
 
-export const registerCloseTabTarget = (close: () => void, area: { current: Element | null } = { current: null }): (() => void) => {
+export const registerCloseTabTarget = (
+  close: () => void,
+  area: { current: Element | null } = { current: null },
+  priority = 0,
+): (() => void) => {
   if (!listening) {
     window.addEventListener('openchamber:close-tab', handleCloseTab);
     window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('pointerdown', handleUse, true);
-    // `focus`, captured: a click into a browser tab's page focuses its
-    // `<webview>` with a `focus` event only, no `focusin` and no pointer event.
     window.addEventListener('focus', handleUse, true);
     listening = true;
   }
-  const target: Target = { close, area, usedAt: ++clock };
+  const target: Target = { close, area, usedAt: ++clock, priority };
   targets.push(target);
   report();
   return () => {

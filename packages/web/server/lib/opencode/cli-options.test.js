@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { parseServeCliOptions } from './cli-options.js';
+import { parseServeCliOptions } from '../server-frame/cli-options.js';
 import { startWebUiServer } from '../../index.js';
 
 const parse = (options = {}) => parseServeCliOptions({

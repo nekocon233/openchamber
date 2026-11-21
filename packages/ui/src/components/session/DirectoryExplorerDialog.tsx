@@ -34,7 +34,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { initialBrowseQuery, isRootedBrowseQuery, projectBrowsePlaces, resolveBrowseQuery } from './directoryExplorerStart';
+import { getBrowseParentPath, initialBrowseQuery, isRootedBrowseQuery, joinBrowsePath, projectBrowsePlaces, resolveBrowseQuery, trimTrailingSeparators } from './directoryExplorerStart';
 import { getDirectoryPickerLabelKey } from './directoryExplorerLabels';
 import { useOpenCodeProjects } from './project-import/useOpenCodeProjects';
 import { formatShortcutForDisplay } from '@/lib/shortcuts';
@@ -42,7 +42,9 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useGitIdentitiesStore } from '@/stores/useGitIdentitiesStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useFileSystemAccess } from '@/hooks/useFileSystemAccess';
-import { cn, formatPathForDisplay } from '@/lib/utils';
+import { cn, formatDirectoryName, formatPathForDisplay } from '@/lib/utils';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { formatProjectLabel } from './sidebar/utils';
 import { toast } from '@/components/ui';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { useDeviceInfo } from '@/lib/device';
@@ -60,7 +62,6 @@ import {
 interface DirectoryExplorerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Takes over from opening a new session draft in the added project. Picks one folder at a time. */
   onProjectAdded?: (project: { id: string; path: string }) => void;
 }
 
@@ -69,25 +70,19 @@ type BrowseEntry = {
   path: string;
 };
 
-// An added folder can still be browsed for its subfolders; only adding it again is blocked.
-type BrowseRow = { value: string; name: string; path: string; added: boolean };
+type BrowseRow = {
+  value: string;
+  name: string;
+  path: string;
+  added: boolean;
+  linkTarget: { label: string; path: string } | null;
+};
 
 type ExplorerView = 'folder' | 'opencode' | 'clone';
 
 const LOADING_MESSAGE_DELAY_MS = 200;
 
-const isRootPath = (value: string): boolean => value === '/';
-
 const normalizeSeparators = (value: string): string => value.replace(/\\/g, '/');
-
-const trimTrailingSeparators = (value: string): string => {
-  if (!value || isRootPath(value)) return value;
-  let result = value;
-  while (result.length > 1 && result.endsWith('/')) {
-    result = result.slice(0, -1);
-  }
-  return result;
-};
 
 const hasTrailingPathSeparator = (value: string): boolean => value.endsWith('/');
 
@@ -111,16 +106,6 @@ const getBrowseLeafPathSegment = (value: string): string => {
   return value.slice(lastSeparator + 1);
 };
 
-const getBrowseParentPath = (value: string): string | null => {
-  const trimmed = trimTrailingSeparators(value.trim());
-  if (!trimmed || trimmed === '~' || trimmed === '~/' || trimmed === '/') return null;
-  const lastSeparator = getLastPathSeparatorIndex(trimmed);
-  if (lastSeparator < 0) return null;
-  if (trimmed.startsWith('~/') && lastSeparator <= 1) return '~/';
-  if (lastSeparator === 0) return '/';
-  return `${trimmed.slice(0, lastSeparator)}/`;
-};
-
 const lastPathSegment = (value: string): string => {
   const trimmed = trimTrailingSeparators(value);
   return trimmed.slice(getLastPathSeparatorIndex(trimmed) + 1) || trimmed;
@@ -142,14 +127,11 @@ const displayPathToAbsolutePath = (value: string, homeDirectory: string): string
   if (trimmed === '~') return homeDirectory;
   if (trimmed.startsWith('~/')) {
     const rest = trimmed.slice(1);
-    // Typing or pasting an absolute path while the field still holds its "~/"
-    // prefix means that absolute path, not one nested under home.
     return rest.startsWith('//') ? rest.slice(1) : `${homeDirectory}${rest}`;
   }
   return trimmed;
 };
 
-// The folder name `git clone` gives a checkout: the URL's last segment without `.git`.
 const cloneDirectoryName = (remoteUrl: string): string => {
   const withoutQuery = remoteUrl.trim().split(/[?#]/, 1)[0] ?? '';
   const name = withoutQuery.match(/([^/:]+?)(?:\.git)?\/?$/)?.[1]?.trim() ?? '';
@@ -233,27 +215,35 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   const [isOpeningFinder, setIsOpeningFinder] = React.useState(false);
   const [requestedView, setRequestedView] = React.useState<ExplorerView>('folder');
   const [cloneRemoteUrl, setCloneRemoteUrl] = React.useState('');
-  // One identity carries the account, the transport and the signature, so the
-  // add and clone screens ask once instead of assembling three answers.
   const [identityChoice, setIdentityChoice] = React.useState<{ key: string; id: string } | null>(null);
   const cloneController = React.useRef<AbortController | null>(null);
   const openCodeProjects = useOpenCodeProjects(open && !runtime.isVSCode && !onProjectAdded, runtimeKey);
-  // The OpenCode list can be gone by the time a view of it would show.
   const view = requestedView === 'opencode' && openCodeProjects.length === 0 ? 'folder' : requestedView;
   const isCloneMode = view === 'clone';
   const isOpenCodeView = view === 'opencode';
-  // A single-folder flow never selects; the clone destination is the path field.
   const canSelect = !onProjectAdded && !isCloneMode;
   const cloneRecovery = useGitOperationRecovery(open && isCloneMode ? 'clone' : null, git, sourceControl, { kind: 'clone' });
   const [showHidden, setShowHidden] = React.useState(false);
 
   const explorerRootDirectory = dialogHomeDirectory || homeDirectory;
 
-  const addedProjectPaths = React.useMemo(() => new Set(
-    projects
-      .map((project) => normalizeDirectoryPath(project.path))
-      .filter((path): path is string => Boolean(path))
-  ), [projects]);
+  const addedProjectsByPath = React.useMemo(() => {
+    const byPath = new Map<string, (typeof projects)[number]>();
+    for (const project of projects) {
+      const normalized = normalizeDirectoryPath(project.path);
+      if (normalized) byPath.set(normalized, project);
+    }
+    return byPath;
+  }, [projects]);
+  const [realPaths, setRealPaths] = React.useState<ReadonlyMap<string, string>>(new Map());
+  const addedProjectOf = React.useCallback((path: string) => {
+    const normalized = normalizeDirectoryPath(path);
+    if (!normalized) return null;
+    const own = addedProjectsByPath.get(normalized);
+    if (own) return own;
+    const real = normalizeDirectoryPath(realPaths.get(normalized));
+    return (real && addedProjectsByPath.get(real)) || null;
+  }, [addedProjectsByPath, realPaths]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -268,6 +258,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     setIdentityChoice(null);
     setSelectedPaths([]);
     setShowHidden(false);
+    setRealPaths(new Map());
 
     let cancelled = false;
     const resolveHome = async () => {
@@ -275,7 +266,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       if (cancelled) return;
       const home = resolved || homeDirectory || '';
       setDialogHomeDirectory(home);
-      // Only while the field still holds the untouched default.
       const start = initialBrowseQuery(useProjectsStore.getState().projects, home);
       setQuery((current) => (current === '~/' ? start : current));
     };
@@ -307,8 +297,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   );
 
 
-  // The last folder the field pointed at, which a rail entry stays selected for
-  // while the field is cleared or holds a bare name.
   React.useEffect(() => {
     if (isRootedBrowseQuery(query) && query.includes('/')) setBrowsedFolder(getBrowseDirectoryPath(query));
   }, [query]);
@@ -332,16 +320,12 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
 
     let cancelled = false;
     setIsLoading(true);
-    // A listing usually arrives within a frame or two. The previous rows stay
-    // until then, so switching folders does not flash a loading line.
     const slowLoading = setTimeout(() => setIsLoadingSlowly(true), LOADING_MESSAGE_DELAY_MS);
     setIsBrowseDirectoryMissing(false);
     setBrowseErrorReason(null);
     opencodeClient.listLocalDirectory(browseDirectoryAbsolutePath)
-      .then((result) => {
+      .then(async (result) => {
         if (cancelled) return;
-        setIsBrowseDirectoryMissing(false);
-        setBrowseErrorReason(null);
         const nextEntries = result
           .filter((entry) => entry.isDirectory)
           .map((entry) => ({
@@ -349,6 +333,21 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
             path: normalizeSeparators(entry.path),
           }))
           .sort((left, right) => left.name.localeCompare(right.name));
+        const resolved = await opencodeClient.getDirectoryRealPaths([
+          browseDirectoryAbsolutePath,
+          ...nextEntries.map((entry) => entry.path),
+        ]);
+        if (cancelled) return;
+        setIsBrowseDirectoryMissing(false);
+        setBrowseErrorReason(null);
+        setRealPaths((current) => {
+          const next = new Map(current);
+          for (const [path, realPath] of resolved) {
+            const normalized = normalizeDirectoryPath(path);
+            if (normalized) next.set(normalized, realPath);
+          }
+          return next;
+        });
         setEntries(nextEntries);
       })
       .catch((error) => {
@@ -381,16 +380,23 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   }, [browseFilterQuery, entries, showHidden]);
 
   const rows = React.useMemo<BrowseRow[]>(() => {
+    const folderRealPath = realPaths.get(normalizeDirectoryPath(browseDirectoryAbsolutePath) ?? '');
     return filteredEntries.map((entry) => {
-      const normalized = normalizeDirectoryPath(entry.path);
+      const project = addedProjectOf(entry.path);
+      const unlinkedPath = folderRealPath ? joinBrowsePath(folderRealPath, entry.name) : entry.path;
+      const isLink = project !== null && normalizeDirectoryPath(project.path) !== normalizeDirectoryPath(unlinkedPath);
       return {
         value: `browse:${entry.path}`,
         name: entry.name,
         path: entry.path,
-        added: Boolean(normalized && addedProjectPaths.has(normalized)),
+        added: project !== null,
+        linkTarget: isLink ? {
+          label: formatProjectLabel(project.label?.trim() || formatDirectoryName(project.path, explorerRootDirectory) || project.path),
+          path: project.path,
+        } : null,
       };
     });
-  }, [addedProjectPaths, filteredEntries]);
+  }, [addedProjectOf, browseDirectoryAbsolutePath, explorerRootDirectory, filteredEntries, realPaths]);
 
   React.useEffect(() => {
     setHighlightedIndex(0);
@@ -401,11 +407,8 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     return trimTrailingSeparators(displayPathToAbsolutePath(resolvedQuery, explorerRootDirectory));
   }, [explorerRootDirectory, resolvedQuery]);
   const selectionPaths = React.useMemo(
-    () => selectedPaths.filter((path) => {
-      const normalized = normalizeDirectoryPath(path);
-      return Boolean(normalized && !addedProjectPaths.has(normalized));
-    }),
-    [addedProjectPaths, selectedPaths]
+    () => selectedPaths.filter((path) => Boolean(normalizeDirectoryPath(path)) && !addedProjectOf(path)),
+    [addedProjectOf, selectedPaths]
   );
   const togglePathSelection = React.useCallback((path: string) => {
     setSelectedPaths((prev) => (
@@ -417,9 +420,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     if (!browseFilterQuery) return null;
     return filteredEntries.find((entry) => entry.name === browseFilterQuery) ?? null;
   }, [browseFilterQuery, filteredEntries]);
-  // A clone never lands in a folder that exists: one the path field points at
-  // is where the checkout goes, under the repository's own name, as with
-  // `git clone`. A path that does not exist yet is the checkout itself.
   const cloneDestination = React.useMemo(() => {
     if (!isCloneMode || !targetPath || isLoading) return '';
     const pointsAtExistingFolder = hasTrailingPathSeparator(resolvedQuery)
@@ -428,11 +428,10 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     if (!pointsAtExistingFolder) return targetPath;
     const name = cloneDirectoryName(cloneRemoteUrl);
     if (!name) return '';
-    return isRootPath(targetPath) ? `/${name}` : `${targetPath}/${name}`;
+    return joinBrowsePath(targetPath, name);
   }, [browseErrorReason, cloneRemoteUrl, exactEntry, isBrowseDirectoryMissing, isCloneMode, isLoading, resolvedQuery, targetPath]);
   const submitTarget = isCloneMode ? cloneDestination : targetPath;
-  const normalizedTargetPath = normalizeDirectoryPath(submitTarget);
-  const isAlreadyAdded = Boolean(normalizedTargetPath && addedProjectPaths.has(normalizedTargetPath));
+  const isAlreadyAdded = addedProjectOf(submitTarget) !== null;
   const shouldCreateTarget = Boolean(
     targetPath
     && !isAlreadyAdded
@@ -450,49 +449,25 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       && browseErrorReason !== 'unknown'
     ))
     && (selectionPaths.length > 0 || (!isOpenCodeView && !isAlreadyAdded && Boolean(submitTarget)));
-  // Adding a directory that is already a repository: read what its own .git
-  // states so the association can be offered instead of asked for. Nothing is
-  // written until the project is added with the proposal still selected. A
-  // closed dialog adds nothing: its path is the home, which it would read on
-  // every launch.
   const existingRepository = useExistingRepositorySummary(targetPath, { sourceControl, git },
     open && view === 'folder' && !runtime.isVSCode && !isAlreadyAdded && !shouldCreateTarget && selectionPaths.length === 0);
   React.useEffect(() => {
     if (existingRepository && !runtime.isVSCode) void refreshAccounts(sourceControl);
   }, [existingRepository, refreshAccounts, runtime.isVSCode, runtimeKey, sourceControl]);
 
-  /**
-   * The identity this screen is about to apply.
-   *
-   * It is proposed from the host the repository points at, so a repository on a
-   * host one identity already answers for needs no choice at all, and stays
-   * whatever the person picks instead. The key carries the host so a new host
-   * proposes again rather than keeping an answer given for another one.
-   */
   const existingPrimaryRemote = existingRepository?.primaryRemote ?? null;
   const identityRemote = React.useMemo((): RemoteTraits | null => {
     if (isCloneMode) return cloneRemoteUrl.trim() ? remoteTraits(cloneRemoteUrl) : null;
     if (!existingPrimaryRemote) return null;
-    // The summary decides which transports the remote allows, and it counts
-    // one only while its fetch and push endpoints agree: an identity applied
-    // here writes a grant for the remote as a whole, so a key or credential
-    // that reaches just the fetch endpoint does not answer for it. The address
-    // itself — its host and SSH port — is the fetch endpoint's own.
     const fetchTraits = remoteTraits(existingPrimaryRemote.fetch.displayUrl);
     return { ...fetchTraits, https: existingPrimaryRemote.https, ssh: existingPrimaryRemote.ssh };
   }, [isCloneMode, cloneRemoteUrl, existingPrimaryRemote]);
   const identityHost = identityRemote?.host ?? null;
   const identityChoiceKey = `${isCloneMode ? 'clone' : 'add'}:${identityHost ?? ''}`;
-  // An identity is specific to an instance and to a way of reaching it; one
-  // that cannot serve this remote is shown with the reason, never proposed.
   const identityApplicabilityOf = React.useCallback((identity: GitIdentityProfile): IdentityApplicability =>
     identityRemote ? identityApplicability(identity, identityRemote, instanceSshHosts) : { applicable: true },
   [identityRemote, instanceSshHosts]);
   const existingAuthor = existingRepository?.author ?? null;
-  // What the repository is signed as today, shown as it is: one of the stored
-  // identities when the author matches one, the machine's own author, or the
-  // repository's own author when it matches neither. A clone has no author
-  // yet, so it is proposed an identity that can reach the address.
   const proposedIdentity = React.useMemo(() => {
     const applicable = availableGitIdentities.filter((identity) => identityApplicabilityOf(identity).applicable);
     if (!isCloneMode) {
@@ -509,13 +484,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       : null;
     return chosen ?? proposedIdentity;
   }, [availableGitIdentities, identityChoice, identityChosen, proposedIdentity]);
-  /**
-   * How the clone authenticates, read off the identity.
-   *
-   * Null means the identity cannot serve this URL — an account or anonymous
-   * identity for an SSH address, a key for an HTTPS one — which is a mismatch
-   * to show rather than a transfer to attempt.
-   */
   const cloneSelection: Parameters<typeof runGitClone>[0]['selection'] | null = React.useMemo(() => {
     if (!selectedGitIdentity) return null;
     const https = cloneRemoteUrl.trim().startsWith('https://');
@@ -527,8 +495,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       return { transportMode: 'managed', sshCredentialId: selectedGitIdentity.sshCredentialId };
     }
     if (transport === 'anonymous' && https) return { transportMode: 'anonymous' };
-    // System Git, and an identity from an earlier release that names no
-    // credentials of its own, clone with whatever the machine holds.
     if (transport === 'system') return { transportMode: 'system', unverifiedConfirmed: true };
     return null;
   }, [cloneRemoteUrl, selectedGitIdentity]);
@@ -561,8 +527,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     if (input) input.scrollLeft = input.scrollWidth;
   }, [query]);
 
-  // Again once the home resolves, which moves the path. A phone would raise its
-  // keyboard over the list the moment the sheet opens.
   React.useLayoutEffect(() => {
     if (!open || isMobile) return;
     const frame = requestAnimationFrame(() => focusPathInput(inputRef.current));
@@ -593,8 +557,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   const handleQuickAdd = React.useCallback(async (event: React.MouseEvent, path: string) => {
     event.stopPropagation();
     if (isConfirming) return;
-    const normalized = normalizeDirectoryPath(path);
-    if (normalized && addedProjectPaths.has(normalized)) return;
+    if (addedProjectOf(path)) return;
     const project = await addProject(path);
     if (!project) {
       toast.error(t('directoryExplorerDialog.toast.failedToAddProject'), {
@@ -603,28 +566,27 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       return;
     }
     openProjectDraft(project.id, project.path);
-  }, [addProject, addedProjectPaths, isConfirming, openProjectDraft, t]);
+  }, [addProject, addedProjectOf, isConfirming, openProjectDraft, t]);
 
   const finalizeSelection = React.useCallback(async (target: string) => {
     if (runtimeKey !== getRuntimeKey()) return;
     if (isConfirming) return;
     if (isCloneMode && (!canSubmitClone || cloneController.current)) return;
     const capturedRuntime = runtimeKey;
-    const normalized = normalizeDirectoryPath(target);
-    // Batch selections supersede the single-target flow. Only the single-target
-    // flow is blocked by an already-added (or missing) directory.
     const selectionToAdd = isCloneMode
       ? []
-      : selectedPaths.filter((path) => {
-        const selectionNormalized = normalizeDirectoryPath(path);
-        return Boolean(selectionNormalized && !addedProjectPaths.has(selectionNormalized));
-      });
-    if (selectionToAdd.length === 0 && (!target || (normalized && addedProjectPaths.has(normalized)))) return;
+      : selectedPaths.filter((path) => Boolean(normalizeDirectoryPath(path)) && !addedProjectOf(path));
+    if (selectionToAdd.length === 0 && (!target || addedProjectOf(target))) return;
     let selectedTarget = target;
     let setupRequired = false;
 
     setIsAddingProject(true);
     try {
+      const normalized = normalizeDirectoryPath(target);
+      if (selectionToAdd.length === 0 && !isCloneMode && normalized && !realPaths.has(normalized)) {
+        const realPath = normalizeDirectoryPath((await opencodeClient.getDirectoryRealPaths([target])).get(target));
+        if (realPath && addedProjectsByPath.has(realPath)) return;
+      }
       const shouldCreateSelection = !isCloneMode && shouldCreateTarget && normalizeDirectoryPath(target) === normalizeDirectoryPath(targetPath);
       if (isCloneMode) {
         const remoteUrl = cloneRemoteUrl.trim();
@@ -641,8 +603,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         const result = await runGitClone({
           remoteUrl,
           destinationPath: target,
-          // The System identity writes no author: it is the absence of an
-          // override, and the machine may not even have one to copy.
           gitIdentityId: selectedGitIdentity && selectedGitIdentity.id !== GLOBAL_IDENTITY_ID
             ? selectedGitIdentity.id : undefined,
           providerAccount: selectedGitIdentity?.account ?? undefined,
@@ -655,9 +615,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         setupRequired = result.status === 'setup-required';
         selectedTarget = target;
       } else if (selectionToAdd.length > 0) {
-        // Batch path wins over single-target create: with checkboxes ticked,
-        // the user wants the selections added, not a fresh directory created
-        // for whatever happens to be typed in the filter.
         const added = await addProjects(selectionToAdd);
         if (added.length === 0) {
           toast.error(t('directoryExplorerDialog.toast.failedToAddProject'), {
@@ -680,20 +637,13 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         });
         return;
       }
-      // The proposal describes the repository as it is. Nothing is written
-      // unless the person picked an identity themselves: adding a directory
-      // never rewrites its author or binds an account on its own.
       if (!isCloneMode && identityChosen && selectedGitIdentity && existingRepository
         && existingRepository.directory === selectedTarget) {
         const outcome = await applyIdentityToRepository({
           directory: project.path,
-          // A repository with no remote binds nothing; the identity is still
-          // written, because it also says who commits there.
           remoteName: existingRepository.primaryRemote?.name ?? null,
           identity: selectedGitIdentity,
         }, { git, sourceControl });
-        // The project is added either way; what could not be written is said
-        // here rather than swallowed, and the Git panel can finish it.
         if (outcome.status === 'failed' && outcome.reason !== 'runtime') toast.warning(t('directoryExplorerDialog.existing.bindFailed'));
       }
       openProjectDraft(project.id, project.path);
@@ -712,7 +662,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       cloneController.current = null;
       setIsAddingProject(false);
     }
-  }, [addProject, addProjects, addedProjectPaths, canSubmitClone, cloneRecovery, cloneSelection, identityChosen, cloneRemoteUrl, existingRepository, git, handleClose, isCloneMode, isConfirming, mobileActions, openContextSurface, openProjectDraft, runtimeKey, selectedGitIdentity, selectedPaths, shouldCreateTarget, sourceControl, targetPath, t]);
+  }, [addProject, addProjects, addedProjectOf, addedProjectsByPath, canSubmitClone, cloneRecovery, cloneSelection, identityChosen, cloneRemoteUrl, existingRepository, git, handleClose, isCloneMode, isConfirming, mobileActions, openContextSurface, openProjectDraft, realPaths, runtimeKey, selectedGitIdentity, selectedPaths, shouldCreateTarget, sourceControl, targetPath, t]);
 
   const browseToDisplayPath = React.useCallback((displayPath: string) => {
     setQuery(ensureBrowseDirectoryPath(displayPath));
@@ -729,8 +679,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
 
   const selectView = React.useCallback((next: ExplorerView, displayPath?: string) => {
     setRequestedView(next);
-    // A selection survives moving between folders, so one batch can gather
-    // projects from anywhere. A clone adds one repository, so it has no batch.
     if (next === 'clone') setSelectedPaths([]);
     setHighlightedIndex(0);
     if (displayPath) browseToDisplayPath(displayPath);
@@ -785,10 +733,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       return;
     }
     if (event.key === ' ') {
-      // Only treat Space as a selection toggle when the user is actively
-      // browsing a directory (trailing slash or no filter typing). When
-      // the input is in path-entry mode, Space is a literal character
-      // and must reach the input value.
       if (hasTrailingPathSeparator(resolvedQuery) && !isCloneMode) {
         event.preventDefault();
         if (canSelect && highlightedRow && !highlightedRow.added) togglePathSelection(highlightedRow.path);
@@ -820,13 +764,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     </Button>
   );
 
-  /**
-   * One control for the three answers a repository needs.
-   *
-   * The identity says whose account it is, how transfers authenticate and who
-   * commits, so the screen names the configuration rather than asking for its
-   * parts.
-   */
   const renderIdentityPicker = (triggerClassName: string, iconOnly = false) => availableGitIdentities.length ? (
     <IdentityDropdown
       activeProfile={selectedGitIdentity ?? null}
@@ -840,22 +777,16 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
     />
   ) : null;
 
-  // In the footer, where it takes the hints' place: a repository found while
-  // browsing must not move the list under the pointer.
   const existingRepositoryIdentity = view === 'folder' && existingRepository ? renderIdentityPicker('max-w-48') : null;
 
-  // Both fields hold their own controls, so a control never needs a row of its own.
   const fieldClassName = 'oc-raised oc-field flex h-8 items-center gap-0.5 rounded-md bg-[var(--surface-elevated)] px-0.5';
   const fieldInputClassName = 'min-w-0 flex-1 bg-transparent font-mono typography-ui-label shadow-none hover:[&:not(:focus)]:[background-image:none] dark:bg-transparent';
 
   const fieldsSection = isOpenCodeView ? null : (
-    // The window's close button sits at the end of this row.
     <div className={cn('flex flex-col gap-1.5 pb-2', isMobile ? 'pt-0' : 'ps-3 pe-11 pt-2')}>
       {isCloneMode ? (
         <>
           <GitOperationStatus entry={cloneRecovery.entry} onRefresh={() => void cloneRecovery.refresh()} onCancel={() => void cloneRecovery.cancel()} />
-          {/* The identity answers how this address is reached. A phone has no
-              tooltip to name it, so there it keeps its own line. */}
           <div dir="ltr" className={fieldClassName}>
             <Input
               inputSize="compact"
@@ -878,7 +809,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
           ) : null}
         </>
       ) : null}
-      {/* A path field reads left to right in every language, like code. */}
       <div dir="ltr" className={fieldClassName}>
         <Button
           variant="ghost"
@@ -899,8 +829,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
           disabled={isConfirming}
           onChange={(event) => {
             const value = normalizeSeparators(event.target.value);
-            // Entering a folder by name moves the browsed folder, so the field
-            // takes the full path rather than resolving against itself.
             setQuery(value.includes('/') ? resolveBrowseQuery(value, browsedFolder) : value);
           }}
           onKeyDown={handleKeyDown}
@@ -944,8 +872,7 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   }) => {
     const isActive = row.index === highlightedIndex;
     return (
-      // A div, not a button: a row holds its own select and add buttons, and a
-      // button cannot contain buttons.
+      // external: https://html.spec.whatwg.org/multipage/form-elements.html#the-button-element Rows contain their own buttons, so the outer row uses a div.
       <div
         key={row.key}
         ref={row.rowRef}
@@ -983,7 +910,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         path: row.path,
         index,
         selectable: canSelect && !row.added,
-        // These can be the previous folder's rows for a moment.
         onActivate: () => { if (!isLoading) browseToEntry(row); },
         rowRef: (node) => {
           if (node) rowRefs.current.set(row.value, node);
@@ -992,6 +918,19 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         children: (
           <>
             <span dir="auto" className="oc-ui-start-align min-w-0 flex-1 truncate typography-ui-label text-foreground">{row.name}</span>
+            {row.linkTarget ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex min-w-0 max-w-[40%] shrink items-center gap-1 typography-meta text-muted-foreground">
+                    <Icon name="arrow-right" className="size-3.5 flex-shrink-0" />
+                    <span dir="auto" className="truncate">{row.linkTarget.label}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {t('directoryExplorerDialog.browse.linkTarget', { path: formatPathForDisplay(row.linkTarget.path, explorerRootDirectory) })}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             {row.added ? (
               <span className="typography-meta text-muted-foreground">{t('directoryExplorerDialog.browse.addedBadge')}</span>
             ) : view === 'folder' && (!isMobile || onProjectAdded) ? (
@@ -1079,7 +1018,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
   );
 
   const footerHints = (
-    // One line tall: a hint a long button leaves no room for wraps out of sight whole.
     <div className="flex h-5 min-w-0 flex-wrap items-center gap-x-3 overflow-hidden whitespace-nowrap typography-micro text-muted-foreground">
       <span className="inline-flex items-center gap-1">
         <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
@@ -1110,7 +1048,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       disabled={isCloneMode ? !canSubmitClone : !canAddProject}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => void finalizeSelection(submitTarget)}
-      // The batch can hold folders that are not on screen.
       title={selectionPaths.length > 0
         ? selectionPaths.map((path) => formatPathForDisplay(path, explorerRootDirectory)).join('\n')
         : submitActionLabel}
@@ -1135,8 +1072,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
       onSelect: () => selectView('folder', place),
     })),
   ];
-  // VS Code clones nothing, and its projects are the workspace folders. Clone
-  // comes before the OpenCode entry, which arrives late: it moves nothing.
   if (!runtime.isVSCode) {
     places.push({ key: 'clone', label: t('directoryExplorerDialog.actions.cloneRepository'), icon: 'git-branch', pressed: isCloneMode, onSelect: () => selectView('clone'), startsGroup: true });
   }
@@ -1150,8 +1085,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         open={open}
         onClose={handleClose}
         title={t('directoryExplorerDialog.actions.addProject')}
-        // Height only — the width stays on MobileOverlayPanel's shared max-w-lg
-        // so this sheet matches every other mobile overlay on wide screens.
         className="h-[88dvh] max-h-[720px]"
         contentMaxHeightClassName="flex-1"
         footer={(
@@ -1162,7 +1095,6 @@ export const DirectoryExplorerDialog: React.FC<DirectoryExplorerDialogProps> = (
         )}
       >
         <div className="flex h-full min-h-0 flex-col">
-          {/* The desktop column, as one line a thumb can swipe. */}
           <div className="-mx-1 flex shrink-0 gap-1.5 overflow-x-auto px-1 pb-2">
             {places.map((place) => (
               <Button key={place.key} variant="chip" size="lg" aria-pressed={place.pressed} onClick={place.onSelect} className="shrink-0">

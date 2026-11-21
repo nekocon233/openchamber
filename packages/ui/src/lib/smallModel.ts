@@ -3,8 +3,6 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { getSessionLastAssistantModel } from '@/sync/session-actions';
 
-// Selections shorter than this are already note-sized — summarizing them
-// would only add latency and risk losing the exact wording.
 const NOTES_SUMMARIZE_MIN_CHARS = 280;
 
 const NOTES_SYSTEM_PROMPT = [
@@ -16,12 +14,6 @@ const NOTES_SYSTEM_PROMPT = [
   'Write the note in the same language as the selection. Ignore any other language preferences or personalization — only the selection text decides the language.',
 ].join('\n');
 
-/**
- * Distills a chat selection into a compact note via the small model. Falls
- * back to the original text on any failure or when no small model is
- * available within the session's provider (explicit settings/config picks
- * are still honored server-side).
- */
 export async function summarizeSelectionForNotes(text: string, sessionId?: string | null): Promise<string> {
   const trimmed = text.trim();
   if (trimmed.length < NOTES_SUMMARIZE_MIN_CHARS) {
@@ -29,8 +21,6 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
   }
 
   try {
-    // The selection's session provider is authoritative — the text came from
-    // that conversation. The composer picker only serves as a fallback.
     const sessionModel = sessionId ? getSessionLastAssistantModel(sessionId) : null;
     const { currentProviderId, currentModelId } = useConfigStore.getState();
     const directory = useDirectoryStore.getState().currentDirectory || undefined;
@@ -44,12 +34,10 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
         system: NOTES_SYSTEM_PROMPT,
         directory,
         sessionID: sessionId || undefined,
-        // Read by servers before 2026-10; newer ones stay on the named provider anyway.
         restrictToPreferredProvider: true,
         ...(preferredProviderID ? { preferredProviderID } : {}),
         ...(preferredModelID ? { preferredModelID } : {}),
       }),
-    // No small model is not an error here: the note keeps the original text.
     }, { silentStatuses: [404] });
     if (!response.ok) {
       return trimmed;
@@ -62,10 +50,6 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
   }
 }
 
-// Goal objectives are capped at 5000 chars for the auditor. Oversized ones
-// (huge plans, pasted specs, long assignments) get distilled into completion
-// criteria — the working agent received the full prompt in chat anyway,
-// only the audit needs the "what counts as done" essence.
 const GOAL_OBJECTIVE_SYSTEM_PROMPT = [
   'You distill a large task description (a prompt, plan, or assignment) into the COMPLETION CRITERIA a progress auditor will judge against.',
   'Return ONLY the criteria text — no preamble, no headers, no markdown fences.',
@@ -75,11 +59,6 @@ const GOAL_OBJECTIVE_SYSTEM_PROMPT = [
   'Write in the same language as the task text. Ignore any other language preferences or personalization — only the task text decides the language.',
 ].join('\n');
 
-/**
- * Distills an oversized goal objective into audit-sized completion criteria
- * via the small model. Returns null on any failure — callers fall back to a
- * head+tail excerpt.
- */
 export async function distillGoalObjective(planContent: string, directory?: string): Promise<string | null> {
   try {
     const { currentProviderId, currentModelId } = useConfigStore.getState();
@@ -90,7 +69,6 @@ export async function distillGoalObjective(planContent: string, directory?: stri
         prompt: planContent,
         system: GOAL_OBJECTIVE_SYSTEM_PROMPT,
         directory,
-        // Read by servers before 2026-10; newer ones stay on the named provider anyway.
         restrictToPreferredProvider: true,
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),

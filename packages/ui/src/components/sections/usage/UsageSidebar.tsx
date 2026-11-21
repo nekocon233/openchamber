@@ -1,12 +1,12 @@
 import React from 'react';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
-import { ProviderLogo } from '@/components/ui/ProviderLogo';
+import { QuotaProviderLogo } from '@/components/usage/QuotaProviderLogo';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from "@/components/icon/Icon";
 import { cn } from '@/lib/utils';
-import { getQuotaProviderList, resolveUsageTone } from '@/lib/quota';
-import { useQuotaStore } from '@/stores/useQuotaStore';
+import { resolveUsageTone } from '@/lib/quota';
+import { useQuotaAutoRefresh, useQuotaProviders, useQuotaStore } from '@/stores/useQuotaStore';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { useI18n } from '@/lib/i18n';
 import { SETTINGS_SECTION_TITLE_CLASS } from '@/components/sections/shared/SettingsSection';
@@ -31,18 +31,29 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
   const results = useQuotaStore((state) => state.results);
   const nativeProviders = useQuotaStore((state) => state.nativeProviders);
   const nativeProviderError = useQuotaStore((state) => state.nativeProviderError);
-  const providers = React.useMemo(() => getQuotaProviderList(nativeProviders), [nativeProviders]);
+  const baseProviders = useQuotaProviders();
+  const providers = React.useMemo(() => {
+    if (nativeProviders.length === 0) {
+      return baseProviders;
+    }
+    const existingIds = new Set(baseProviders.map((provider) => provider.id));
+    const extraNative = nativeProviders.filter((provider) => !existingIds.has(provider.id));
+    return [
+      ...baseProviders.map((provider) =>
+        provider.id === 'kimi-for-coding' && !provider.name.endsWith(' / OpenCode')
+          ? { ...provider, name: `${provider.name} / OpenCode` }
+          : provider,
+      ),
+      ...extraNative,
+    ];
+  }, [baseProviders, nativeProviders]);
   const selectedProviderId = useQuotaStore((state) => state.selectedProviderId);
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
   const isLoading = useQuotaStore((state) => state.isLoading);
   const usageDisplayMode = useQuotaStore((state) => state.displayMode);
   const setUsageDisplayMode = useQuotaStore((state) => state.setDisplayMode);
-  const loadUsageSettings = useQuotaStore((state) => state.loadSettings);
-
-  React.useEffect(() => {
-    void loadUsageSettings();
-  }, [loadUsageSettings]);
+  useQuotaAutoRefresh(true, true);
 
   const persistUsageSettings = React.useCallback(async (changes: { usageDisplayMode?: 'usage' | 'remaining'; usageDropdownProviders?: string[] }) => {
     try {
@@ -85,7 +96,11 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
           <span className="typography-micro text-muted-foreground">{t('settings.usage.sidebar.field.display')}</span>
           <Select value={usageDisplayMode} onValueChange={handleUsageDisplayModeChange}>
             <SelectTrigger className="w-fit">
-              <SelectValue placeholder={t('settings.usage.sidebar.field.displayModePlaceholder')} />
+              <SelectValue>
+                {usageDisplayMode === 'remaining'
+                  ? t('settings.usage.sidebar.field.displayModeRemaining')
+                  : t('settings.usage.sidebar.field.displayModeUsage')}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="usage">{t('settings.usage.sidebar.field.displayModeUsage')}</SelectItem>
@@ -129,12 +144,12 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
                 className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={statusStyle} />
-                <ProviderLogo providerId={provider.id} className="h-4 w-4 flex-shrink-0" />
+                <QuotaProviderLogo providerId={provider.id} className="h-4 w-4 flex-shrink-0" />
                 <span className="typography-ui-label font-normal truncate flex-1 min-w-0 text-foreground">
                   {provider.name}
                 </span>
               {configured === false && (
-                <span className="typography-micro text-muted-foreground/60 flex-shrink-0">{t('settings.usage.sidebar.status.notSet')}</span>
+                <span className="typography-micro text-muted-foreground flex-shrink-0">{t('settings.usage.sidebar.status.notSet')}</span>
               )}
             </button>
           </div>

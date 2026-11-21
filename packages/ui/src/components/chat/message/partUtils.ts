@@ -1,6 +1,29 @@
 import { isInvisibleText } from '@/lib/invisibleText';
+import { readBrowserAnnotationPrompt } from '@/lib/browser/annotationPrompt';
+import { readContextPart } from '@/lib/messages/contextParts';
 import type { Part } from '@/lib/opencode/model';
 import { readPlanQuestion } from './planPart';
+
+const COLLAPSED_LINES = 2;
+
+export const contextPartsPastCollapse = (parts: Part[], textLines: number): ReadonlySet<Part> => {
+    const hidden = new Set<Part>();
+    let linesLeft = COLLAPSED_LINES - textLines;
+    for (const part of parts) {
+        const context = readContextPart(part);
+        if (context === null || context.kind === 'session' || context.kind === 'session-message') continue;
+        const comment = context.kind === 'browser-annotation'
+            ? context.text || readBrowserAnnotationPrompt(context.prompt).comment || ''
+            : 'text' in context ? context.text : '';
+        const lines = comment.trim().length > 0 ? 2 : 1;
+        if (hidden.size === 0 && lines <= linesLeft) {
+            linesLeft -= lines;
+        } else {
+            hidden.add(part);
+        }
+    }
+    return hidden;
+};
 
 const isValidPart = (part: unknown): part is Part => {
     return Boolean(part && typeof part === 'object' && typeof (part as { type?: unknown }).type === 'string');
@@ -25,15 +48,6 @@ interface VisibleFilterOptions {
     includeReasoning?: boolean;
 }
 
-/**
- * The parts a message actually shows.
- *
- * OpenCode v2 no longer marks parts synthetic and no longer sends patch
- * parts, so the only choice left here is whether reasoning is on screen.
- *
- * An answered plan exit is on screen once: as the question above it. The two
- * are the same event, and only the question kept the answer.
- */
 export const filterVisibleParts = (parts: Part[], options: VisibleFilterOptions = {}): Part[] => {
     const { includeReasoning = true } = options;
     const validParts = normalizeParts(parts);

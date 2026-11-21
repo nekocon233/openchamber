@@ -180,6 +180,12 @@
     "agentRenderToolEnabled": {
       "scope": "instance"
     },
+    "agentUsageToolEnabled": {
+      "scope": "instance"
+    },
+    "agentTerminalToolEnabled": {
+      "scope": "instance"
+    },
     "agentImageToolEnabled": {
       "scope": "instance"
     },
@@ -189,16 +195,25 @@
     "agentSecretToolEnabled": {
       "scope": "instance"
     },
-    "agentToolsCodeMode": {
+    "agentMemoryToolEnabled": {
       "scope": "instance"
     },
-    "agentMemoryToolEnabled": {
+    "agentMemoryDreamingEnabled": {
+      "scope": "instance"
+    },
+    "agentMemoryDreamingModel": {
+      "scope": "instance"
+    },
+    "agentMemoryDreamingVariant": {
       "scope": "instance"
     },
     "agentKnowledgeToolEnabled": {
       "scope": "instance"
     },
     "agentWorkflowToolEnabled": {
+      "scope": "instance"
+    },
+    "agentWorkflowAutoApprove": {
       "scope": "instance"
     },
     "isolatedSpacesEnabled": {
@@ -236,6 +251,9 @@
       "scope": "instance"
     },
     "sessionRetentionOnlyArchived": {
+      "scope": "instance"
+    },
+    "sessionRetentionIncludeInWork": {
       "scope": "instance"
     },
     "sessionRetentionAction": {
@@ -362,6 +380,13 @@
       "scope": "profile",
       "perSurface": true
     },
+    "sidebarKeepPinnedInPlace": {
+      "scope": "profile",
+      "perSurface": true
+    },
+    "sidebarSessionBatchSize": {
+      "scope": "profile"
+    },
     "sidebarProjectSortOrder": {
       "scope": "profile"
     },
@@ -395,6 +420,9 @@
       "perSurface": true
     },
     "workStatusSectionOrder": {
+      "scope": "profile"
+    },
+    "workStatusSectionOrderExplicit": {
       "scope": "profile"
     },
     "workStatusHiddenSections": {
@@ -442,6 +470,10 @@
       "scope": "profile",
       "perSurface": true
     },
+    "chatWidth": {
+      "scope": "profile",
+      "perSurface": true
+    },
     "wideChatLayoutEnabled": {
       "scope": "profile",
       "perSurface": true
@@ -459,6 +491,9 @@
       "scope": "profile"
     },
     "copyMessagesAsPlainText": {
+      "scope": "profile"
+    },
+    "selectionApprovalText": {
       "scope": "profile"
     },
     "showTurnChangedFiles": {
@@ -554,6 +589,12 @@
         "desktop"
       ]
     },
+    "agentBrowserSharesLogins": {
+      "scope": "profile",
+      "surfaces": [
+        "desktop"
+      ]
+    },
     "openTrackerLinksOnBoard": {
       "scope": "profile",
       "surfaces": [
@@ -568,6 +609,13 @@
         "web",
         "desktop",
         "mobile"
+      ]
+    },
+    "terminalOpenOnProjectAction": {
+      "scope": "profile",
+      "surfaces": [
+        "web",
+        "desktop"
       ]
     },
     "autoCreateWorktree": {
@@ -634,6 +682,10 @@
       "scope": "profile"
     },
     "fontSize": {
+      "scope": "profile",
+      "perSurface": true
+    },
+    "chatFontSize": {
       "scope": "profile",
       "perSurface": true
     },
@@ -734,6 +786,9 @@
       "scope": "profile"
     },
     "customProviderIcons": {
+      "scope": "profile"
+    },
+    "customProviderLogos": {
       "scope": "profile"
     },
     "recentModels": {
@@ -1060,6 +1115,14 @@
       "local": true
     },
     "alwaysShowScrollbars": {
+      "scope": "device",
+      "local": true
+    },
+    "mobileKeepScreenAwake": {
+      "scope": "device",
+      "local": true
+    },
+    "questionsInChat": {
       "scope": "device",
       "local": true
     },

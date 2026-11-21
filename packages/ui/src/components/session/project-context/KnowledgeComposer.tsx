@@ -2,12 +2,14 @@ import React from 'react';
 
 import { InlineDictationButton } from '@/components/dictation/InlineDictationButton';
 import { useEmojiPicker } from '@/components/emoji/useEmojiPicker';
-import { Icon } from '@/components/icon/Icon';
+import { clearChatDraft, createChatDraftIdentity, readChatDraft } from '@/lib/chatDraftPersistence';
 import { isIMECompositionEvent } from '@/lib/ime';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/useUIStore';
 import { KNOWLEDGE_ICON_BUTTON_CLASS } from './knowledgeRowStyle';
 import { useWorkspaceChildKey } from '@/hooks/useWorkspaceViewState';
+import { workspaceViewKey } from '@/stores/useWorkspaceViewStateStore';
 import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
 import { useWorkspaceDraftStore, type PendingWorkspaceInput } from '@/stores/useWorkspaceDraftStore';
 import { useI18n } from '@/lib/i18n';
@@ -15,34 +17,38 @@ import { Button } from '@/components/ui/button';
 
 const NO_PENDING_INPUTS: PendingWorkspaceInput[] = [];
 
-/** The counter appears only once the text gets close to the limit. */
 const COUNTER_THRESHOLD = 0.8;
 
-/**
- * The one way every section adds an entry: a single line that grows with its
- * text. Enter adds. A multiline field follows the chat composer: Shift+Enter
- * starts a new line on desktop, and on a phone, whose keyboard has no
- * Shift+Enter, Return starts a new line and the add button adds. A one-line
- * field turns pasted line breaks into spaces.
- *
- * The draft lives here, so dictation can continue it and a failed add can
- * put it back.
- */
+type KnowledgeDraftKind = 'note' | 'todo' | 'plan';
+
 export const KnowledgeComposer: React.FC<{
   placeholder: string;
   addLabel: string;
   maxLength: number;
+  projectPath: string;
+  draftKind: KnowledgeDraftKind;
   multiline?: boolean;
   dictation?: boolean;
   disabled?: boolean;
-  /** Resolves false when the entry was not added; the text then stays. */
   onSubmit: (text: string) => Promise<boolean> | boolean;
-  /** Extra controls before the add button, such as an import action. */
   extraActions?: React.ReactNode;
-  draftId: string;
-}> = ({ placeholder, addLabel, maxLength, multiline = false, dictation = true, disabled = false, onSubmit, extraActions, draftId }) => {
+}> = ({ placeholder, addLabel, maxLength, multiline = false, dictation = true, disabled = false, onSubmit, extraActions, projectPath, draftKind }) => {
   const { t } = useI18n();
-  const owner = useWorkspaceChildKey('new', draftId);
+  const runtime = getRuntimeKey();
+  const scopedOwner = useWorkspaceChildKey('new', draftKind);
+  const owner = scopedOwner ?? workspaceViewKey(runtime, projectPath, 'knowledge', draftKind);
+  React.useLayoutEffect(() => {
+    if (!owner) return;
+    const identity = createChatDraftIdentity(runtime, projectPath, `knowledge:${draftKind}`);
+    if (!identity) return;
+    const legacy = readChatDraft(identity).text;
+    if (!legacy) return;
+    const store = useWorkspaceDraftStore.getState();
+    const current = store.drafts[owner]?.value;
+    if (!current) store.write(owner, legacy, '');
+    else if (current !== legacy && !store.pendingInputs[owner]?.some((item) => item.value === legacy)) store.stageInput(owner, legacy);
+    clearChatDraft(identity);
+  }, [draftKind, owner, projectPath, runtime]);
   const input = useWorkspaceDraft(owner);
   const { value: text, setValue: setText } = input;
   const fieldRef = React.useRef<HTMLTextAreaElement>(null);
@@ -89,16 +95,15 @@ export const KnowledgeComposer: React.FC<{
   }, [onSubmit, owner, setText, text]);
 
   const showCounter = text.length >= maxLength * COUNTER_THRESHOLD;
-  // The field itself stays enabled while an entry saves: disabling it would
-  // drop the focus, and the next entry typed right away would go nowhere.
   const blocked = disabled || submitting;
+  const canSend = !blocked && text.trim().length > 0;
 
   return (
     <>
     <div
       className={cn(
-        'oc-surface-elevated flex items-end gap-1 rounded-lg bg-[var(--surface-elevated)] py-1 pe-1 ps-3',
-        'oc-raised oc-field',
+        'flex items-end gap-1 py-1 pe-1',
+        isMobile ? 'border-b border-edge-muted ps-1' : 'oc-surface-elevated oc-raised oc-field rounded-lg bg-[var(--surface-elevated)] ps-3',
         disabled && 'opacity-50',
       )}
     >
@@ -122,7 +127,8 @@ export const KnowledgeComposer: React.FC<{
         spellCheck={multiline}
         autoComplete="off"
         className={cn(
-          'block min-h-6 w-full min-w-0 resize-none field-sizing-content bg-transparent py-0.5 typography-markdown md:typography-ui-label text-foreground outline-none placeholder:text-muted-foreground',
+          isMobile ? 'typography-meta' : 'typography-markdown md:typography-ui-label',
+          'block min-h-6 w-full min-w-0 resize-none field-sizing-content bg-transparent py-0.5 text-foreground outline-none placeholder:text-muted-foreground',
           multiline ? 'max-h-[calc(12lh+0.25rem)]' : 'max-h-[calc(6lh+0.25rem)]',
           'focus-visible:outline-none disabled:cursor-not-allowed',
         )}
@@ -134,10 +140,10 @@ export const KnowledgeComposer: React.FC<{
         </span>
       ) : null}
       {dictation ? (
-        // Dictation continues the draft instead of adding it, so a misheard
-        // word can be fixed before it lands.
         <InlineDictationButton
-          onTranscript={(spoken) => setText((current) => normalize(current.trim() ? `${current.trimEnd()} ${spoken}` : spoken))}
+          onTranscript={(spoken) => {
+            setText((current) => normalize(current.trim() ? `${current.trimEnd()} ${spoken}` : spoken));
+          }}
           disabled={disabled}
           buttonClassName={KNOWLEDGE_ICON_BUTTON_CLASS}
         />
@@ -146,12 +152,15 @@ export const KnowledgeComposer: React.FC<{
       <button
         type="button"
         onClick={() => void submit()}
-        disabled={blocked || text.trim().length === 0}
-        className={KNOWLEDGE_ICON_BUTTON_CLASS}
+        disabled={!canSend}
+        className={cn(
+          'inline-flex h-6 flex-shrink-0 items-center rounded-md px-1.5 typography-ui-label font-medium transition-colors',
+          'focus-visible:outline-none disabled:cursor-not-allowed',
+          canSend ? 'text-[var(--primary-text)] hover:bg-interactive-hover' : 'text-muted-foreground opacity-50',
+        )}
         aria-label={addLabel}
-        title={addLabel}
       >
-        <Icon name="add" className="h-4 w-4" />
+        {t('rightSidebar.contextNotesTodo.composer.add')}
       </button>
     </div>
     {owner && recoverable.map(item => (

@@ -83,6 +83,7 @@ describe('scheduled task worktree bridge', () => {
       });
       vi.stubGlobal('fetch', fetchMock);
       const runtime = createScheduledTasksRuntime({
+        setSessionAutoAccept: async () => undefined,
         projectConfigRuntime: {
           listScheduledTasks: async () => [task],
           reconcileLoopTasks: async () => [task],

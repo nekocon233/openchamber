@@ -36,6 +36,12 @@ describe('GitHub merge when ready', () => {
       .mockImplementationOnce(async () => { throw new Error('Auto-merge is not allowed'); });
     await expect(enableMergeWhenReady(octokit, project, target, 'merge')).rejects.toThrow('Auto-merge is not allowed');
   });
+  it('keeps a replacement head in the queue', async () => {
+    const octokit = client(pull({ headRefOid: 'next', isInMergeQueue: true }));
+    await expect(cancelWaitingMerge(octokit, project, target)).rejects.toMatchObject({ status: 409 });
+    expect(octokit.graphql).toHaveBeenCalledTimes(1);
+  });
+
   it('dequeues and disables any remaining auto-merge request', async () => {
     const octokit = client(pull({ isInMergeQueue: true, autoMergeRequest: { enabledAt: 'now', mergeMethod: 'MERGE' } }));
     octokit.graphql.mockImplementationOnce(async () => ({ repository: { pullRequest: pull({ isInMergeQueue: true, autoMergeRequest: { enabledAt: 'now', mergeMethod: 'MERGE' } }), mergeQueue: { id: 'MQ' } } }))

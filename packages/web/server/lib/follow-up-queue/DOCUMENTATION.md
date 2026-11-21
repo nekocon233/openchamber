@@ -134,6 +134,17 @@ The host sets every acquired claim's `expiresAt` to its current clock plus exact
 
 `complete` and `release` require the currently stored claim ID, including after that claim's expiry. `complete` removes the item. `release` clears the claim and sets the requested `staged` or `queued` status. A replacement claimant prevents an older claimant from completing or releasing the item.
 
+### OpenCode queue import
+
+The importer claims eligible ordinary OpenCode follow-ups before copying them
+to the server message queue. Its reserved claim ID is also the destination
+queue's import identity, so a failed acknowledgment or restart can retry the
+same copy. Entries outside the destination queue's format or limits stay
+available in the follow-up queue while eligible entries for the session import.
+Startup resolves the session directory from OpenCode v2's `location.directory`
+with the legacy top-level directory as a fallback. Queue changes retry imports
+that waited for capacity or a durable acknowledgment.
+
 ## Terminalization
 
 An authoritative `session.deleted` event or successful proxied OpenCode session deletion calls the host-internal terminal path. After acquiring the same per-scope mutation lock, it durably creates and directory-syncs an opaque terminal fence shared by every host process using the authority root. Mutations already holding the lock complete before deletion; every later mutation observes the fence. Loads and public mutations fail closed while that fence exists without a terminal envelope. Its first application then clears all items, advances revision, and writes a terminal tombstone. Future public requests must still match the terminal revision; accepted requests only enter the bounded dedupe ledger and can never change or revive the queue.

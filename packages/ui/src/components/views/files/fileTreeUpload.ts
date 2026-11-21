@@ -1,4 +1,5 @@
 import type { FilesAPI } from '@/lib/api/types';
+import { uploadFailureOf, type UploadFailure } from './uploadFailure';
 import { isFilesystemError } from '@/lib/api/files-errors';
 
 export type UploadEntry =
@@ -112,7 +113,7 @@ export const uploadFileTree = async ({ files, directory, workspaceRoot, selectio
   const uploadedPaths: string[] = [];
   const changedDirectories = new Set<string>();
   const conflicts: UploadEntry[] = [];
-  const failures = [...selection.failures];
+  const failureDetails: UploadFailure[] = selection.failures.map((name) => ({ name, reason: 'unknown' }));
   const blocked = new Set<string>();
   const directories = selection.entries.filter((entry) => entry.kind === 'directory');
   // Picker entries already have this order; sorting also handles caller-supplied trees.
@@ -128,7 +129,7 @@ export const uploadFileTree = async ({ files, directory, workspaceRoot, selectio
   for (const entry of directories) {
     if (!isCurrent()) break;
     if (!isUploadRelativePath(entry.relativePath) || isBlocked(entry.relativePath)) {
-      failures.push(entry.relativePath);
+      failureDetails.push({ name: entry.relativePath, reason: 'unknown' });
       blocked.add(entry.relativePath);
       continue;
     }
@@ -137,9 +138,9 @@ export const uploadFileTree = async ({ files, directory, workspaceRoot, selectio
       const result = await files.createDirectory(path, { directory: workspaceRoot });
       if (!result.success) throw new Error('Directory creation failed');
       changedDirectories.add(parentOf(path));
-    } catch {
+    } catch (error) {
       blocked.add(entry.relativePath);
-      failures.push(entry.relativePath);
+      failureDetails.push(uploadFailureOf(entry.relativePath, isFilesystemError(error) ? error : null));
     }
   }
   const fileEntries = selection.entries.filter((entry) => entry.kind === 'file');
@@ -147,7 +148,7 @@ export const uploadFileTree = async ({ files, directory, workspaceRoot, selectio
     await Promise.all(fileEntries.slice(index, index + 3).map(async (entry) => {
       if (!isCurrent()) return;
       if (!isUploadRelativePath(entry.relativePath) || isBlocked(entry.relativePath)) {
-        failures.push(entry.relativePath);
+        failureDetails.push({ name: entry.relativePath, reason: 'unknown' });
         return;
       }
       const path = joinUploadPath(directory, entry.relativePath);
@@ -158,9 +159,9 @@ export const uploadFileTree = async ({ files, directory, workspaceRoot, selectio
         changedDirectories.add(parentOf(path));
       } catch (error) {
         if (!overwrite && isFilesystemError(error) && error.reason === 'already-exists') conflicts.push(entry);
-        else failures.push(entry.relativePath);
+        else failureDetails.push(uploadFailureOf(entry.relativePath, isFilesystemError(error) ? error : null));
       }
     }));
   }
-  return { uploadedPaths, changedDirectories: [...changedDirectories], conflicts, failures };
+  return { uploadedPaths, changedDirectories: [...changedDirectories], conflicts, failures: failureDetails.map(({ name }) => name), failureDetails };
 };

@@ -164,7 +164,6 @@ export const getApplyPatchFilePath = (file: unknown): string | null => {
     return path?.trim() ?? null;
 };
 
-/** v2 file tools report `path`; the other keys cover MCP and plugin tools. */
 const readInputPath = (input: Record<string, unknown> | undefined): string | null => (
     typeof input?.path === 'string'
         ? input.path
@@ -207,7 +206,6 @@ export const getPrimaryToolPath = (
     return null;
 };
 
-/** Only `edit` and `patch` results carry `metadata.files` with diffs in v2. */
 const supportsDiffMetadata = (toolName: string): boolean => carriesFileDiffs(toolName);
 
 const getMetadataFileForPath = (
@@ -247,7 +245,6 @@ export const getPrimaryDiffFromMetadata = (
     return getPatchText(metadata.patch) ?? getPatchText(metadata.diff);
 };
 
-/** Top-level patch a tool card falls back to when metadata carries no per-file entries. */
 export const getToolFallbackDiff = (metadata: Record<string, unknown> | undefined): string | undefined => {
     const fileDiff = isRecord(metadata?.filediff) ? metadata.filediff : undefined;
     return getPatchText(metadata?.patch)
@@ -325,12 +322,6 @@ export const getFirstChangedLineFromMetadata = (
     return firstPatch ? extractFirstChangedLineFromDiff(firstPatch) : undefined;
 };
 
-/**
- * Quick-open target for a tool card: the primary mutated file plus the diff
- * entry the expanded card renders for it. Both the collapsed header icon and
- * the expanded "open file" button resolve their line from the same entry
- * patch, so they always land on the same line.
- */
 export const resolveToolQuickOpenTarget = (
     toolName: string,
     input: Record<string, unknown> | undefined,
@@ -402,7 +393,7 @@ export const getRenderablePatchInfo = (patch: string): { patch: string; title?: 
     }
 
     try {
-        const parsedPatches = parsePatchFiles(normalized, undefined, true);
+        const parsedPatches = parsePatchFiles(normalized, { throwOnError: true });
         if (parsedPatches.length !== 1) {
             return null;
         }

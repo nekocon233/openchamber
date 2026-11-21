@@ -178,7 +178,6 @@ function ReviewFlowDialogView({
             <span>{t('diffView.reviewDialog.generateHandoff')}</span>
           </label>
 
-          {/* The loop runs on the OpenChamber server, which VS Code does not have. */}
           {isAutoReviewAvailable() ? (
             <label className="flex items-center gap-2 typography-ui-label text-foreground">
               <Checkbox
@@ -247,5 +246,4 @@ function ReviewFlowDialogView({
   );
 }
 
-/** Memoized: the composer re-renders on every keystroke, and nothing here depends on the draft text. */
 export const ReviewFlowDialog = React.memo(ReviewFlowDialogView);

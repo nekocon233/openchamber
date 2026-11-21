@@ -1,39 +1,56 @@
-// ---------------------------------------------------------------------------
-// Unread sessions: a turn that finished and nobody has looked at yet.
-//
-// OpenCode owns the state. Its session record carries `time.idle`, when the
-// last turn ended, and `time.viewed`, a monotone watermark of the last idle
-// transition a viewer saw. A session is unread while the turn that ended last
-// is newer than the watermark. Because the record lives in OpenCode's database
-// the mark survives restarts, and every client of the server sees the same one:
-// a view recorded on the phone clears it on the desktop through the
-// `session.viewed` event.
-// ---------------------------------------------------------------------------
 
 import { useCallback } from "react"
-import { compact, type Session } from "@/lib/opencode/model"
+import { z } from "zod"
+import { compact, type Metadata, type Session } from "@/lib/opencode/model"
 import { opencodeClient } from "@/lib/opencode/client"
 import { getRuntimeKey } from "@/lib/runtime-switch"
-import { useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
+import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
+import { requestSessionMetadataUpdate } from "./session-archive-batch"
 
-/**
- * Only top-level sessions are announced; a subtask reports to its parent. An
- * archived session is put away, whichever path archived it, so it is never
- * unread.
- */
-export const isSessionUnread = (session: Session | undefined): boolean => {
-  if (!session || session.parentID || session.time.archived !== undefined) return false
+const markSchema = z.object({ openchamber: z.object({ markedUnread: z.object({ at: z.number() }) }) })
+const openchamberSchema = z.object({ openchamber: z.record(z.string(), z.json()) })
+
+const markByMetadata = new WeakMap<Metadata, number | null>()
+
+const markOf = (session: Session): number | null => {
+  const metadata = session.metadata
+  if (!metadata) return null
+  const cached = markByMetadata.get(metadata)
+  if (cached !== undefined) return cached
+  const at = markSchema.safeParse(metadata).data?.openchamber.markedUnread.at ?? null
+  markByMetadata.set(metadata, at)
+  return at
+}
+
+const hasUnreadMark = (session: Session): boolean => markOf(session) !== null
+
+export const canSessionBeUnread = (session: Session | undefined): session is Session => (
+  Boolean(session) && !session?.parentID && session?.time.archived === undefined
+)
+
+const hasUnseenTurn = (session: Session): boolean => {
   const { idle, viewed } = session.time
   return idle !== undefined && (viewed === undefined || viewed < idle)
 }
 
-/** Unread, and the turn that left it unread failed. */
+export const isSessionUnread = (session: Session | undefined): boolean => (
+  canSessionBeUnread(session) && (hasUnseenTurn(session) || hasUnreadMark(session))
+)
+
+export const isSessionMarkedUnread = (session: Session | undefined): boolean => (
+  canSessionBeUnread(session) && hasUnreadMark(session)
+)
+
 export const isSessionUnreadWithError = (session: Session | undefined): boolean => (
-  isSessionUnread(session) && session?.outcome === "failed"
+  canSessionBeUnread(session) && hasUnseenTurn(session) && session.outcome === "failed"
 )
 
 export const useSessionUnread = (sessionId: string): boolean => (
   useGlobalSessionsStore(useCallback((state) => isSessionUnread(state.entityById.get(sessionId)), [sessionId]))
+)
+
+export const useSessionMarkedUnread = (sessionId: string): boolean => (
+  useGlobalSessionsStore(useCallback((state) => isSessionMarkedUnread(state.entityById.get(sessionId)), [sessionId]))
 )
 
 const hasUnreadSession = (state: { entityById: ReadonlyMap<string, Session> }): boolean => {
@@ -43,34 +60,96 @@ const hasUnreadSession = (state: { entityById: ReadonlyMap<string, Session> }): 
   return false
 }
 
-/** Whether any session is unread; for a control that only matters while it is shown. */
 export const useHasUnreadSession = (): boolean => useGlobalSessionsStore(hasUnreadSession)
 
-/** Idle stamps being recorded right now, so repeated calls send one request. */
 const pendingViews = new Map<string, number>()
 
-/**
- * Records that the user saw these sessions' last turns. The local records take
- * the watermark at once, in one store update, so the marks clear without
- * waiting for the round trip; a failed write restores its session's mark,
- * unless something newer replaced it. Returns the sessions it marked.
- */
-export const markSessionsUnreadSeen = (sessionIds: Iterable<string>): string[] => {
+const keptMarks = new Set<string>()
+
+export const releaseKeptUnreadMarks = (): void => {
+  keptMarks.clear()
+}
+
+const withMarkedUnread = (metadata: Metadata | undefined, at: number | null): Metadata => {
+  const current = metadata ?? {}
+  const namespace = { ...openchamberSchema.safeParse(current).data?.openchamber }
+  if (at === null) delete namespace.markedUnread
+  else namespace.markedUnread = { at }
+  return { ...current, openchamber: namespace }
+}
+
+const setLocalMark = (sessionId: string, at: number | null): void => {
+  const current = useGlobalSessionsStore.getState().entityById.get(sessionId)
+  if (!current || markOf(current) === at) return
+  useGlobalSessionsStore.getState().upsertSession({ ...current, metadata: withMarkedUnread(current.metadata, at) })
+}
+
+const markWrites = new Map<string, number>()
+let lastMarkWrite = 0
+
+const writeUnreadMark = async (session: Session, at: number | null): Promise<boolean> => {
+  const runtimeKey = getRuntimeKey()
+  const sessionId = session.id
+  const previous = markOf(session)
+  const write = ++lastMarkWrite
+  markWrites.set(sessionId, write)
+  setLocalMark(sessionId, at)
+
+  const result = await requestSessionMetadataUpdate(
+    sessionId,
+    { openchamber: { markedUnread: at === null ? null : { at } } },
+    resolveGlobalSessionDirectory(session),
+  )
+  const newest = markWrites.get(sessionId) === write
+  if (newest) markWrites.delete(sessionId)
+  if (runtimeKey !== getRuntimeKey()) return false
+  if (result.outcome === "updated") {
+    if (newest) setLocalMark(sessionId, at)
+    return true
+  }
+  console.warn("[session-unread] failed to save the unread mark", result.reason)
+  const current = useGlobalSessionsStore.getState().entityById.get(sessionId)
+  if (newest && current && markOf(current) === at) {
+    setLocalMark(sessionId, previous)
+    if (at === null) keptMarks.add(sessionId)
+  }
+  return false
+}
+
+export const markSessionUnread = async (sessionId: string): Promise<boolean> => {
+  const session = useGlobalSessionsStore.getState().entityById.get(sessionId)
+  if (!canSessionBeUnread(session)) return false
+  keptMarks.add(sessionId)
+  if (hasUnreadMark(session)) return true
+  return writeUnreadMark(session, Date.now())
+}
+
+type MarkSeenOptions = {
+  explicit?: boolean
+}
+
+export const markSessionsUnreadSeen = (sessionIds: Iterable<string>, options: MarkSeenOptions = {}): string[] => {
   const store = useGlobalSessionsStore.getState()
   const runtimeKey = getRuntimeKey()
   const seen: Session[] = []
   const views: { session: Session; idle: number }[] = []
+  const marks: Session[] = []
   for (const sessionId of sessionIds) {
     const session = store.entityById.get(sessionId)
-    if (!session || !isSessionUnread(session)) continue
+    if (!canSessionBeUnread(session)) continue
+    if (options.explicit) keptMarks.delete(sessionId)
+    const clearsMark = hasUnreadMark(session) && !keptMarks.has(sessionId)
     const idle = session.time.idle
-    if (idle === undefined || pendingViews.get(sessionId) === idle) continue
-    pendingViews.set(sessionId, idle)
-    views.push({ session, idle })
-    seen.push({ ...session, time: { ...session.time, viewed: idle } })
+    const recordsView = hasUnseenTurn(session) && idle !== undefined && pendingViews.get(sessionId) !== idle
+    if (!clearsMark && !recordsView) continue
+    if (clearsMark) marks.push(session)
+    if (recordsView) {
+      pendingViews.set(sessionId, idle)
+      views.push({ session, idle })
+      seen.push({ ...session, time: { ...session.time, viewed: idle } })
+    }
   }
-  if (seen.length === 0) return []
-  store.upsertSessions(seen)
+  if (seen.length > 0) store.upsertSessions(seen)
 
   for (const { session, idle } of views) {
     const sessionId = session.id
@@ -89,14 +168,17 @@ export const markSessionsUnreadSeen = (sessionIds: Iterable<string>): string[] =
         if (pendingViews.get(sessionId) === idle) pendingViews.delete(sessionId)
       })
   }
-  return seen.map((session) => session.id)
+  for (const marked of marks) {
+    const current = useGlobalSessionsStore.getState().entityById.get(marked.id) ?? marked
+    void writeUnreadMark(current, null)
+  }
+  return [...new Set([...views.map(({ session }) => session.id), ...marks.map((session) => session.id)])]
 }
 
-export const markSessionUnreadSeen = (sessionId: string): void => {
-  markSessionsUnreadSeen([sessionId])
+export const markSessionUnreadSeen = (sessionId: string, options?: MarkSeenOptions): void => {
+  markSessionsUnreadSeen([sessionId], options)
 }
 
-/** Every unread session the client knows of. */
 export const getUnreadSessionIds = (): string[] => {
   const ids: string[] = []
   for (const session of useGlobalSessionsStore.getState().entityById.values()) {

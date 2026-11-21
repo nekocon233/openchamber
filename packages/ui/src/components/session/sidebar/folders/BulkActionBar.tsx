@@ -20,10 +20,12 @@ type Props = {
   onMoveToFolder: (folderId: string) => void;
   onCreateFolderAndMove: () => void;
   onRemoveFromFolder: () => void;
+  canFileSelection: boolean;
   canRemoveFromFolder: boolean;
   onRestore: () => void;
-  /** Optional: present when the selection holds a session that can be in work. */
-  onMarkDone?: () => void;
+  showMarkDone: boolean;
+  canMarkDone: boolean;
+  onMarkDone: () => void;
   onArchive: () => void;
   onDelete?: () => void;
   onDone: () => void;
@@ -37,8 +39,11 @@ export const BulkActionBar: React.FC<Props> = ({
   onMoveToFolder,
   onCreateFolderAndMove,
   onRemoveFromFolder,
+  canFileSelection,
   canRemoveFromFolder,
   onRestore,
+  showMarkDone,
+  canMarkDone,
   onMarkDone,
   onArchive,
   onDelete,
@@ -46,7 +51,7 @@ export const BulkActionBar: React.FC<Props> = ({
 }) => {
   const { t } = useI18n();
   const hasSelection = selectedCount > 0;
-  const canMoveToFolder = hasSelection && Boolean(scopeKey) && !archivedBucket;
+  const canMoveToFolder = hasSelection && Boolean(scopeKey) && !archivedBucket && canFileSelection;
   const iconButtonClass = 'inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40';
   const destructiveIconButtonClass = 'inline-flex h-7 w-7 items-center justify-center rounded-md text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50 disabled:pointer-events-none disabled:opacity-40';
 
@@ -81,7 +86,7 @@ export const BulkActionBar: React.FC<Props> = ({
               ) : (
                 scopeFolders.map((folder) => (
                   <DropdownMenuItem key={folder.id} onClick={() => onMoveToFolder(folder.id)}>
-                    <span className="flex-1 truncate">{folder.name}</span>
+                    <span dir="auto" className="oc-ui-start-align flex-1 truncate">{folder.name}</span>
                   </DropdownMenuItem>
                 ))
               )}
@@ -120,13 +125,13 @@ export const BulkActionBar: React.FC<Props> = ({
           </Tooltip>
         ) : null}
 
-        {onMarkDone ? (
+        {showMarkDone ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
                 onClick={onMarkDone}
-                disabled={!hasSelection}
+                disabled={!canMarkDone}
                 className={iconButtonClass}
                 aria-label={t('sessions.sidebar.session.work.markDone')}
               >

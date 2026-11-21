@@ -6,7 +6,7 @@ import { createGuestServiceSocketRuntime } from './service-ws.js';
 import { stopGuestService } from './service.js';
 import { createUiAuth } from '../ui-auth/ui-auth.js';
 import { createRequestSecurityRuntime } from '../security/request-security.js';
-import { createTunnelAuth } from '../opencode/tunnel-auth.js';
+import { createTunnelAuth } from '../tunnels/tunnel-auth.js';
 import { createAuthChannelLifecycle } from '../ui-auth/channel-auth.js';
 import { subscribeNotificationAuthInvalidation, notificationAuthMatchesSelector, invalidateNotificationAuth, createClientNotificationAuth } from '../notifications/auth-runtime.js';
 import { isAllowedRelayWebSocketPath } from '../relay/tunnel-host.js';

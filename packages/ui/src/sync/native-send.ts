@@ -1,8 +1,10 @@
+import { isSpaceDirectory } from "@/lib/spaces/space-route"
+import { sha256Hex } from "@/lib/sha256"
 import type { NativeAgentsAPI, NativePromptPart, NativePromptRequest } from "@/lib/api/types"
 import type { NativeAgentModel } from '@/lib/native-agents/combinations'
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSession, nativeBackendOfSessionId, unifiedNativeSessionState } from "@/lib/native-agents/ids"
-import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
+import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
 import { formatMessage, useI18nStore } from "@/lib/i18n"
 import { getRuntimeEndpointGeneration, getRuntimeKey, RuntimeContextChangedError } from "@/lib/runtime-switch"
 
@@ -12,7 +14,9 @@ export const sendNativePrompt = async (
   sessionId: string,
   request: NativePromptRequest,
   interruptAntigravity = false,
+  expectedSourceSessionId?: string,
 ): Promise<void> => {
+  if (isSpaceDirectory(request.directory)) throw new NativeAgentsUnsupportedError()
   const runtimeKey = getRuntimeKey()
   const generation = getRuntimeEndpointGeneration()
   const assertRuntime = () => {
@@ -26,6 +30,7 @@ export const sendNativePrompt = async (
     const session = await api.getSession(sessionId, request.directory)
     assertRuntime()
     const execution = unifiedNativeSessionState(session.metadata)
+    if (expectedSourceSessionId && execution?.sourceSessionID !== expectedSourceSessionId) throw error
     if (nativeBackendOfSession(session) !== 'antigravity'
       || isUnifiedNativeSessionId(sessionId) && (!execution?.sourceSessionID || execution.preparing)) throw error
 
@@ -125,16 +130,23 @@ export const nativePromptRequest = (send: {
 
 /**
  * The id of a message sent to a native session: the caller's when the CLI can
- * record it, else a new one.
+ * record it, a stable native UUID for a legacy id, or a new id for a new send.
  */
 export const nativeSendMessageId = (sessionId: string, requested: string | undefined): string => {
   if (isUnifiedNativeSessionId(sessionId)) return requested ?? createUnifiedUserMessageId()
   const backend = nativeBackendOfSessionId(sessionId)
   if (!backend) throw new Error(`Not a native session: ${sessionId}`)
-  return requested !== undefined && isNativeUserMessageIdFor(backend, requested)
-    && (backend !== 'deepseek' || requested.startsWith(`ndh_u_${sessionId.slice(4, 28)}_`))
-    ? requested
-    : createNativeUserMessageId(backend, sessionId)
+  if (requested && isNativeUserMessageIdFor(backend, requested)
+    && (backend !== 'deepseek' || requested.startsWith(`ndh_u_${sessionId.slice(4, 28)}_`))) return requested
+  if (requested) {
+    // Queues can persist OpenCode or legacy IDs on claims. Every claimant needs
+    // the same native UUID after a reconnect or a lost acknowledgement.
+    const hex = sha256Hex(new TextEncoder().encode(JSON.stringify([sessionId, requested])))
+    const variant = (8 | (parseInt(hex[16], 16) & 3)).toString(16)
+    const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+    return createNativeUserMessageId(backend, sessionId, uuid)
+  }
+  return createNativeUserMessageId(backend, sessionId)
 }
 
 const NATIVE_COMPACT_COMMAND = /^\/compact(?:\s+([\s\S]*?))?\s*$/

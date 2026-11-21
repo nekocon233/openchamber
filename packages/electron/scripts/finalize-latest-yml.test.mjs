@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const script = fileURLToPath(new URL('./finalize-latest-yml.mjs', import.meta.url));
 
@@ -119,14 +120,39 @@ test('fails instead of merging a manifest from another version', (context) => {
   assert.match(result.stderr, /macArm64 update manifest version 1\.2\.2 does not match 1\.2\.3/);
 });
 
-test('a macOS-only run rewrites the Mac manifest and leaves Windows alone', (context) => {
-  const fixture = createFixture();
+test('finishing a release rebuilds Windows manifests from its existing installers', (context) => {
+  const fixture = createFixture({ includeWindowsArm64: false });
   context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
 
-  execFileSync(process.execPath, [script], { env: { ...environment(fixture), MAC_ONLY: '1' } });
+  const assets = ['x64', 'arm64'].map((architecture, index) => ({
+    name: `OpenChamber-1.2.3-win-${architecture}.exe`,
+    url: `https://api.github.com/repos/openchamber/openchamber/releases/assets/${index + 1}`,
+    body: `installer fixture for ${architecture}`,
+    updated_at: '2026-07-30T00:00:00.000Z',
+  }));
+  const mock = path.join(fixture.root, 'release-fixture.mjs');
+  fs.writeFileSync(mock, `
+const assets = ${JSON.stringify(assets)};
+globalThis.fetch = async (address) => {
+  if (address === 'https://api.github.com/repos/openchamber/openchamber/releases/42') {
+    return Response.json({ assets: assets.map(({ body, ...asset }) => ({ ...asset, size: Buffer.byteLength(body) })) });
+  }
+  const asset = assets.find(({ url }) => url === address);
+  if (!asset) throw new Error('Unexpected release request');
+  return new Response(asset.body);
+};
+`);
+  execFileSync(process.execPath, ['--import', pathToFileURL(mock).href, script], {
+    env: { ...environment(fixture), WINDOWS_FROM_RELEASE: '1', RELEASE_ID: '42', GITHUB_TOKEN: 'fixture-token' },
+  });
 
-  assert.equal(fs.existsSync(path.join(fixture.output, 'latest.yml')), false);
-  assert.equal(fs.existsSync(path.join(fixture.output, 'latest-arm64.yml')), false);
+  for (const [index, filename] of ['latest.yml', 'latest-arm64.yml'].entries()) {
+    const manifest = fs.readFileSync(path.join(fixture.output, filename), 'utf8');
+    const asset = assets[index];
+    assert.ok(manifest.includes(`url: ${asset.name}`));
+    assert.ok(manifest.includes(`sha512: ${createHash('sha512').update(asset.body).digest('base64')}`));
+    assert.ok(manifest.includes(`size: ${Buffer.byteLength(asset.body)}`));
+  }
   const mac = fs.readFileSync(path.join(fixture.output, 'latest-mac.yml'), 'utf8');
   assert.match(mac, /mac-arm64\.zip/);
   assert.match(mac, /mac-x64\.zip/);

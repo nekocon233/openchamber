@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
-import { registerGitHubRoutes } from './routes.js';
+import { registerGitHubRoutes } from '../source-control/provider-routes.github.test-support.js';
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openchamber-pr-diff-routes-'));
 const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
@@ -104,7 +104,7 @@ describe('PR context diff fallback', () => {
     serve();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const { body } = await read().expect(500);
+      const { body } = await read().expect(503);
       expect(body.files).toBeUndefined();
       expect(readSnapshot).not.toHaveBeenCalled();
     } finally { log.mockRestore(); }
@@ -112,14 +112,14 @@ describe('PR context diff fallback', () => {
 
   it('refuses out-of-network snapshot sources before a provider read', async () => {
     const calls = serve();
-    await expect(routes.resolvePullRequestSnapshotSource({ context: context(), repo: { owner: 'other', repo: 'private' }, number }))
-      .rejects.toMatchObject({ status: 409 });
+    await expect(routes.resolveChangeRequestSnapshotSource({ context: context(), repo: { owner: 'other', repo: 'private' }, number }))
+      .rejects.toMatchObject({ message: 'Repository is not part of this project', sourceControlResponse: { status: 400 } });
     expect(calls).toHaveLength(0);
   });
 
   it('resolves immutable snapshot coordinates from the bound account', async () => {
     serve();
-    await expect(routes.resolvePullRequestSnapshotSource({ context: context(), repo, number, expectedHeadSha: headSha }))
+    await expect(routes.resolveChangeRequestSnapshotSource({ context: context(), repo, number, expectedHeadSha: headSha }))
       .resolves.toMatchObject({ context: expect.objectContaining({ accountId }), headSha, baseSha, mergeBaseSha: baseSha, endpoint: 'https://github.com/acme/app.git' });
   });
 });

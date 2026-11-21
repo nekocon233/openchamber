@@ -1,6 +1,8 @@
 import { BLOCK_PATH_TOKEN_RE, localPathFromFileUrl, normalizeReferencePath, parseFileReference } from '../fileReferenceParser';
-import { fileReferenceExists, findUniqueFileByName } from '../fileReferenceStat';
+import { checkFileReference, fileReferenceExists, findUniqueFileByName, lookupFilesByName } from '../fileReferenceStat';
+import { toastContextFileOpenFailure } from '@/lib/contextFileOpenGuard';
 import { isFilePathWithinDirectory, toAbsoluteFilePath } from '@/lib/path-utils';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { ConfirmedCodePath } from './streamdownCode';
 import React from 'react';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
@@ -13,7 +15,6 @@ import { useMarkdownPresentation, type FileReferenceSource } from './MarkdownPre
 import { HighlightResultCache } from './highlightResultCache';
 import { hasTextSelectionInside } from '@/lib/textSelection';
 
-/** A selection-ending click is consumed without navigating, as before migration. */
 export function activateMarkdownFile(event: React.MouseEvent | React.KeyboardEvent, open: (external: boolean) => void): void {
   if ('key' in event && event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
@@ -23,8 +24,6 @@ export function activateMarkdownFile(event: React.MouseEvent | React.KeyboardEve
   open(isMac ? event.metaKey : event.ctrlKey);
 }
 
-// Only lexical matches are cached globally. Resolution and existence remain
-// directory/runtime-bound and continue through the caller's confirmation path.
 const codePathCandidates = new HighlightResultCache<Array<{ raw: string; start: number }>>({ maxEntries: 64, maxBytes: 1024 * 1024 });
 
 export function useOpenMarkdownFile() {
@@ -42,16 +41,33 @@ export function useOpenMarkdownFile() {
     const ui = useUIStore.getState();
     if (reference.line) ui.openContextFileAtLine(directory, target, reference.line, reference.column ?? 1);
     else ui.openContextFile(directory, target);
-    // On the phone the viewer lives in the workspace drawer; the staged file
-    // shows only once the drawer is open on Files (#5486).
     mobileActions?.openFiles();
   }, [directory, editor, isVSCode, mobileActions]);
 }
 
-// A `file:` link the click rules do not take as a file is usually a folder.
-// It opens in the system file manager, as "Reveal in Finder" in the Files
-// tree does, and only where that tree offers it: not in a browser, which
-// hides the item, and not in VS Code, which mounts no Files tree (#5521).
+export function useOpenTappedMarkdownFile() {
+  const { directory } = useMarkdownPresentation();
+  const open = useOpenMarkdownFile();
+  const mounted = React.useRef(false);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  return React.useCallback(async (raw: string) => {
+    const reference = resolveMarkdownFile(raw, directory);
+    if (!reference) return;
+    const runtimeKey = getRuntimeKey();
+    const check = await checkFileReference(reference.resolvedPath, directory);
+    const named = check === 'missing' && !/[\\/]/.test(reference.path)
+      ? await lookupFilesByName(reference.path, directory)
+      : [];
+    if (!mounted.current || getRuntimeKey() !== runtimeKey) return;
+    if (check === 'failed' || !named || named.length > 1) toastContextFileOpenFailure(reference.resolvedPath, { reason: 'unreadable', message: null });
+    else if (check === 'missing' && named.length === 0) toastContextFileOpenFailure(reference.resolvedPath, { reason: 'missing' });
+    else await open(raw, named[0] ?? reference.resolvedPath);
+  }, [directory, open]);
+}
+
 export function useRevealMarkdownPath(): ((path: string) => void) | null {
   const apis = React.useContext(RuntimeAPIContext);
   const { t } = useI18n();
@@ -70,16 +86,11 @@ export function useRevealMarkdownPath(): ((path: string) => void) | null {
 
 const KNOWN_FILE_BASENAMES = new Set(['dockerfile', 'makefile', 'readme', 'license', '.env', '.gitignore', '.npmrc']);
 
-// Clicks keep the broad rules so a file-looking link never falls through to
-// its target="_blank" default (#3858). Probes are automatic and skip emails
-// handles and digit-leading suffixes such as `user@gmail.com`, `v1.2.3` or `93.00`.
 type FileReferencePurpose = 'probe' | 'click';
 
 const isLikelyFilePath = (path: string, purpose: FileReferencePurpose, explicitHref: boolean): boolean => {
   if (!path) return false;
   if (!explicitHref && (path.startsWith('--') || path.includes('://') || /[<>]/.test(path) || /\s{2,}/.test(path))) return false;
-  // An `@` without a slash is an email or a handle; with one it is usually a
-  // scoped package or pnpm path (`node_modules/@types/node/index.d.ts`).
   if (!explicitHref && purpose === 'probe' && path.includes('@') && !path.includes('/')) return false;
   const normalized = normalizeReferencePath(path);
   const name = normalized.split('/').filter(Boolean).pop() ?? '';
@@ -91,15 +102,11 @@ const isLikelyFilePath = (path: string, purpose: FileReferencePurpose, explicitH
 };
 
 export function resolveMarkdownFile(raw: string, directory: string, purpose: FileReferencePurpose = 'probe', inputKind: FileReferenceSource = 'path') {
-  // Most code tokens are paths, not URLs. Avoid constructing and throwing a URL
-  // for every ordinary identifier/path in a highlighted fence.
   const fileUrl = /^\s*file:/i.test(raw);
   const reference = parseFileReference(fileUrl ? localPathFromFileUrl(raw) ?? raw : raw);
   const explicitHref = inputKind === 'href' && !fileUrl;
   if (reference && explicitHref) {
-    // Check schemes before decoding so encoded :// inside a local path stays local.
     if (reference.path.startsWith('//') || (/^[A-Za-z][A-Za-z\d+.-]*:/.test(reference.path) && !/^[A-Za-z]:[\\/]/.test(reference.path))) return null;
-    // Parse suffixes before decoding: an escaped #, ; or : belongs to the filename.
     try {
       reference.path = decodeURIComponent(reference.path);
     } catch {

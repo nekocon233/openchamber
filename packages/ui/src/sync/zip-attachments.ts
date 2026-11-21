@@ -7,6 +7,7 @@
  * the archive with its own shell tools.
  */
 
+import { attachmentWireName } from "@/lib/attachmentIdentity"
 import type { AttachedFile } from "@/stores/types/sessionTypes"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 
@@ -82,7 +83,7 @@ const toPromptFilePart = (attachment: AttachedFile): PromptFilePart => ({
   type: "file",
   mime: attachment.mimeType,
   url: attachment.dataUrl,
-  filename: attachment.filename,
+  filename: attachmentWireName(attachment),
 })
 
 /**

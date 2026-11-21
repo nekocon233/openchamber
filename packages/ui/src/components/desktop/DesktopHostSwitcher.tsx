@@ -104,7 +104,6 @@ const statusDotClass = (status: HostDisplayStatus): string => {
   return 'bg-muted-foreground/40';
 };
 
-// Text tone matching statusDotClass, for the per-row status line.
 const statusTextClass = (status: HostDisplayStatus): string => {
   if (status === 'ok') return 'text-[var(--status-success)]';
   if (status === 'auth' || status === 'update-recommended') return 'text-[var(--status-warning)]';
@@ -258,9 +257,6 @@ export function DesktopHostSwitcherDialog({
 
   const [configHosts, setConfigHosts] = React.useState<DesktopHost[]>([]);
   const [defaultHostId, setDefaultHostId] = React.useState<string | null>(null);
-  // Statuses live outside this component: startup warms them, and the dropdown
-  // remounts on every open — holding them here is what made each open start
-  // from nothing and show "Checking" on rows the app already knew about.
   const statusSnapshot = React.useSyncExternalStore(subscribeDesktopHostStatuses, getDesktopHostStatusSnapshot, getDesktopHostStatusSnapshot);
   const statusById = statusSnapshot.byHostId;
   const isProbing = statusSnapshot.isProbing;
@@ -269,9 +265,6 @@ export function DesktopHostSwitcherDialog({
   const [switchingHostId, setSwitchingHostId] = React.useState<string | null>(null);
   const [sshHostIds, setSshHostIds] = React.useState<Record<string, true>>({});
   const [sshStatusesById, setSshStatusesById] = React.useState<Record<string, DesktopSshInstanceStatus>>({});
-  // "Connecting to {host}" while a switch waits on the host: an SSH tunnel
-  // coming up, or a check that the host answers before the window moves to it.
-  // Closing it cancels the switch.
   const [switchModal, setSwitchModal] = React.useState<{
     open: boolean;
     kind: 'ssh' | 'check';
@@ -298,6 +291,11 @@ export function DesktopHostSwitcherDialog({
 
   const [runtimeEndpointEpoch, setRuntimeEndpointEpoch] = React.useState(0);
   const switchTokenRef = React.useRef(0);
+  const selectionTokenRef = React.useRef(0);
+  React.useEffect(() => () => {
+    selectionTokenRef.current += 1;
+    switchTokenRef.current += 1;
+  }, []);
 
   const allHosts = React.useMemo(() => {
     const normalizedRemote = configHosts.map((h) => ({
@@ -315,8 +313,6 @@ export function DesktopHostSwitcherDialog({
     void runtimeEndpointEpoch;
     return resolveCurrentDesktopHost(allHosts);
   }, [allHosts, runtimeEndpointEpoch]);
-  // Null when the default is not in the list, such as Local without a local
-  // server: naming it would point at an entry nobody can pick.
   const currentDefaultLabel = React.useMemo(() => {
     const id = defaultHostId || LOCAL_HOST_ID;
     return allHosts.find((h) => h.id === id)?.label ?? null;
@@ -362,9 +358,6 @@ export function DesktopHostSwitcherDialog({
         nextSshHostIds[instance.id] = true;
       }
       setConfigHosts(cfg.hosts || []);
-      // Config is the authoritative host list: drop statuses for instances the
-      // user removed. Doing this from a probe run instead would clear entries
-      // every time a run started before the config had finished loading.
       pruneDesktopHostStatuses((cfg.hosts || []).map((host) => host.id));
       setDefaultHostId(cfg.defaultHostId ?? null);
       setSshHostIds(nextSshHostIds);
@@ -386,6 +379,8 @@ export function DesktopHostSwitcherDialog({
 
   React.useEffect(() => {
     if (!open) {
+      selectionTokenRef.current += 1;
+      switchTokenRef.current += 1;
       setEditingId(null);
       setEditLabel('');
       setEditUrl('');
@@ -415,7 +410,6 @@ export function DesktopHostSwitcherDialog({
     };
     void run();
     const interval = window.setInterval(() => {
-      // Skip polling when tab is hidden to reduce background work
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
         return;
       }
@@ -429,14 +423,10 @@ export function DesktopHostSwitcherDialog({
   }, [open]);
 
   const handleSwitch = React.useCallback(async (selectedHost: DesktopHost) => {
+    const selectionToken = ++selectionTokenRef.current;
+    switchTokenRef.current += 1;
     let host = selectedHost;
-    // Relay legs ride the E2EE tunnel activated in-renderer via
-    // switchRuntimeEndpoint({ relay }); the runtime fetch/socket layers route
-    // through the tunnel from the singleton registry.
     const activateRelay = (relay: NonNullable<DesktopHost['relay']>, liveTunnel?: ReturnType<typeof createRelayTunnelClient>) => {
-      // Adopt the probe's live tunnel (when it kept one) BEFORE the switch: the
-      // activate call inside switchRuntimeEndpoint sees an equal descriptor and
-      // reuses it — no second WebSocket connect + E2EE handshake.
       if (liveTunnel) {
         adoptRelayTunnel({ relayUrl: relay.relayUrl, serverId: relay.serverId, hostEncPubJwk: relay.hostEncPubJwk }, liveTunnel);
       }
@@ -446,25 +436,24 @@ export function DesktopHostSwitcherDialog({
         runtimeKey: runtimeKeyForDesktopHost(host),
         relay,
       });
-      // On the relay: learn the server's current LAN address in the background
-      // and hot-switch back to direct if the stored one merely went stale.
       scheduleDesktopHostCandidateRefresh(host.id);
     };
 
-    // An SSH instance is reachable only through its tunnel. In the desktop app
-    // open it first, then switch with the host entry the connect rewrote
-    // (forward URL and client token); the row's Connect button does the same
-    // without switching.
-    if (isElectronShell() && host.id !== LOCAL_HOST_ID && sshHostIds[host.id] && sshStatusesById[host.id]?.phase !== 'ready') {
+    if (isElectronShell() && host.id !== LOCAL_HOST_ID && sshHostIds[host.id]) {
       setSwitchingHostId(host.id);
       try {
-        await desktopSshConnect(host.id);
-        await waitForSshReady(host.id, SSH_CONNECT_TIMEOUT_MS, (status) => {
-          setSshStatusesById((prev) => ({ ...prev, [status.id]: status }));
-        });
+        if (sshStatusesById[host.id]?.phase !== 'ready') {
+          await desktopSshConnect(host.id);
+          await waitForSshReady(host.id, SSH_CONNECT_TIMEOUT_MS, (status) => {
+            setSshStatusesById((prev) => ({ ...prev, [status.id]: status }));
+          });
+        }
         const refreshed = (await desktopHostsGet()).hosts.find((entry) => entry.id === host.id);
-        if (refreshed) host = refreshed;
+        if (selectionToken !== selectionTokenRef.current) return;
+        if (!refreshed) throw new Error('SSH host is no longer available');
+        host = refreshed;
       } catch (err) {
+        if (selectionToken !== selectionTokenRef.current) return;
         const message = err instanceof Error ? err.message : String(err);
         if (message !== SSH_CONNECT_CANCELLED_ERROR) {
           toast.error(t('desktopHostSwitcher.toast.sshFailedToConnect', { host: redactSensitiveUrl(host.label) }), {
@@ -493,15 +482,11 @@ export function DesktopHostSwitcherDialog({
         return;
       }
       setSwitchingHostId(host.id);
-      // A page served by another instance cannot reach the local server, so
-      // the desktop shell loads the Local UI into the window. On the app's own
-      // pages it declines, and the switch below happens in place.
       if (host.id === LOCAL_HOST_ID && await desktopSwitchToLocal()) {
         onHostSwitched?.();
         setSwitchingHostId(null);
         return;
       }
-      // A tunnel opened above makes the cached probe of the old forward stale.
       const sshJustConnected = host !== selectedHost;
       const clientToken = host.id === LOCAL_HOST_ID ? await getLocalClientToken() : (host.clientToken || '');
       const activateMainRuntime = async () => {
@@ -512,14 +497,6 @@ export function DesktopHostSwitcherDialog({
         return activated;
       };
 
-      // The dropdown already probed every host when it opened — act on that
-      // result instead of re-probing (re-probes doubled the switch latency and
-      // flashed transient Unreachable states over a known-good host). While
-      // that probe is still running the result on record is older than the
-      // dropdown, and switching on it blind to a host that has stopped
-      // answering leaves the window on the loading screen with no way back.
-      // Local is the app's own server, and the instance the app is talking to
-      // right now has just answered; neither needs such a check.
       const answersNow = host.id === LOCAL_HOST_ID || (host.id === current.id && isRuntimeConnected);
       const recheck = sshJustConnected || (!answersNow && isDesktopHostStatusPending(host.id));
       const cached = recheck ? undefined : statusById[host.id];
@@ -540,11 +517,6 @@ export function DesktopHostSwitcherDialog({
         return;
       }
 
-      // No usable probe result — probe now: direct first, relay fallback.
-      // Statuses are written once, with the final outcome, so the row never
-      // flashes intermediate failures while the fallback is still running.
-      // A silent host takes the probe's full timeout; the dialog names the
-      // host and closing it cancels, which keeps the current instance.
       const switchToken = switchTokenRef.current + 1;
       switchTokenRef.current = switchToken;
       setSwitchModal({
@@ -569,9 +541,6 @@ export function DesktopHostSwitcherDialog({
       }
       let relayProbeTunnel: ReturnType<typeof createRelayTunnelClient> | undefined;
       if (!transport && host.relay) {
-        // Cancelled during the direct check: skip the relay handshake. A failed
-        // direct leg alone says nothing about the relay, so nothing is recorded
-        // and the menu's own probe keeps the row.
         if (switchToken !== switchTokenRef.current) return;
         const probe = await probeRelayDesktopHost(host.relay, { keepTunnel: true, clientToken: clientToken || null, requestHeaders: host.requestHeaders || null })
           .catch((): HostProbeResult => ({ status: 'unreachable', latencyMs: 0 }));
@@ -586,7 +555,6 @@ export function DesktopHostSwitcherDialog({
       setDesktopHostStatus(host.id, finalStatus);
 
       if (switchToken !== switchTokenRef.current) {
-        // Cancelled while checking: the probe's live tunnel has no taker.
         relayProbeTunnel?.close();
         return;
       }
@@ -766,8 +734,6 @@ export function DesktopHostSwitcherDialog({
         description: err instanceof Error ? err.message : String(err),
       });
     };
-    // Relay-capable hosts can't be expressed as a fixed window URL — the new
-    // window boots the local UI and picks direct-vs-tunnel itself.
     if (host.relay && host.id !== LOCAL_HOST_ID) {
       desktopOpenNewWindowForHost(host.id).catch(reportFailure);
       return;
@@ -792,8 +758,6 @@ export function DesktopHostSwitcherDialog({
     if (!localOrigin) return;
     const localTarget = toNavigationUrl(localOrigin);
     if (isElectronShell()) {
-      // Same as choosing Local in the list: a page served by another instance
-      // cannot switch in place, so the desktop shell loads the Local UI.
       if (await desktopSwitchToLocal()) {
         onHostSwitched?.();
         return;
@@ -813,7 +777,6 @@ export function DesktopHostSwitcherDialog({
     const kind = switchModal.kind;
     switchTokenRef.current += 1;
     setSwitchingHostId(null);
-    // The label stays so the title does not change while the dialog fades out.
     setSwitchModal((prev) => ({
       ...prev,
       open: false,
@@ -823,8 +786,6 @@ export function DesktopHostSwitcherDialog({
       error: null,
     }));
 
-    // A cancelled check has nothing to tear down: the window never left the
-    // current instance.
     if (kind !== 'ssh' || !hostId || hostId === LOCAL_HOST_ID || !isDesktopShell()) {
       return;
     }
@@ -852,6 +813,9 @@ export function DesktopHostSwitcherDialog({
         }));
       });
       if (readyStatus.phase === 'ready') {
+        const refreshed = (await desktopHostsGet()).hosts.find((entry) => entry.id === host.id);
+        if (!refreshed) throw new Error('SSH host is no longer available');
+        setConfigHosts((previous) => previous.map((entry) => entry.id === host.id ? refreshed : entry));
         toast.success(t('desktopHostSwitcher.toast.sshConnected', { host: redactSensitiveUrl(host.label) }));
       }
     } catch (err) {
@@ -962,15 +926,6 @@ export function DesktopHostSwitcherDialog({
                 const isDefault = (defaultHostId || LOCAL_HOST_ID) === host.id;
                 const status = statusById[host.id] || null;
                 const sshStatus = sshStatusesById[host.id] || null;
-                // While a probe runs, keep showing the last known result (quiet
-                // refresh — the header's refresh icon is the spinner); only fall
-                // back to "Checking" when there has never been one. "Unknown" is
-                // never shown — an unprobed host is by definition being checked.
-                //
-                // The instance the app is connected to never says "Checking":
-                // the live connection already answers the question a probe would
-                // ask, and reporting otherwise reads as the app not knowing where
-                // it is. A real probe result still wins — it carries the ping.
                 const statusKind: HostDisplayStatus = isSsh
                   ? sshPhaseToHostStatus(sshStatus?.phase)
                   : (status?.status ?? (isActive && isRuntimeConnected ? 'ok' : 'checking'));
@@ -979,9 +934,6 @@ export function DesktopHostSwitcherDialog({
                 const displayLabel = host.id === LOCAL_HOST_ID
                   ? t('desktopHostSwitcher.instance.local')
                   : redactSensitiveUrl(host.label);
-                // Relay-only hosts have a relay:// pseudo-URL that means nothing
-                // to a person — say how the connection works instead. Hosts with
-                // a direct leg show their address.
                 const displayUrl = host.relay && !host.apiUrl ? t('mobile.connect.relay.badge') : redactSensitiveUrl(effectiveUrl);
 
                 return (
@@ -1006,9 +958,6 @@ export function DesktopHostSwitcherDialog({
                       aria-label={t('desktopHostSwitcher.actions.switchToAria', { instance: displayLabel })}
                     >
                       <span className={cn('h-2 w-2 rounded-full flex-shrink-0', statusDotClass(statusKind))} />
-                      {/* Same reading order as the settings device list: name +
-                          badges on the first line, a toned status line under it,
-                          then the address. */}
                       <div className="flex-1 min-w-0 space-y-0.5">
                         <div className="flex min-w-0 items-center gap-1.5">
                           <span className="typography-ui-label font-medium truncate text-inherit">
@@ -1040,7 +989,7 @@ export function DesktopHostSwitcherDialog({
 
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {isSsh && !isLocal && (
-                        (sshStatus?.phase === 'idle' || !sshStatus?.phase) ? (
+                        (sshStatus?.phase === 'idle' || sshStatus?.phase === 'error' || !sshStatus?.phase) ? (
                           <Button
                             type="button"
                             variant="outline"

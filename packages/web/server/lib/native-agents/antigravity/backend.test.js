@@ -61,6 +61,20 @@ const setup = async ({ decorateSession = async (session) => session, onInteracti
 };
 
 describe('Antigravity CLI adapter', () => {
+  it('acknowledges a reclaimed accepted message without starting another turn', async () => {
+    const { backend, directory, events, prompt } = await setup();
+    const session = await backend.createSession({ directory });
+    const messageID = await prompt(session, 'queue replay');
+    const replay = { directory, messageID, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, parts: [{ type: 'text', text: 'queue replay' }] };
+    const count = events.length;
+    await backend.prompt(session.id, replay);
+    await backend.whenIdle(session.id);
+    expect(events.length).toBe(count);
+    await expect(backend.prompt(session.id, { ...replay, parts: [{ type: 'text', text: 'Unrelated prompt' }] }))
+      .rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+  });
+
   it.each(['live-child-index-only', 'live-child-thinking'])('reconciles activity without a child result for %s', async (text) => {
     const { backend, directory, home, events } = await setup();
     const session = await backend.createSession({ directory });
@@ -365,7 +379,7 @@ describe('Antigravity CLI adapter', () => {
     await backend.prompt(session.id, request);
     await expect(backend.closeSession(session.id)).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
     await backend.abort(session.id);
-    await expect(backend.prompt(session.id, { ...request, model: { ...request.model, modelID: 'invalid-model' } }))
+    await expect(backend.prompt(session.id, { ...request, messageID: `nag_u_${randomUUID()}`, model: { ...request.model, modelID: 'invalid-model' } }))
       .rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_ERROR' });
   });
 

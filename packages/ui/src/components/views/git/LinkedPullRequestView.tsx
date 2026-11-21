@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
-import { useGitHubReadContext, useGitHubReferenceDetail, useGitHubReferenceList, useGitHubSourceStatus } from '@/components/references/referenceSources';
+import { useRepositoryReadContext, useRepositoryReferenceDetail, useRepositoryReferenceList, useRepositorySourceStatus } from '@/components/references/referenceSources';
 import { isSameRepositoryItemLink } from '@/components/sourceBoard/boardLinkTarget';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
 import { SourceBoardLinkFeedback, type BoardLinkFeedbackState } from '@/components/sourceBoard/SourceBoardLinkFeedback';
@@ -34,7 +34,7 @@ export const LinkedPullRequestView: React.FC<{
   const directory = gitDirectory ?? request.sourceDirectory;
   const binding = useRepositoryBinding(directory, sourceControl);
   // Keep authority subscribed outside Activity, as the ordinary PR pane does.
-  const context = useGitHubReadContext(directory);
+  const context = useRepositoryReadContext(directory);
   const scopeKey = JSON.stringify([request.runtimeKey, directory,
     context && context !== 'missing' ? sourceControlReadContextParts(context) : context]);
   return (
@@ -53,11 +53,11 @@ const LinkedPullRequestBody: React.FC<{
 }> = ({ request, directory, context, retryBinding, onBack }) => {
   const { t } = useI18n();
   const [now] = React.useState(() => Date.now());
-  const sourceStatus = useGitHubSourceStatus(directory);
+  const sourceStatus = useRepositorySourceStatus(directory);
   const target = parseChangeRequestReference(request.url);
   const lookupUrl = target?.project
     ? `https://github.com/${target.project.owner.toLowerCase()}/${target.project.name.toLowerCase()}/pull/${target.number}` : request.url;
-  const lookup = useGitHubReferenceList({
+  const lookup = useRepositoryReferenceList({
     enabled: context !== null && context !== 'missing' && context.provider === 'github',
     directory,
     kind: 'pull',
@@ -66,7 +66,7 @@ const LinkedPullRequestBody: React.FC<{
   });
   const reference = lookup.items.find((item): item is GitHubPullReference =>
     item.kind === 'pull' && isSameRepositoryItemLink(item.url, request.url)) ?? null;
-  const { detail, refresh } = useGitHubReferenceDetail(directory, reference, true);
+  const { detail, refresh } = useRepositoryReferenceDetail(directory, reference, true);
   useBoardRevalidation(true);
 
   const state: BoardLinkFeedbackState = context === null ? 'loading'
@@ -110,6 +110,7 @@ const LinkedPullRequestBody: React.FC<{
           refreshDetail={refresh}
           pullLinks={<SourceBoardPullLinks
             pull={reference}
+            repository={context.repositoryId}
             project={project ?? { id: '', path: request.sourceDirectory }}
             context={context}
             projectOwnsDirectory={(value) => Boolean(project && projectFor(value)?.id === project.id)}

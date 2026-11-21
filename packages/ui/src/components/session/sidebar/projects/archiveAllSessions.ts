@@ -1,11 +1,6 @@
 import type { Session } from '@/lib/opencode/model';
 import type { SessionGroup } from '../types';
 
-/**
- * The sessions "Archive all" takes from a project: every top-level session in
- * its groups, minus the ones the user still wants in front of them. Subagent
- * children go with their parent, and the archived bucket is already archived.
- */
 export const selectArchiveAllSessionIds = (
   groups: readonly SessionGroup[],
   isKept: (session: Session) => boolean,
@@ -21,4 +16,24 @@ export const selectArchiveAllSessionIds = (
     }
   }
   return [...ids];
+};
+
+type ArchiveAllTarget = { id: string; descendantIds: readonly string[] };
+
+export const withArchiveAllSubtrees = (
+  rootIds: readonly string[],
+  descendantIdsOf: (rootId: string) => readonly string[],
+  isBusy: (sessionId: string) => boolean,
+): ArchiveAllTarget[] => rootIds.flatMap((id) => {
+  const descendantIds = descendantIdsOf(id);
+  return descendantIds.some(isBusy) ? [] : [{ id, descendantIds }];
+});
+
+export const countArchiveAllOutcome = (
+  targets: readonly ArchiveAllTarget[],
+  failedIds: readonly string[],
+) => {
+  const failed = new Set(failedIds);
+  const failedCount = targets.filter(({ id, descendantIds }) => failed.has(id) || descendantIds.some((descendantId) => failed.has(descendantId))).length;
+  return { archived: targets.length - failedCount, failed: failedCount };
 };

@@ -178,7 +178,7 @@ describe('a tracker no UI code names', () => {
     const { ReferencePickerRow } = await import('@/components/references/ReferencePickerRow');
     await render(
       <ReferencePickerRow
-        item={{ source: 'linear', issue: item as unknown as never }}
+        item={{ source: 'tracker', provider: 'linear', item: item as unknown as never }}
         pullStatus={null}
         highlighted={false}
         checked={null}

@@ -45,19 +45,23 @@ describe('combineSessionPrSummaries', () => {
 
 describe('findLinkedPrsWithoutState', () => {
   test('keeps linked PRs whose state has not arrived, matching repositories case-insensitively', () => {
-    const link = (number: number, owner = 'acme') => ({ owner, repo: 'app', number, url: `https://github.com/${owner}/app/pull/${number}`, title: `PR ${number}` });
-    expect(findLinkedPrsWithoutState([link(7, 'Acme'), link(8)], [summary(7, 'open')]).map((entry) => entry.number)).toEqual([8]);
+    const link = (number: number, owner = 'acme') => ({
+      key: `${owner}/app#${number}`, identifier: `#${number}`,
+      url: `https://github.com/${owner}/app/pull/${number}`, title: `PR ${number}`,
+      repository: { key: `${owner}/app#${number}`, provider: 'github', instance: 'github.com', owner, repo: 'app', number, thread: 'pull' as const },
+    });
+    expect(findLinkedPrsWithoutState([link(7, 'Acme'), link(8)], [summary(7, 'open')]).map((entry) => entry.repository?.number)).toEqual([8]);
     expect(findLinkedPrsWithoutState([link(7)], [])).toHaveLength(1);
   });
 });
 
 describe('linked Linear issues', () => {
   test('take the colour of their state type and show its team name', () => {
-    const linear = (identifier: string): LinkedSidebarIssue => ({ source: 'linear', key: `linear:${identifier}`, identifier, url: `https://linear.app/x/issue/${identifier}`, title: 'Old title' });
+    const linear = (identifier: string): LinkedSidebarIssue => ({ source: 'tracker', provider: 'linear', key: `linear:${identifier}`, identifier, url: `https://linear.app/x/issue/${identifier}`, title: 'Old title' });
     const items = buildSessionIssueItems([linear('ENG-1'), linear('ENG-2'), linear('ENG-3')], [], [
-      { identifier: 'ENG-1', title: 'Shipped', state: { name: 'Done', type: 'completed' } },
+      { identifier: 'ENG-1', title: 'Shipped', state: { name: 'Done', category: 'done' } },
       null,
-      { identifier: 'ENG-3', title: 'Working', state: { name: 'In Progress', type: 'started' } },
+      { identifier: 'ENG-3', title: 'Working', state: { name: 'In Progress', category: 'in-progress' } },
     ]);
     expect(items.map((item) => [item.label, item.color, item.statusText, item.title])).toEqual([
       ['ENG-3', 'var(--pr-open)', 'In Progress', 'Working'],
@@ -123,7 +127,7 @@ describe('GitLab issues on a session row', () => {
     const items = buildSessionIssueItems([
       { source: 'gitlab', key: 'a', ref: ref(1), identifier: '#1', url: 'u1', title: 'One' },
       { source: 'gitlab', key: 'b', ref: ref(2), identifier: '#2', url: 'u2', title: 'Two' },
-    ], [], [], [
+    ], [
       { owner: 'team', repo: 'app', number: 1, title: 'One', state: 'completed' },
       { owner: 'team', repo: 'app', number: 2, title: 'Two', state: 'open' },
     ]);

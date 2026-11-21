@@ -18,6 +18,13 @@ describe('chatDraftPersistence', () => {
     storage.removeItem('oc.chatDraft.local.v2:runtime-a:session%3Asession-1');
   });
 
+  test('never writes a share link\'s key to storage', () => {
+    const identity = createChatDraftIdentity('runtime-a', '/repo-a', 'session-1')!;
+    writeChatDraft(identity, 'see https://evil.test/p/AbCdEfGhIjKlMnOpQrStUv#Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE now', []);
+    expect(readChatDraft(identity).text).toBe('see https://evil.test/p/AbCdEfGhIjKlMnOpQrStUv now');
+    expect(storage.getItem('openchamber.chatDrafts.v2')).not.toContain('Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE');
+  });
+
   test('isolates drafts by runtime, directory, and session', () => {
     const first = createChatDraftIdentity('runtime-a', '/repo-a/', 'session-1')!;
     const second = createChatDraftIdentity('runtime-b', '/repo-a', 'session-1')!;

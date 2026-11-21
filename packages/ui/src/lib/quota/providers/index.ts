@@ -1,6 +1,6 @@
 import type { QuotaProviderId } from '@/types';
 
-interface QuotaProviderMeta {
+export interface QuotaProviderMeta {
   id: QuotaProviderId;
   name: string;
 }
@@ -34,13 +34,5 @@ export const QUOTA_PROVIDERS: QuotaProviderMeta[] = [
   { id: 'kilo', name: 'Kilo Code' },
   { id: 'zenmux', name: 'ZenMux' },
   { id: 'xai', name: 'xAI' },
-];
-
-
-/** Keep CLI connections distinct from the OpenCode credential for the same service. */
-export const getQuotaProviderList = (nativeProviders: readonly QuotaProviderMeta[]): QuotaProviderMeta[] => [
-  ...QUOTA_PROVIDERS.map((provider) => provider.id === 'kimi-for-coding' && nativeProviders.length > 0
-    ? { ...provider, name: `${provider.name} / OpenCode` }
-    : provider),
-  ...nativeProviders,
+  { id: 'mistral', name: 'Mistral' },
 ];

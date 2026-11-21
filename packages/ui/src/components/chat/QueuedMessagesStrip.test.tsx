@@ -12,7 +12,7 @@ import { QueuedMessagesStrip } from './QueuedMessagesStrip';
 
 const target: MessageQueueTarget = { runtimeKey: 'local', directory: '/repo', sessionId: 'ses_root' };
 
-const queued = (id: string, content: string): QueuedMessage => ({ id, messageId: null, content, createdAt: 1, status: 'queued' });
+const queued = (id: string, content: string): QueuedMessage => ({ id, messageId: null, deliveryOwner: 'server', content, createdAt: 1, status: 'queued' });
 
 const theme = getDefaultTheme(false);
 // Agent badges take their color from the theme.

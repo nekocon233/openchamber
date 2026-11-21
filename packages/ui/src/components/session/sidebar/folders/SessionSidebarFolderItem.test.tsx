@@ -34,7 +34,7 @@ test('a collapsed virtual folder shows live and unread descendants without mount
   const render = (notifyOnSubtasks = false, isCollapsed = true, archivedBucket = false) => root.render(
     <I18nProvider><SessionSidebarFolderItem
       folder={{ id: 'folder', name: 'Folder', createdAt: 1, sessionIds: ['parent'] }}
-      sessions={[]} activityNodes={sessions} notifyOnSubtasks={notifyOnSubtasks}
+      sessions={[]} activityNodes={sessions} 
       isCollapsed={isCollapsed} archivedBucket={archivedBucket} renderBody={false}
       onToggle={() => undefined} onRename={() => undefined} onDelete={() => undefined}
     ><div data-hidden-session="child">Child session</div></SessionSidebarFolderItem></I18nProvider>,

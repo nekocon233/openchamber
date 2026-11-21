@@ -1,10 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createFollowUpQueueServerRuntime } from './index.js';
+import { createFollowUpQueueRecovery } from './startup-recovery.js';
 
 const temporaryRoots = new Set();
 
@@ -40,6 +43,51 @@ const createItem = (suffix = 'a') => ({
 });
 
 describe('follow-up queue server runtime', () => {
+  it('imports persisted follow-ups when an OpenCode v2 session reports its location directory', async () => {
+    const root = await createRoot('openchamber-follow-up-v2-location-');
+    const sessionId = 'ses_v2_follow_up_fixture';
+    const directory = path.join(root, 'project');
+    const runtime = createFollowUpQueueServerRuntime({ fsPromises: fs, path, rootDirectory: root, broadcastGlobalUiEvent: vi.fn() });
+    await runtime.applyMutation({
+      sessionId,
+      baseRevision: 0,
+      clientMutationId: 'original-fixture-add',
+      operation: {
+        type: 'add',
+        item: {
+          id: 'queued-v2-fixture', messageId: null, status: 'queued', createdAt: 1, content: 'Continue the fixture',
+          sendConfig: { providerID: 'fixture', modelID: 'test' },
+        },
+      },
+    });
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ data: { id: sessionId, location: { directory } } }));
+    });
+    const enqueue = vi.fn(async () => undefined);
+    server.listen(0, '127.0.0.1');
+    try {
+      await once(server, 'listening');
+      const recovery = createFollowUpQueueRecovery({
+        followUpQueueRuntime: runtime,
+        getMessageQueue: () => ({ enqueue }),
+        globalMessageStreamHub: { isConnected: () => true, subscribeStatus: () => () => {} },
+        buildOpenCodeUrl: (route) => `http://localhost:${server.address().port}${route}`,
+        getOpenCodeAuthHeaders: () => ({}),
+        sessionExists: async () => true,
+        isOpenCodeReady: () => true,
+        ensureGlobalWatcherStarted: async () => {},
+      });
+      await recovery.afterOpenCodeStartup();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(enqueue.mock.calls[0].slice(0, 2)).toEqual([sessionId, directory]);
+      expect((await runtime.load(sessionId)).items).toEqual([]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('broadcasts only opaque applied and dedupe-recovery revision hints', async () => {
     const root = await createRoot('openchamber-follow-up-events-');
     const broadcastGlobalUiEvent = vi.fn();

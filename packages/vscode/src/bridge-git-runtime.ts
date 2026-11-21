@@ -1,4 +1,5 @@
 import { OpenCode } from '@opencode/client';
+import { z } from 'zod';
 import * as gitService from './gitService';
 import type { BridgeContext, BridgeResponse } from './bridge';
 
@@ -8,22 +9,8 @@ type BridgeMessageInput = {
   payload?: unknown;
 };
 
-// A removal should not hang on an unresponsive OpenCode server: disposal is
-// best-effort and `gitService.removeWorktree` swallows its failure.
 const WORKTREE_INSTANCE_DISPOSE_TIMEOUT_MS = 5_000;
 
-/**
- * Builds the best-effort disposal hook for the extension's active runtime. The
- * API URL and auth headers are read at call time, and the client is created
- * per call so a restarted managed process is always addressed correctly.
- *
- * A session of a project opened on a folder of its repository runs in that
- * folder of the worktree (`<worktree>/ai`), which is a location of its own, so
- * every running location inside the worktree is evicted along with its root.
- * When the location list cannot be read, the root is still evicted and the
- * list error is rethrown for the removal wrapper to log. The web server's git
- * routes do the same.
- */
 const toLocationKey = (directory: string): string => directory.replace(/\\/g, '/').replace(/\/+$/, '');
 
 const createWorktreeInstanceDisposer = (ctx?: BridgeContext) => {
@@ -32,8 +19,6 @@ const createWorktreeInstanceDisposer = (ctx?: BridgeContext) => {
     if (!apiUrl) {
       throw new Error('OpenCode API URL is not available');
     }
-    // OpenCode 2 has no instance route; evicting the location drops its cached
-    // services (file watchers, LSP, MCP), which is what held the folder.
     const client = OpenCode.make({
       baseUrl: apiUrl.replace(/\/+$/, ''),
       headers: ctx?.manager?.getOpenCodeAuthHeaders() || {},
@@ -179,7 +164,7 @@ export async function handleStandardGitBridgeMessage(message: BridgeMessageInput
 
       if (normalizedMethod === 'DELETE') {
         const removePayload = payload as {
-          body?: { directory?: string; deleteLocalBranch?: boolean };
+          body?: { directory?: string; deleteLocalBranch?: boolean; teardownCommand?: unknown };
           directory?: string;
           deleteLocalBranch?: boolean;
         };
@@ -195,12 +180,23 @@ export async function handleStandardGitBridgeMessage(message: BridgeMessageInput
         const removed = await gitService.removeWorktree(directory!, {
           directory: worktreeDirectory,
           deleteLocalBranch: removePayload?.body?.deleteLocalBranch === true || removePayload?.deleteLocalBranch === true,
+          teardownCommand: z.string().safeParse(removePayload?.body?.teardownCommand).data,
           disposeInstance: createWorktreeInstanceDisposer(ctx),
         });
         return { id, type, success: true, data: { success: Boolean(removed) } };
       }
 
       return { id, type, success: false, error: `Unsupported method: ${normalizedMethod}` };
+    }
+
+    case 'api:git/worktrees/teardown': {
+      const { directory, worktreeDirectory, teardownCommand } = (payload || {}) as { directory?: string; worktreeDirectory?: unknown; teardownCommand?: unknown };
+      const dirError = requireDirectory(id, type, directory);
+      if (dirError) return dirError;
+      const target = z.string().min(1).safeParse(worktreeDirectory).data;
+      if (!target) return { id, type, success: false, error: 'Worktree directory is required' };
+      await gitService.teardownWorktree(directory!, { directory: target, teardownCommand: z.string().safeParse(teardownCommand).data });
+      return { id, type, success: true, data: { success: true } };
     }
 
     case 'api:git/worktrees/snapshot': {

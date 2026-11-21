@@ -135,6 +135,7 @@ mock.module('@/hooks/useRuntimeAPIs', () => ({
 mock.module('@/stores/useGitStore', () => ({
   ...actualGitStore,
   useGitBranches: () => ({ all: ['main'] }),
+  useGitBranchesFetchedAt: () => 1,
   useGitLoadingBranches: () => false,
   useGitStore: selectGitState,
 }));
@@ -145,6 +146,7 @@ mock.module('@/lib/worktrees/worktreeManager', () => ({
 mock.module('@/lib/worktrees/worktreeCreate', () => ({ createWorktreeWithDefaults: async () => null }));
 mock.module('@/lib/worktrees/worktreeBootstrap', () => ({ waitForWorktreeBootstrap: async () => undefined }));
 mock.module('@/lib/openchamberConfig', () => ({
+  getWorktreeCreateCommand: async () => '',
   getProjectSetup: async () => ({ setupWorktree: ['bun install'] }),
   getWorktreeSetupCommands: async () => [],
   getWorktreeSetupWaitEnabled: async () => false,
@@ -241,8 +243,7 @@ describe('NewWorktreeDialog from a Linear issue', () => {
             open
             onOpenChange={() => undefined}
             initialSelection={{
-              source: 'linear',
-              issue: {
+              source: 'tracker', provider: 'linear', item: {
                 provider: 'linear',
                 id: '11111111-2222-3333-4444-555555555555',
                 identifier: 'ENG-12',

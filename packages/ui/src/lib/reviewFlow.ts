@@ -1,6 +1,6 @@
-import type { Message, Session } from '@/lib/opencode/model';
+import { isSameModelRef, toModelRef, type Message, type Session } from '@/lib/opencode/model';
 import { opencodeClient } from '@/lib/opencode/client';
-import { renderMagicPrompt } from '@/lib/magicPrompts';
+import { loadMagicPrompts, renderMagicPrompt, type MagicPromptSnapshot } from '@/lib/magicPrompts';
 import { flattenAssistantTextParts } from '@/lib/messages/messageText';
 import {
   getOriginalSessionID,
@@ -24,7 +24,7 @@ import { resolveSendSelection, useSessionUIStore } from '@/sync/session-ui-store
 import { getSyncMessages, getSyncParts, getSyncSessionStatus, getSyncSessions, registerSessionDirectory } from '@/sync/sync-refs';
 import { markPendingUserSendAnimation } from '@/lib/userSendAnimation';
 import { getRuntimeKey } from '@/lib/runtime-switch';
-import { fetchSessionKnowledge, reportSessionKnowledgeDelivered } from '@/lib/sessionKnowledgeApi';
+import { syncSessionKnowledge } from '@/lib/sessionKnowledgeApi';
 
 const HANDOFF_TIMEOUT_MS = 180_000;
 const HANDOFF_POLL_MS = 400;
@@ -84,10 +84,6 @@ const getMessageRole = (message: Message): string => {
   return typeof role === 'string' ? role : '';
 };
 
-// OpenCode v2 messages carry no `parentID`, so a reply can no longer be tied to
-// the prompt that caused it. The wait loop identifies the handoff by ordering
-// instead: the first completed assistant message created after the prompt was
-// sent, skipping anything already forwarded.
 const isCompactionCommandMessage = (message: Message, directory: string): boolean => {
   const parts = getSyncParts(message.id, directory);
   return parts.some((part) => {
@@ -121,14 +117,6 @@ const getLatestAssistantTextMessage = (
 
   return null;
 };
-
-/**
- * The turn is over only when the session is idle and none of its subagents is
- * still running. A parent goes idle while a background subagent works; OpenCode
- * then hands the result back and the parent runs again, so the reply it left
- * at that pause is not the finished work. Child statuses come from the same
- * live directory store as the parent's.
- */
 const isSessionIdle = (sessionID: string, directory: string): boolean => {
   if (getSyncSessionStatus(sessionID, directory)?.type !== 'idle') return false;
   return !getSyncSessions(directory).some((session) => {
@@ -318,8 +306,6 @@ export const resumeAutoReviewRun = (originalSessionID: string): void => {
 const waitForAssistantText = async (sessionID: string, directory: string, afterCreatedAt: number): Promise<string> => {
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    // v2 completes every step, and a step that says "let me check" before a
-    // tool call has text too. Only the finished turn holds the handoff.
     if (!isSessionIdle(sessionID, directory)) {
       await new Promise((resolve) => setTimeout(resolve, HANDOFF_POLL_MS));
       continue;
@@ -363,7 +349,6 @@ const resolveModelContext = (sessionID: string): SessionModelContext | null => {
       variant: lastChoice?.variant,
     };
   }
-  // Variants are model-specific; only reuse one resolved for the same model.
   const selectionVariant = agent
     ? selection.getAgentModelVariantForSession(sessionID, agent, selectedModel.providerId, selectedModel.modelId)
     : undefined;
@@ -387,6 +372,7 @@ const sendPlainMessage = async (
   expectedRuntimeKey?: string,
 ): Promise<string> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
+  const runtimeKey = expectedRuntimeKey ?? getRuntimeKey();
   const resolved = modelContext ?? resolveModelContext(sessionID);
   if (!resolved) throw new Error('Select a model before sending review flow messages');
   const selection = useSelectionStore.getState();
@@ -396,12 +382,11 @@ const sendPlainMessage = async (
     selection.saveAgentModelForSession(sessionID, resolved.agent, resolved.providerID, resolved.modelID);
     selection.saveAgentModelVariantForSession(sessionID, resolved.agent, resolved.providerID, resolved.modelID, resolved.variant);
   }
-  // Review sessions are real work sessions, so they carry the project's
-  // standing context (pinned notes, memory) exactly as a composer send would.
   const native = isNativeSessionId(sessionID);
-  const knowledge = native ? null : await fetchSessionKnowledge(directory, sessionID);
-  assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const sendContext = knowledge?.text ? [{ text: knowledge.text }, ...(additionalParts ?? [])] : additionalParts;
+  if (!native) {
+    await syncSessionKnowledge(directory, sessionID, undefined, runtimeKey);
+    assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
+  }
   markPendingUserSendAnimation(sessionID);
   let sentMessageID: string | null = null;
   await optimisticSend({
@@ -418,7 +403,7 @@ const sendPlainMessage = async (
     },
     beforeOptimisticInsert: () => assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey),
     onOptimisticInsert: () => requestChatForceScrollBottom(sessionID),
-    send: (messageID) => {
+    send: async (messageID, _context, commitRevert) => {
       assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
       if (native) {
         return promptNativeSession(sessionID, nativePromptRequest({
@@ -432,25 +417,22 @@ const sendPlainMessage = async (
           agent: resolved.agent,
         }));
       }
-      // Only a genuine change travels with the prompt; the review session was
-      // created on this selection, so normally nothing is switched.
-      const selection = resolveSendSelection(sessionID, directory, resolved);
+      const selection = await resolveSendSelection(sessionID, directory, resolved);
       return opencodeClient.sendMessage({
+        runtimeKey,
         id: sessionID,
         directory,
         providerID: resolved.providerID,
         model: selection.model,
         agent: selection.agent,
         text,
-        context: sendContext,
+        context: additionalParts,
         messageId: messageID,
+        commitRevert,
       }).then(() => undefined);
     },
   });
   if (!sentMessageID) throw new Error('Failed to prepare review flow message');
-  if (knowledge?.text) {
-    void reportSessionKnowledgeDelivered(directory, sessionID, knowledge.signature);
-  }
   return sentMessageID;
 };
 
@@ -483,12 +465,6 @@ const getReviewSessionTitle = (original: Session): string => {
   return `Review: ${implementationTitle}`;
 };
 
-/**
- * A review runs in a session of its model's kind: the CLI's own session for a
- * native model, an OpenCode session otherwise. A CLI session takes no
- * metadata when it is created, so its marker lands right after; without it
- * the session is not a review, and it goes again.
- */
 const createReviewSession = async (originalSessionID: string, directory: string, selection: SessionModelContext, title: string): Promise<Session> => {
   const backend = nativeBackendOfProviderId(selection.providerID);
   if (!backend) {
@@ -502,15 +478,9 @@ const createReviewSession = async (originalSessionID: string, directory: string,
     throw error;
   }
 };
-
-// A review session runs tools too (reads other directories, verifies with commands),
-// so a fresh one starts with the same permission mode as the session it reviews.
-// Failure only leaves the reviewer on the default mode the server gave it.
 const inheritPermissionAutoAccept = async (originalSessionID: string, reviewSessionID: string): Promise<void> => {
   if (isNativeSessionId(reviewSessionID)) return;
   const permissions = usePermissionStore.getState();
-  // `ask` is copied too: otherwise the server's default could make the
-  // reviewer more permissive than the session it reviews.
   const mode = permissions.getSessionMode(originalSessionID);
   try {
     await permissions.setSessionMode(reviewSessionID, mode);
@@ -566,6 +536,38 @@ const createOrReuseReviewSession = async (
   return review;
 };
 
+const startAutoReview = async (input: StartReviewFlowInput, selection: SessionModelContext, prompts: MagicPromptSnapshot): Promise<void> => {
+  const runtimeKey = getRuntimeKey();
+  const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, selection, runtimeKey);
+  const model = { providerID: selection.providerID, id: selection.modelID, variant: selection.variant };
+  if (!reviewSession.model || !isSameModelRef(reviewSession.model, toModelRef(model))) {
+    assertAutoReviewRuntimeStillCurrent(runtimeKey);
+    await opencodeClient.switchSessionModel(reviewSession.id, model, input.directory);
+  }
+  if (selection.agent && reviewSession.agent !== selection.agent) {
+    assertAutoReviewRuntimeStillCurrent(runtimeKey);
+    await opencodeClient.switchSessionAgent(reviewSession.id, selection.agent, input.directory);
+  }
+  const withHandoff = input.generateHandoff ?? true;
+  assertAutoReviewRuntimeStillCurrent(runtimeKey);
+  await useAutoReviewStore.getState().startRun({
+    originalSessionID: input.originalSessionID,
+    reviewSessionID: reviewSession.id,
+    directory: input.directory,
+    handoff: withHandoff
+      ? { text: prompts.render('session.reviewHandoff.visible'), instructions: prompts.render('session.reviewHandoff.instructions') }
+      : undefined,
+    prompts: {
+      reviewStart: withHandoff
+        ? prompts.render('session.reviewSession.visible', { handoff: '{{handoff}}' })
+        : prompts.render('session.reviewSessionWithoutHandoff.visible'),
+      reviewRules: prompts.render('session.review.instructions'),
+      feedbackToImplementer: prompts.render('session.reviewFeedbackToImplementer.visible', { review_feedback: '{{review_feedback}}' }),
+      responseToReviewer: prompts.render('session.implementationResponseToReviewer.visible', { implementation_response: '{{implementation_response}}' }),
+    },
+  });
+};
+
 export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void> => {
   await waitForConnectionOrThrow();
   const expectedAutoReviewRuntimeKey = input.autoReview ? getRuntimeKey() : undefined;
@@ -575,6 +577,11 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
     agent: input.agent,
     variant: input.variant,
   };
+  const isNativeReview = isNativeSessionId(input.originalSessionID) || Boolean(nativeBackendOfProviderId(reviewSelection.providerID));
+  if (input.autoReview && !isNativeReview) {
+    const prompts = await loadMagicPrompts(input.directory);
+    return startAutoReview(input, reviewSelection, prompts);
+  }
 
   if (input.generateHandoff ?? true) {
     const visibleText = await renderMagicPrompt('session.reviewHandoff.visible');

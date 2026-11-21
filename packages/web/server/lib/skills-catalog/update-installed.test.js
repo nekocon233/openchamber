@@ -13,6 +13,7 @@ const recorded = (overrides = {}) => ({
   skillName: 'demo',
   skillDir: 'skills/demo',
   scope: 'project',
+  projectDirectory: '/project',
   source: 'opencode',
   sourceId: 'acme',
   sourceRef: 'acme/skills',
@@ -26,6 +27,7 @@ describe('planInstalledSkillUpdates', () => {
 
   it('keeps recorded skills that are still installed and drops the rest', () => {
     const plan = planInstalledSkillUpdates({
+      projectDirectory: '/project',
       provenanceByName: provenance([
         recorded(),
         recorded({ skillName: 'removed', skillDir: 'skills/removed' }),
@@ -51,6 +53,7 @@ describe('planInstalledSkillUpdates', () => {
 
   it('uses the newest record for the same name, scope and target', () => {
     const plan = planInstalledSkillUpdates({
+      projectDirectory: '/project',
       provenanceByName: provenance([
         recorded({ sourceId: 'older', skillDir: 'skills/older-demo' }),
         recorded({ sourceId: 'newer', skillDir: 'skills/demo' }),
@@ -65,6 +68,7 @@ describe('planInstalledSkillUpdates', () => {
 
   it('skips a skill whose target directory cannot be resolved', () => {
     const plan = planInstalledSkillUpdates({
+      projectDirectory: '/project',
       provenanceByName: provenance([recorded()]),
       targetDirFor: () => null,
       skillExists: () => true,

@@ -884,6 +884,20 @@ describe('unified native backend contract', () => {
     expect(h.operations.some((entry) => entry.startsWith('compact:'))).toBe(false);
   });
 
+  it('keeps native session creation and sends in the host workspace', async () => {
+    const h = await setup();
+    const workspace = '/spaces/0123456789ab/project';
+    const session = await h.conversation('claude');
+    await expect(h.api.createSession({ kind: 'unified', backend: 'claude', directory: workspace, selection: selection('claude') }))
+      .rejects.toMatchObject({ code: 'NATIVE_SPACE_UNSUPPORTED' });
+    await expect(h.api.prompt(session.id, { directory: workspace, messageID: `ncv_u_${randomUUID()}`,
+      parts: [{ type: 'text', text: 'Space draft' }], ...selection('claude') }))
+      .rejects.toMatchObject({ code: 'NATIVE_SPACE_UNSUPPORTED' });
+    expect(h.requests).toEqual([]);
+    await h.send(session.id, 'claude', 'Host draft');
+    expect(h.requests).toHaveLength(1);
+  });
+
   it('enforces enterprise mode before creating, sending or continuing a mixed conversation', async () => {
     const h = await setup();
     const session = await h.conversation('antigravity');

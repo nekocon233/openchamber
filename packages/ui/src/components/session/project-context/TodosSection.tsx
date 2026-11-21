@@ -18,7 +18,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Icon } from '@/components/icon/Icon';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
-import { PROJECT_TODO_TEXT_MAX_LENGTH, type ProjectTodoChange, type ProjectTodoItem } from '@/lib/projectContextApi';
+import {
+  PROJECT_TODO_TEXT_MAX_LENGTH,
+  type ProjectPlanLink,
+  type ProjectTodoChange,
+  type ProjectTodoItem,
+} from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
 import { hasTextSelectionWithin } from '@/lib/textSelection';
 import { KnowledgeComposer } from './KnowledgeComposer';
@@ -27,7 +32,8 @@ import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
 import { DraftRecoveryNotice } from '@/components/ui/draft-recovery-notice';
 import { useWorkspaceDraftStore } from '@/stores/useWorkspaceDraftStore';
 import { KNOWLEDGE_ICON_BUTTON_CLASS, useKnowledgeRevealClass } from './knowledgeRowStyle';
-import { KnowledgeMenu } from './KnowledgeActions';
+import { KnowledgeMenu, KnowledgeRowContextMenu, type KnowledgeMenuItem } from './KnowledgeActions';
+import { insertTodoBeforeCompleted, sortTodosWithCompletedLast, unfinishedDependencies, withTodoCompleted } from './todoList';
 
 const createTodoId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -36,18 +42,6 @@ const createTodoId = (): string => {
   return `todo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const sortTodosWithCompletedLast = (items: ProjectTodoItem[]): ProjectTodoItem[] => [
-  ...items.filter((todo) => !todo.completed),
-  ...items.filter((todo) => todo.completed),
-];
-
-const insertTodoBeforeCompleted = (items: ProjectTodoItem[], item: ProjectTodoItem): ProjectTodoItem[] => {
-  const firstCompletedIndex = items.findIndex((todo) => todo.completed);
-  if (firstCompletedIndex === -1) {
-    return [...items, item];
-  }
-  return [...items.slice(0, firstCompletedIndex), item, ...items.slice(firstCompletedIndex)];
-};
 
 type SortableTodoHandleProps = {
   attributes: ReturnType<typeof useSortable>['attributes'];
@@ -139,10 +133,13 @@ const TodoEditor: React.FC<{
 };
 
 export const TodosSection: React.FC<{
+  projectPath: string;
   todos: ProjectTodoItem[];
   loaded: boolean;
   readFailed: boolean;
   /** Panel-wide filter. Mutations still act on the full list. */
+  plans: ProjectPlanLink[];
+  onOpenPlan: (planId: string) => void;
   query: string;
   disabled: boolean;
   canCreateWorktree: boolean;
@@ -156,7 +153,10 @@ export const TodosSection: React.FC<{
   onSendToNewSession: (todoId: string, todoText: string) => void;
   onSendToNewWorktreeSession: (todoId: string, todoText: string) => void;
 }> = ({
+  projectPath,
   todos,
+  plans,
+  onOpenPlan,
   query,
   disabled,
   loaded,
@@ -197,7 +197,6 @@ export const TodosSection: React.FC<{
     } finally { setSavingEdit(false); }
   };
 
-  // Shown at once and persisted by the container, which reports a failure.
   const handleAddTodo = React.useCallback((trimmed: string) => {
     const id = createTodoId();
     const text = trimmed.slice(0, PROJECT_TODO_TEXT_MAX_LENGTH);
@@ -217,16 +216,8 @@ export const TodosSection: React.FC<{
 
   const handleToggleTodo = React.useCallback(
     (id: string, completed: boolean) => {
-      const todo = todos.find((item) => item.id === id);
-      if (!todo || todo.completed === completed) {
-        return;
-      }
-      const remaining = todos.filter((item) => item.id !== id);
-      const updated = { ...todo, completed };
-      onPersistTodos(
-        completed ? [...remaining, updated] : insertTodoBeforeCompleted(remaining, updated),
-        { kind: 'complete', id, completed },
-      );
+      const next = withTodoCompleted(todos, id, completed);
+      if (next) onPersistTodos(next, { kind: 'complete', id, completed });
     },
     [onPersistTodos, todos]
   );
@@ -268,9 +259,9 @@ export const TodosSection: React.FC<{
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
   );
 
-  const completedTodoCount = todos.reduce((count, todo) => count + (todo.completed ? 1 : 0), 0);
-  // Filtering is display-only: every handler above still edits the full list,
-  // so reordering or clearing while a filter is active cannot drop hidden items.
+  const completedTodoCount = todos.filter((todo) => todo.completed).length;
+  const planTitles = React.useMemo(() => new Map(plans.map((plan) => [plan.id, plan.title])), [plans]);
+  const todosById = React.useMemo(() => new Map(todos.map((todo) => [todo.id, todo])), [todos]);
   const visibleTodos = React.useMemo(
     () => todos.filter((todo) => todo.id === editingTodoId || matchesRankQuery([todo.text], query)),
     [editingTodoId, query, todos],
@@ -279,7 +270,8 @@ export const TodosSection: React.FC<{
   return (
     <div className="space-y-2">
       <KnowledgeComposer
-        draftId="todo"
+        projectPath={projectPath}
+        draftKind="todo"
         placeholder={t('rightSidebar.contextNotesTodo.todo.inputPlaceholder')}
         addLabel={t('rightSidebar.contextNotesTodo.todo.addAria')}
         maxLength={PROJECT_TODO_TEXT_MAX_LENGTH}
@@ -316,10 +308,38 @@ export const TodosSection: React.FC<{
                 {visibleTodos.map((todo) => {
                   const isExpandedTodo = expandedTodoIds.includes(todo.id);
                   const isEditingTodo = editingTodoId === todo.id;
+                  const planId = todo.planId;
+                  const planTitle = planId ? planTitles.get(planId) : undefined;
+                  const waitingFor = unfinishedDependencies(todo, todosById);
+                  const menuItems: KnowledgeMenuItem[] = [{
+                    id: 'edit',
+                    label: t('rightSidebar.contextNotesTodo.todo.menu.edit'),
+                    disabled: editingInList || sendingTodoId === todo.id,
+                    onSelect: () => setEditingTodoId(todo.id),
+                  }, {
+                    id: 'send-new-session',
+                    label: t('rightSidebar.contextNotesTodo.todo.sendMenu.newSession'),
+                    disabled: sendingTodoId !== null,
+                    onSelect: () => onSendToNewSession(todo.id, todo.text),
+                  }, {
+                    id: 'send-new-worktree',
+                    label: t('rightSidebar.contextNotesTodo.todo.sendMenu.newWorktreeSession'),
+                    disabled: !canCreateWorktree || sendingTodoId !== null,
+                    onSelect: () => onSendToNewWorktreeSession(todo.id, todo.text),
+                  }, {
+                    id: 'delete',
+                    label: t('rightSidebar.contextNotesTodo.todo.menu.delete'),
+                    destructive: true,
+                    onSelect: () => handleDeleteTodo(todo.id),
+                  }];
                   return (
                     <SortableTodoItem key={todo.id} id={todo.id} disabled={blocked || editingInList}>
                       {(dragHandleProps) => (
-                        <div className={cn('group/knowledge flex gap-1.5 px-2.5 py-1.5', isExpandedTodo || isEditingTodo ? 'items-start' : 'items-center')}>
+                        <KnowledgeRowContextMenu
+                          items={menuItems}
+                          disabled={isEditingTodo || blocked}
+                          render={<div className={cn('group/knowledge flex gap-1.5 px-2.5 py-1.5', isExpandedTodo || isEditingTodo ? 'items-start' : 'items-center')} />}
+                        >
                           <button
                             type="button"
                             disabled={blocked || editingInList}
@@ -380,6 +400,28 @@ export const TodosSection: React.FC<{
                           >
                             {todo.text}
                           </div>
+                            {waitingFor.length > 0 && !todo.completed ? (
+                              <span
+                                className="inline-flex flex-shrink-0 text-muted-foreground"
+                                data-row-tooltip={t('rightSidebar.contextNotesTodo.todo.waitingFor', { todos: waitingFor.map((dependency) => dependency.text).join(', ') })}
+                              >
+                                <Icon name="lock" className="size-3" />
+                                <span className="sr-only">
+                                  {t('rightSidebar.contextNotesTodo.todo.waitingFor', { todos: waitingFor.map((dependency) => dependency.text).join(', ') })}
+                                </span>
+                              </span>
+                            ) : null}
+                            {planTitle && planId ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenPlan(planId)}
+                                className="ms-auto min-w-12 max-w-[40%] shrink-[4] truncate typography-micro text-muted-foreground hover:text-foreground focus-visible:outline-none"
+                                data-row-tooltip={t('rightSidebar.contextNotesTodo.todo.openPlan')}
+                                dir="auto"
+                              >
+                                {planTitle}
+                              </button>
+                            ) : null}
                           <div className="-me-1 flex h-6 items-center gap-0.5">
                             <button
                               type="button"
@@ -387,37 +429,14 @@ export const TodosSection: React.FC<{
                               disabled={blocked || sendingTodoId !== null}
                               className={cn(KNOWLEDGE_ICON_BUTTON_CLASS, reveal)}
                               aria-label={t('rightSidebar.contextNotesTodo.todo.actions.send', { text: todo.text })}
-                              title={t('rightSidebar.contextNotesTodo.todo.actions.send', { text: todo.text })}
+                              data-row-tooltip={t('rightSidebar.contextNotesTodo.todo.actions.send', { text: todo.text })}
                             >
                               <Icon name="send-plane" className="h-3.5 w-3.5" />
                             </button>
-                            <KnowledgeMenu
-                              disabled={blocked}
-                              items={[{
-                                id: 'edit',
-                                label: t('rightSidebar.contextNotesTodo.todo.menu.edit'),
-                                disabled: editingInList || sendingTodoId === todo.id,
-                                onSelect: () => setEditingTodoId(todo.id),
-                              }, {
-                                id: 'send-new-session',
-                                label: t('rightSidebar.contextNotesTodo.todo.sendMenu.newSession'),
-                                disabled: sendingTodoId !== null,
-                                onSelect: () => onSendToNewSession(todo.id, todo.text),
-                              }, {
-                                id: 'send-new-worktree',
-                                label: t('rightSidebar.contextNotesTodo.todo.sendMenu.newWorktreeSession'),
-                                disabled: !canCreateWorktree || sendingTodoId !== null,
-                                onSelect: () => onSendToNewWorktreeSession(todo.id, todo.text),
-                              }, {
-                                id: 'delete',
-                                label: t('rightSidebar.contextNotesTodo.todo.menu.delete'),
-                                destructive: true,
-                                onSelect: () => handleDeleteTodo(todo.id),
-                              }]}
-                            />
+                            <KnowledgeMenu disabled={blocked} items={menuItems} />
                           </div>
                           </>}
-                        </div>
+                        </KnowledgeRowContextMenu>
                       )}
                     </SortableTodoItem>
                   );

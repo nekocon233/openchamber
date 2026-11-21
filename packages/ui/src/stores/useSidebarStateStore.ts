@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { chatsStillInPlace, type ChatPlacement } from '@/lib/sessionFolders/folderChanges';
 
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type {
@@ -36,7 +37,7 @@ type SidebarStateStore = {
   error: string | null;
   initialize: () => Promise<void>;
   refresh: () => Promise<void>;
-  mutate: (operation: SidebarStateOperation, options?: { clientMutationId?: string }) => Promise<SidebarStateSnapshot>;
+  mutate: (operation: SidebarStateOperation, options?: { clientMutationId?: string; from?: ChatPlacement | undefined }) => Promise<SidebarStateSnapshot>;
   installAuthoritativeSnapshot: (snapshot: unknown, context?: SidebarStateRuntimeContext) => boolean;
   handleRevisionHint: (revision: number, context?: SidebarStateRuntimeContext) => void;
   handleTransportReady: (context?: SidebarStateRuntimeContext) => void;
@@ -44,6 +45,7 @@ type SidebarStateStore = {
 };
 
 type InternalPendingOperation = PendingSidebarOperation & {
+  from?: ChatPlacement | undefined;
   runtimeKey: string;
   generation: number;
   resolve: (snapshot: SidebarStateSnapshot) => void;
@@ -82,6 +84,14 @@ const defaultDependencies: SidebarStateStoreDependencies = {
   },
 };
 
+// A conflict supplies a newer snapshot. Move only chats that are still where the user found them.
+const operationForSnapshot = (entry: InternalPendingOperation, snapshot: SidebarStateSnapshot): SidebarStateOperation | null => {
+  const { operation, from } = entry;
+  if (!from || (operation.type !== 'folder.assign' && operation.type !== 'folder.unassign')) return operation;
+  const ids = chatsStillInPlace(snapshot.sessionFoldersByScope[operation.scopeKey] ?? [], operation.sessionIds, from);
+  return ids.length ? { ...operation, sessionIds: ids } : null;
+};
+
 const deriveSnapshot = (
   baseSnapshot: SidebarStateSnapshot | null,
   pendingOperations: InternalPendingOperation[],
@@ -90,7 +100,8 @@ const deriveSnapshot = (
   let snapshot = baseSnapshot;
   for (const pending of pendingOperations) {
     try {
-      snapshot = applySidebarStateOperation(snapshot, pending.operation);
+      const operation = operationForSnapshot(pending, snapshot);
+      if (operation) snapshot = applySidebarStateOperation(snapshot, operation);
     } catch {
       // The server decides whether an intent that became invalid after a
       // conflict is rejected. Keep unrelated pending intents visible.
@@ -304,10 +315,16 @@ export const createSidebarStateClientStore = (
             }
 
             try {
+              const operation = operationForSnapshot(entry, baseSnapshot);
+              if (!operation) {
+                removePending(entry);
+                entry.resolve(get().snapshot ?? baseSnapshot);
+                break;
+              }
               const result = await api.mutate({
                 baseRevision: baseSnapshot.revision,
                 clientMutationId: entry.clientMutationId,
-                operation: entry.operation,
+                operation,
               }, { signal: activeController.signal });
 
               if (!pending.includes(entry) || !isRuntimeContextCurrent(context)) break;
@@ -420,6 +437,7 @@ export const createSidebarStateClientStore = (
         resetBootstrapRetry();
         const entry: InternalPendingOperation = {
           clientMutationId: options?.clientMutationId ?? dependencies.createMutationId(),
+          from: options?.from,
           operation,
           runtimeKey: get().runtimeKey,
           generation: get().generation,

@@ -13,6 +13,22 @@ const project = (steps, bindings = new Map(), relationships = {}) => projectAnti
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
 
 describe('Antigravity retained thinking and conversation messages', () => {
+  it('restores a missing earlier step before a later streamed reply', async () => {
+    const projection = createAntigravityLiveProjection({
+      sessionId: 'nag_' + NATIVE_ID, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: 'live-user', sentAt: 1, model: { providerID: 'antigravity-native', modelID: 'test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 2, step_type: 'agent_response', state: 'DONE', text_delta: 'Answer' }, 2, async () => {});
+    const history = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Work' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Earlier reasoning' },
+      { step_index: 2, type: 'PLANNER_RESPONSE', content: 'Answer' },
+    ], new Map([[0, { messageId: 'live-user', providerID: 'antigravity-native', modelID: 'test', agent: 'build' }]]));
+    projection.restoreMissingHistory(history);
+    expect(projection.records().map((record) => record.info.id)).toEqual(history.map((record) => record.info.id));
+  });
+
   it('enriches observed live generations without changing activity or running tools', async () => {
     const events = [];
     const projection = createAntigravityLiveProjection({

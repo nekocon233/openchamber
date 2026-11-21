@@ -1,5 +1,7 @@
 import React from 'react';
 
+import { isVSCodeRuntime } from '@/lib/desktop';
+import { openExternalUrl } from '@/lib/url';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { useShowOnBoard } from '@/components/sourceBoard/openOnBoard';
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
@@ -49,6 +51,10 @@ export const useWorkStatusNavigation = (directory: string | null) => {
 
   const openChangeRequest = React.useCallback((summary: Pick<PrVisualSummary, 'number' | 'repo' | 'url' | 'provider'>) => {
     if (!directory) return;
+    if (isVSCodeRuntime()) {
+      if (summary.url) void openExternalUrl(summary.url);
+      return;
+    }
     if (mobileActions) {
       if (summary.repo) {
         mobileActions.openChangeRequest({

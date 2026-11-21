@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 
 const home = process.env.AGY_FIXTURE_HOME;
@@ -94,6 +93,7 @@ const root = path.join(home, 'brain', conversationId, '.system_generated', 'logs
 fs.mkdirSync(root, { recursive: true });
 const transcript = path.join(root, 'transcript.jsonl');
 const fullTranscript = path.join(root, 'transcript_full.jsonl');
+const { DatabaseSync } = await import('node:sqlite');
 const databasePath = path.join(home, 'conversation_summaries.db');
 const writeSummary = () => {
   const db = new DatabaseSync(databasePath);

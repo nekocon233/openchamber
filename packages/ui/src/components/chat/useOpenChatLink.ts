@@ -1,3 +1,8 @@
+import { commitShaOfUrl } from '@/lib/source-control/repositoryLinks';
+import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
+import { openGuestCommit, readCurrentBranch } from '@/lib/guests/open-commit';
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import React from 'react';
 import { GUEST_ATTACH_URL_MAX } from '@openchamber/sdk';
 
@@ -14,26 +19,14 @@ import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 import { useUIStore } from '@/stores/useUIStore';
 import { useChatSurfaceMode } from './useChatSurfaceMode';
 
-/**
- * Where a plain click on a web link in chat content goes. With the settings
- * on, a GitHub PR opens in the desktop PR pane; other tracker links open on
- * the issues and PRs board. Localhost/loopback and 192.168.x.x http(s) links
- * open through the built-in Remote Desktop extension when active, falling back
- * to the built-in browser panel on desktop or the system browser. Public web
- * links (including CI pages) use the built-in browser panel on desktop when
- * enabled or the local browser. Tracker links explicitly set to external always
- * use the system browser. A tracker that cannot open internally reports the
- * failure with a manual external action. Modified clicks never come here: they
- * keep the browser's own meaning, which is the local browser.
- */
 export function useOpenChatLink(directory: string) {
   const showOnBoard = useShowOnBoard();
   const mobile = useMobileAppActions();
   const { t } = useI18n();
-  // The mini chat window has neither the board nor the panel.
+  const descriptors = useSourceControlProviderRegistry((state) => state.ordered);
   const inWorkspace = useChatSurfaceMode() !== 'mini-chat';
 
-  return React.useCallback((url: string) => {
+  const openElsewhere = React.useCallback((url: string) => {
     const {
       openTrackerLinksOnBoard,
       openLinksInBrowserPanel,
@@ -75,4 +68,23 @@ export function useOpenChatLink(directory: string) {
     }
     void openExternalUrl(url);
   }, [directory, inWorkspace, mobile, showOnBoard, t]);
+
+  return React.useCallback((url: string) => {
+    const git = getRegisteredRuntimeAPIs()?.git ?? null;
+    const local = inWorkspace && directory && git && !mobile && isDesktopShell() && !isVSCodeRuntime() && !isMobileSurfaceRuntime();
+    const sha = local ? commitShaOfUrl(url, descriptors) : null;
+    if (!sha || !git) {
+      openElsewhere(url);
+      return;
+    }
+    void openGuestCommit({
+      sha,
+      directory,
+      git,
+      currentBranch: (folder) => readCurrentBranch(git, folder),
+      supported: true,
+    }).then((result) => {
+      if (!result.ok) openElsewhere(url);
+    });
+  }, [descriptors, directory, inWorkspace, mobile, openElsewhere]);
 }

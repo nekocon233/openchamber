@@ -1,16 +1,10 @@
 import { parseModelIdentifier } from '@/lib/modelIdentifier';
+import { resolveEffortChoice, resolveEffortForModelSelection } from '@/lib/modelEfforts';
 import { configuredVariantForModel, modelVariantNames } from '@/lib/modelVariants';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
-/**
- * What a send carries. `captureDefaultSendSelection` answers for a session the
- * app starts on its own, where no composer is involved, such as an extension
- * starting one or the Memory panel's tidy-up. `resolveSessionSendSelection`
- * answers for a message sent into a session that already exists, where the
- * session's own agent and model outrank the app-wide selection.
- */
 const resolveDefaultAgentName = (): string | undefined => {
   const configState = useConfigStore.getState();
   if (configState.settingsDefaultAgent) {
@@ -35,28 +29,36 @@ const resolveDefaultModelSelection = (): { providerID: string; modelID: string }
   return { providerID: parsed.providerId, modelID: parsed.modelId };
 };
 
-const resolveDefaultVariant = (providerID: string, modelID: string): string | undefined => {
+const resolveDefaultVariant = (
+  providerID: string,
+  modelID: string,
+  agentName: string | undefined,
+): string | null | undefined => {
   const configState = useConfigStore.getState();
+  const provider = configState.providers.find((entry) => entry.id === providerID);
+  const model = provider?.models.find((entry) => entry.id === modelID);
+  const configuredVariant = configState.getDefaultVariantForModel(providerID, modelID)
+    ?? configuredVariantForModel({
+      defaultModel: configState.settingsDefaultModel,
+      defaultVariant: configState.settingsDefaultVariant,
+      providerId: providerID,
+      modelId: modelID,
+      model,
+    });
   const currentVariant = configState.currentProviderId === providerID && configState.currentModelId === modelID
     ? configState.currentVariant
     : undefined;
-  const provider = configState.providers.find((entry) => entry.id === providerID);
-  const model = provider?.models.find((entry) => entry.id === modelID);
-  const settingsDefaultVariant = configuredVariantForModel({
-    defaultModel: configState.settingsDefaultModel, defaultVariant: configState.settingsDefaultVariant,
-    providerId: providerID, modelId: modelID, model,
-  });
   const variantNames = modelVariantNames(model);
   if (variantNames.length === 0) {
-    return settingsDefaultVariant || currentVariant || undefined;
+    return configuredVariant || currentVariant || undefined;
   }
-  if (settingsDefaultVariant && variantNames.includes(settingsDefaultVariant)) {
-    return settingsDefaultVariant;
-  }
-  if (currentVariant && variantNames.includes(currentVariant)) {
-    return currentVariant;
-  }
-  return undefined;
+  return resolveEffortChoice(
+    [resolveEffortForModelSelection({
+      providerID, modelID, variants: variantNames,
+      agents: configState.agents, agentName, configuredVariant,
+    }), currentVariant],
+    variantNames,
+  );
 };
 
 export const captureDefaultSendSelection = () => {
@@ -69,7 +71,7 @@ export const captureDefaultSendSelection = () => {
   if (!providerID || !modelID) {
     return null;
   }
-  return { providerID, modelID, agentName, variant: resolveDefaultVariant(providerID, modelID) };
+  return { providerID, modelID, agentName, variant: resolveDefaultVariant(providerID, modelID, agentName) };
 };
 
 type SessionSendSelection = {

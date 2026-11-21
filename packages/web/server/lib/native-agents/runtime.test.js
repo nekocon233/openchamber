@@ -6,7 +6,7 @@ import express from 'express';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { registerCommonRequestMiddleware } from '../opencode/core-routes.js';
+import { registerCommonRequestMiddleware } from '../server-frame/core-routes.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { sessionNotFoundError } from './errors.js';
 import { registerNativeAgentRoutes } from './routes.js';

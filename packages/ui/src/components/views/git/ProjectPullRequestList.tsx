@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
 import { referencePickerItemKey } from '@/components/references/referencePickerItems';
-import { invalidateGitHubPullStatuses, useGitHubReadContext, useGitHubReferenceList } from '@/components/references/referenceSources';
+import { invalidateRepositoryPullStatuses, useRepositoryReadContext, useRepositoryReferenceList } from '@/components/references/referenceSources';
 import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
 import { useReferenceBrowser } from '@/components/references/useReferenceBrowser';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
@@ -41,25 +41,25 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
   const { sourceControl } = useRuntimeAPIs();
   const { isMobile } = useDeviceInfo();
   const openSettings = useOpenSourceControlSettings();
-  const context = useGitHubReadContext(directory);
+  const context = useRepositoryReadContext(directory);
   const owner = useWorkspaceViewOwner(workspaceDirectory);
   const stateOwner = context && context !== 'missing' ? workspaceViewKey(owner.runtime, workspaceDirectory, workspaceRepositoryIdentity(context)) : null;
-  const browser = useReferenceBrowser({ source: 'github', directory, isMobile, mode: 'project-pulls', active, projectPullsState: { owner: stateOwner, preferences: owner.project } });
+  const browser = useReferenceBrowser({ source: 'repository', directory, isMobile, mode: 'project-pulls', active, projectPullsState: { owner: stateOwner, preferences: owner.project } });
   const restoreUrl = browser.selectionUrl;
-  const previewUrl = browser.previewItem?.source === 'github' ? browser.previewItem.reference.url : null;
+  const previewUrl = browser.previewItem?.source === 'repository' ? browser.previewItem.reference.url : null;
   const restoring = Boolean(restoreUrl && restoreUrl !== previewUrl);
   const restoreTarget = restoreUrl ? parseChangeRequestReference(restoreUrl) : null;
   const orphanKey = restoreTarget?.project && context && context !== 'missing' ? workspaceReplyDraftKey(owner.runtime, context, {
     kind: 'pull', number: restoreTarget.number, sourceRepo: { owner: restoreTarget.project.owner, repo: restoreTarget.project.name },
   }) : null;
   const orphan = useWorkspaceDraftStore(state => orphanKey ? state.drafts[orphanKey] : undefined);
-  const restored = useGitHubReferenceList({ directory, kind: 'pull', filter: DEFAULT_REPOSITORY_FILTER,
+  const restored = useRepositoryReferenceList({ directory, kind: 'pull', filter: DEFAULT_REPOSITORY_FILTER,
     query: restoreUrl ?? '', scope: 'repository', enabled: restoring && active, active });
   React.useEffect(() => {
     if (!restoring || !active || !restoreUrl) return;
     if (stateOwner && readWorkspaceViewState(useWorkspaceViewStateStore.getState(), 'pullRequest', stateOwner).selectedUrl !== restoreUrl) return;
     const reference = restored.items.find(item => item.kind === 'pull' && isSameRepositoryItemLink(item.url, restoreUrl));
-    if (reference) browser.openItem({ source: 'github', reference });
+    if (reference) browser.openItem({ source: 'repository', reference });
   }, [active, browser, restoreUrl, restored.error, restored.items, restored.refreshing, restored.status, restoring, stateOwner]);
   const [refreshingFromHost, setRefreshingFromHost] = React.useState(false);
   const fileFilter = useDiffFileFilter(getRuntimeKey(), directory, NO_FILES);
@@ -73,7 +73,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     try {
       await sourceControl.refreshProviderReads(context);
       if (isCurrent()) {
-        invalidateGitHubPullStatuses(context, runtime);
+        invalidateRepositoryPullStatuses(context, runtime);
         invalidateProjectPullFileStats(context);
         await browser.list.retry();
       }
@@ -88,17 +88,17 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
   const { openItem } = browser;
   React.useEffect(() => {
     if (!active || returning?.tab !== 'project' || !context || context === 'missing') return;
-    if (hasSameSourceControlReadContext(returning.context, context)) openItem({ source: 'github', reference: returning.reference });
+    if (hasSameSourceControlReadContext(returning.context, context)) openItem({ source: 'repository', reference: returning.reference });
     usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [active, context, openItem, returning]);
   const scrollRef = React.useRef<HTMLElement>(null);
   const scrollTop = React.useRef(0);
   const listVisibleRef = React.useRef(false);
   const preview = browser.previewItem;
-  const selectedPull = !restoring && preview?.source === 'github' && preview.reference.kind === 'pull' ? preview.reference : null;
+  const selectedPull = !restoring && preview?.source === 'repository' && preview.reference.kind === 'pull' ? preview.reference : null;
   const showingDetail = selectedPull !== null;
   const showingList = active && !showingDetail && !restoring;
-  const depthIdentity = JSON.stringify([browser.githubFilter.people, browser.query]);
+  const depthIdentity = JSON.stringify([browser.repositoryFilter.people, browser.query]);
   const savedDepth = React.useRef({ identity: depthIdentity, count: browser.loadedCount });
   if (savedDepth.current.identity !== depthIdentity) savedDepth.current = { identity: depthIdentity, count: browser.loadedCount };
   React.useEffect(() => {
@@ -106,7 +106,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     if (browser.list.items.length < savedDepth.current.count && browser.list.hasMore && !browser.list.error) browser.list.loadMore();
     if (browser.list.items.length > browser.loadedCount) browser.setLoadedCount(browser.list.items.length);
   }, [browser, showingList]);
-  const searching = Boolean(browser.debouncedQuery.trim()) || browser.githubFilter.people !== 'any';
+  const searching = Boolean(browser.debouncedQuery.trim()) || browser.repositoryFilter.people !== 'any';
   useBoardRevalidation(active);
 
   React.useLayoutEffect(() => {
@@ -115,7 +115,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     // Hidden Activity boundaries disconnect effects before the list can report a hidden scroll offset.
     return () => { listVisibleRef.current = false; };
   }, [showingList]);
-  useWorkspaceScroll(scrollRef, stateOwner ? JSON.stringify([stateOwner, 'list', browser.githubFilter.people, browser.query]) : null,
+  useWorkspaceScroll(scrollRef, stateOwner ? JSON.stringify([stateOwner, 'list', browser.repositoryFilter.people, browser.query]) : null,
     showingList && browser.list.status === 'ready' && (browser.list.items.length >= savedDepth.current.count || !browser.list.hasMore), showingList);
 
   const rememberScroll = () => { scrollTop.current = scrollRef.current?.scrollTop ?? 0; };
@@ -148,12 +148,12 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               key={`${selectedPull.sourceRepo.owner}/${selectedPull.sourceRepo.repo}#${selectedPull.number}`}
               reference={selectedPull}
               context={context}
-              githubDetail={browser.githubDetail}
+              githubDetail={browser.repositoryDetail}
               now={browser.now}
               onChanged={browser.list.retry}
               onSubmitted={goBack}
-              refreshDetail={browser.refreshGithubDetail}
-              pullLinks={<SourceBoardPullLinks pull={selectedPull} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
+              refreshDetail={browser.refreshRepositoryDetail}
+              pullLinks={<SourceBoardPullLinks pull={selectedPull} repository={context.repositoryId} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
                 returnTo={{ workspaceDirectory, tab: 'project' }} />}
             />
           ) : null}
@@ -166,11 +166,11 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               { id: 'mine', label: t('references.projectPulls.group.mine') },
               { id: 'any', label: t('references.projectPulls.group.all') },
             ]}
-            activeId={browser.githubFilter.people}
+            activeId={browser.repositoryFilter.people}
             onSelect={id => {
-              if ((id !== 'mine' && id !== 'any') || id === browser.githubFilter.people) return;
+              if ((id !== 'mine' && id !== 'any') || id === browser.repositoryFilter.people) return;
               if (stateOwner) useWorkspaceViewStateStore.getState().update('scroll', JSON.stringify([stateOwner, 'list', id, browser.query]), () => WORKSPACE_VIEW_DEFAULTS.scroll);
-              browser.selectGitHubFilter({ people: id });
+              browser.selectRepositoryFilter({ people: id });
               scrollTop.current = 0;
               if (scrollRef.current) scrollRef.current.scrollTop = 0;
             }}

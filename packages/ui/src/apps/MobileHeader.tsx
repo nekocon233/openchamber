@@ -2,6 +2,7 @@ import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
+import { MOBILE_HEADER_BUTTON_CLASS } from '@/components/ui/mobileHeader';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
@@ -17,13 +18,9 @@ import { MobileSessionSwitcher } from './MobileSessionSwitcher';
 
 export const MobileHeader: React.FC<{
   onOpenSessions: () => void;
-  /** Opens the right workspace drawer (Changes / PR / Files / Terminal / Notes / Tasks / MCP). */
   onOpenWorkspace: () => void;
-  /** Opens the work-status sheet directly from the header. */
   onOpenWorkStatus: () => void;
   workStatusOpen: boolean;
-  /** Tablet: size the title trigger to its text instead of the free width, so
-      a wide header doesn't turn the switcher into a full-width tap target. */
   compactTitle?: boolean;
 }> = ({ onOpenSessions, onOpenWorkspace, onOpenWorkStatus, workStatusOpen, compactTitle = false }) => {
   const { t } = useI18n();
@@ -36,8 +33,6 @@ export const MobileHeader: React.FC<{
   );
   const effectiveDirectory = currentSessionDirectory || currentDirectory;
   const currentSession = useSession(currentSessionId, effectiveDirectory || undefined);
-  // Uncommitted changes in the active project or worktree: the workspace
-  // button gets a dot instead of a changed-files bar above the composer.
   const isGitRepo = useIsGitRepo(effectiveDirectory || null);
   const hasUncommittedChanges = useGitStore((state) => {
     if (!effectiveDirectory || isGitRepo !== true) return false;
@@ -45,13 +40,9 @@ export const MobileHeader: React.FC<{
     return Boolean(status && !status.isClean);
   });
 
-  // An open run overview covers the chat, so the header names the run and
-  // hides the session-only work-status button.
   const runOverviewKey = useUIStore((state) => state.runOverviewKey);
   const runTitle = useMultiRunTitle(runOverviewKey);
   const sessionTitle = currentSession?.title?.trim();
-  // Single-line title, desktop-style: session title, or the "New session"
-  // placeholder on the draft screen. No project/branch metadata line.
   const primaryLabel = (runOverviewKey ? runTitle : null)
     || sessionTitle
     || (currentSessionId ? t('mobile.sessions.untitled') : t('sessions.switcher.draftTitle'));
@@ -78,7 +69,7 @@ export const MobileHeader: React.FC<{
         <div className="flex h-[var(--oc-header-height,56px)] w-full items-center gap-1 px-2">
           <button
             type="button"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={MOBILE_HEADER_BUTTON_CLASS}
             aria-label={t('mobile.sessions.openSheetAria')}
             onClick={handleOpenSessions}
             style={{ touchAction: 'manipulation' }}
@@ -86,7 +77,6 @@ export const MobileHeader: React.FC<{
             <Icon name="list-unordered" className="size-5" />
           </button>
 
-          {/* Session title doubles as the recent-sessions switcher trigger. */}
           <button
             ref={titleRef}
             type="button"
@@ -101,9 +91,7 @@ export const MobileHeader: React.FC<{
             style={{ touchAction: 'manipulation' }}
           >
             <span className="flex min-w-0 items-center gap-1">
-              <span dir="auto" className="block min-w-0 truncate oc-ui-start-align typography-ui-label text-foreground">{primaryLabel}</span>
-              {/* Discoverability: the chevron marks the title as a disclosure
-                  trigger and flips while the switcher is open. */}
+              <span dir="auto" className="block min-w-0 truncate oc-ui-start-align typography-ui-label font-medium text-foreground">{primaryLabel}</span>
               <Icon
                 name="arrow-down-s"
                 className={cn(
@@ -114,19 +102,17 @@ export const MobileHeader: React.FC<{
             </span>
           </button>
 
-          {/* Compact title: this takes the leftover width so the trailing
-              controls stay pinned to the right edge. */}
           {compactTitle ? <div className="min-w-0 flex-1" /> : null}
 
           <SpaceAccessButton
             directory={effectiveDirectory}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={MOBILE_HEADER_BUTTON_CLASS}
             iconClassName="size-5"
           />
 
           <button
             type="button"
-            className="relative flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={MOBILE_HEADER_BUTTON_CLASS}
             aria-label={hasUncommittedChanges
               ? t('mobile.header.openWorkspaceWithChangesAria')
               : t('mobile.header.openWorkspaceAria')}
@@ -144,6 +130,7 @@ export const MobileHeader: React.FC<{
               />
             ) : null}
           </button>
+
           {runOverviewKey ? null : (
             <Button
               variant="ghost"

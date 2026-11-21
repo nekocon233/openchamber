@@ -1,4 +1,3 @@
-import { create } from 'zustand';
 import type { Session, SessionStatus } from '@/lib/opencode/model';
 import type { SyncEvent } from '@/lib/opencode/events';
 import { normalizeProjectPath } from '@/lib/projectResolution';
@@ -13,10 +12,29 @@ import {
   type SessionActivityTimingMutation,
 } from './session-activity-timing';
 import { countSyncPerformance } from './performance-diagnostics';
-import { hasRunningShell, useBackgroundShellsStore } from './background-shells';
+import { useBackgroundShellsStore } from './background-shells';
+import { useBackgroundImagesStore } from './background-images';
 import { useSessionBackgroundTasksStore, useSessionHasBackgroundTasks } from './session-background-tasks';
 import { useWorkflowActivityStore } from './workflow-activity';
 import { usePrWatchStore } from './pr-watch';
+import { useExtensionWaitsStore } from './extension-waits';
+import type {
+  ResolvedStatusType,
+  GlobalSessionStatusEntry,
+  ObservedOutcome,
+  SessionParentResolver,
+  SessionTurnActivity,
+} from './session-turn-activity';
+import {
+  EMPTY_ACTIVE_SESSION_IDS,
+  useGlobalSessionStatusStore,
+  resolveSessionParentId,
+  forEachAncestorId,
+  hasActiveSubagent,
+  hasBackgroundWork,
+  turnStaysOpen,
+  withOpenTurns,
+} from './session-turn-activity';
 
 // Shared live busy/retry index for every directory. Events update it
 // incrementally and authoritative directory snapshots reconcile it, so each
@@ -28,167 +46,11 @@ import { usePrWatchStore } from './pr-watch';
 // snapshots). Recent idle resolutions are retained as bounded tombstones so
 // delayed child-store publications cannot revive stale activity.
 
-type ActiveStatusType = 'busy' | 'retry';
-type ResolvedStatusType = ActiveStatusType | 'idle';
-
 const OPTIMISTIC_STATUS_GRACE_MS = 10_000;
 const MAX_STATUS_HISTORY_ENTRIES = 2_000;
 const MAX_OBSERVED_ENTRIES = 2_000;
 
-type GlobalSessionStatusEntry = {
-  status: SessionStatus;
-  directory: string;
-  optimisticUntil?: number;
-};
-
-type ObservedOutcome = { directory: string; outcome: 'completed' | 'failed' | null };
-
-type GlobalSessionStatusState = {
-  /** Last explicitly observed activity/outcome. Bounded memory, never persisted. */
-  observedById: ReadonlyMap<string, ObservedOutcome>;
-  statusById: Map<string, GlobalSessionStatusEntry>;
-  activeSessionIds: ReadonlySet<string>;
-  resolvedStatusById: Map<string, ResolvedStatusType>;
-  statusSnapshotAtByDirectory: Map<string, number>;
-  revision: number;
-  revisionById: Map<string, number>;
-  revisionFloor: number;
-};
-
-const EMPTY_ACTIVE_SESSION_IDS: ReadonlySet<string> = new Set();
-
-export const useGlobalSessionStatusStore = create<GlobalSessionStatusState>(() => ({
-  observedById: new Map(),
-  statusById: new Map(),
-  activeSessionIds: EMPTY_ACTIVE_SESSION_IDS,
-  resolvedStatusById: new Map(),
-  statusSnapshotAtByDirectory: new Map(),
-  revision: 0,
-  revisionById: new Map(),
-  revisionFloor: 0,
-}));
 useGlobalSessionStatusStore.subscribe(() => countSyncPerformance('globalStatusPublications'));
-
-// A parent session goes idle while a background subagent keeps working in a
-// child session; OpenCode then hands the result back and the parent runs
-// again. For everything the user reads as "this session is working" (the row's
-// status dot and turn timer), that pause is still the same turn. The parent
-// lookup is injected by the sync provider: the sessions store sits above this
-// module in the import graph.
-type SessionParentResolver = (sessionId: string) => string | undefined;
-let resolveSessionParentId: SessionParentResolver = () => undefined;
-
-export const setSessionParentResolver = (resolver: SessionParentResolver): void => {
-  resolveSessionParentId = resolver;
-};
-
-/** Subagents nest; a deeper chain than this is treated as unrelated. */
-const MAX_SUBAGENT_DEPTH = 8;
-
-const forEachAncestorId = (sessionId: string, visit: (ancestorId: string) => void, resolveParentId: SessionParentResolver = resolveSessionParentId): void => {
-  let current = resolveParentId(sessionId);
-  for (let depth = 0; current && depth < MAX_SUBAGENT_DEPTH; depth += 1) {
-    visit(current);
-    current = resolveParentId(current);
-  }
-};
-
-/** True when a subagent anywhere below the session is running. */
-export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlySet<string>, resolveParentId: SessionParentResolver = resolveSessionParentId): boolean => {
-  for (const activeId of activeSessionIds) {
-    if (activeId === sessionId) continue;
-    let found = false;
-    forEachAncestorId(activeId, (ancestorId) => {
-      if (ancestorId === sessionId) found = true;
-    }, resolveParentId);
-    if (found) return true;
-  }
-  return false;
-};
-
-/**
- * Active sessions plus every session whose turn they keep open: ancestors of
- * running subagents, and sessions waiting on a background command or a pull
- * request.
- */
-const withBackgroundWork = (
-  activeSessionIds: ReadonlySet<string>,
-  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
-  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
-): ReadonlySet<string> => {
-  let extended: Set<string> | null = null;
-  const add = (sessionId: string): void => {
-    if (activeSessionIds.has(sessionId)) return;
-    extended ??= new Set(activeSessionIds);
-    extended.add(sessionId);
-  };
-  for (const activeId of activeSessionIds) forEachAncestorId(activeId, add);
-  for (const sessionId of shellSessionIds) add(sessionId);
-  for (const sessionId of tasksBySession.keys()) add(sessionId);
-  return extended ?? activeSessionIds;
-};
-
-// A native CLI can end its turn while background tasks it started keep
-// running, and starts a turn by itself when one finishes. For display that
-// wait is the same turn too, as with a subagent.
-const hasBackgroundTasks = (sessionId: string): boolean => (
-  useSessionBackgroundTasksStore.getState().tasksBySession.has(sessionId)
-);
-
-/**
- * True when the session idles only while its background work runs: a subagent
- * below it, a command it started, or tasks a native CLI keeps running.
- */
-export const hasBackgroundWork = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
-  hasActiveSubagent(sessionId, activeSessionIds)
-  || hasRunningShell(sessionId)
-  || hasBackgroundTasks(sessionId)
-  || usePrWatchStore.getState().bySession.has(sessionId)
-);
-
-/**
- * Whether one kind of background work ending leaves the turn open: the session
- * runs again, or another subagent, command, or task still holds it.
- */
-const turnStaysOpen = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
-  activeSessionIds.has(sessionId) || hasBackgroundWork(sessionId, activeSessionIds)
-);
-
-/** Sessions whose turn is open: active ones, their ancestors, and those waiting on background work. */
-const withOpenTurns = (
-  activeSessionIds: ReadonlySet<string>,
-  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
-  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
-): ReadonlySet<string> => withBackgroundWork(activeSessionIds, shellSessionIds, tasksBySession);
-
-/** Sessions whose turn is open now: active sessions, their ancestors, and shell/task waiters. */
-export const getOpenTurnSessionIds = (
-  activeSessionIds: ReadonlySet<string> = useGlobalSessionStatusStore.getState().activeSessionIds,
-  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
-  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
-): ReadonlySet<string> => withOpenTurns(activeSessionIds, shellSessionIds, tasksBySession);
-
-/**
- * What keeps the session's turn open, or null when nothing does: the session
- * runs itself, or it idles while a subagent below it runs, while a command it
- * started in the background runs, or while tasks a native CLI keeps running
- * will wake it. The session's own run wins; a pause with both kinds of
- * background work reports the subagent.
- */
-type SessionTurnActivity = 'running' | 'workflow' | 'subagent' | 'shell' | 'tasks' | 'pullRequest';
-
-export const resolveSessionTurnActivity = (
-  status: 'running' | 'subagent' | null,
-  workflowRunning: boolean,
-  waitingOnShell: boolean,
-  waitingOnPullRequest = false,
-): SessionTurnActivity | null => {
-  if (status === 'running') return status;
-  if (workflowRunning) return 'workflow';
-  if (status) return status;
-  if (waitingOnShell) return 'shell';
-  return waitingOnPullRequest ? 'pullRequest' : null;
-};
 
 export const useSessionTurnActivity = (sessionId: string): SessionTurnActivity | null => {
   const status = useGlobalSessionStatusStore((state): 'running' | 'subagent' | null => {
@@ -197,14 +59,18 @@ export const useSessionTurnActivity = (sessionId: string): SessionTurnActivity |
   });
   const workflowRunning = useWorkflowActivityStore((state) => state.runningSessionIds.has(sessionId));
   const waitingOnShell = useBackgroundShellsStore((state) => state.sessionIds.has(sessionId));
+  const waitingOnImage = useBackgroundImagesStore((state) => state.sessionIds.has(sessionId));
   const waitingOnTasks = useSessionHasBackgroundTasks(sessionId);
   const waitingOnPullRequest = usePrWatchStore((state) => state.bySession.has(sessionId));
+  const waitingOnExtension = useExtensionWaitsStore((state) => state.bySession.has(sessionId));
   if (status === 'running') return 'running';
   if (workflowRunning) return 'workflow';
   if (status) return status;
   if (waitingOnShell) return 'shell';
   if (waitingOnTasks) return 'tasks';
-  return waitingOnPullRequest ? 'pullRequest' : null;
+  if (waitingOnImage) return 'image';
+  if (waitingOnPullRequest) return 'pullRequest';
+  return waitingOnExtension ? 'extensionWait' : null;
 };
 
 /** The first of the sessions `useSessionTurnActivity` reads as working, or null. */
@@ -214,8 +80,11 @@ export const useFirstSessionWithOpenTurn = (sessionIds: readonly string[]): stri
   ));
   const inWorkflow = useWorkflowActivityStore((state) => sessionIds.find((id) => state.runningSessionIds.has(id)) ?? null);
   const onShell = useBackgroundShellsStore((state) => sessionIds.find((id) => state.sessionIds.has(id)) ?? null);
+  const onTasks = useSessionBackgroundTasksStore((state) => sessionIds.find((id) => state.tasksBySession.has(id)) ?? null);
+  const onImage = useBackgroundImagesStore((state) => sessionIds.find((id) => state.sessionIds.has(id)) ?? null);
   const onPullRequest = usePrWatchStore((state) => sessionIds.find((id) => state.bySession.has(id)) ?? null);
-  return inTurn ?? inWorkflow ?? onShell ?? onPullRequest;
+  const onExtension = useExtensionWaitsStore((state) => sessionIds.find((id) => state.bySession.has(id)) ?? null);
+  return inTurn ?? inWorkflow ?? onShell ?? onTasks ?? onImage ?? onPullRequest ?? onExtension;
 };
 
 /**
@@ -255,7 +124,17 @@ useBackgroundShellsStore.subscribe((state, previous) => {
   settleSessionsWithoutBackgroundWork(previous.sessionIds, (sessionId) => state.sessionIds.has(sessionId));
 });
 
+useBackgroundImagesStore.subscribe((state, previous) => {
+  if (state.sessionIds === previous.sessionIds) return;
+  settleSessionsWithoutBackgroundWork(previous.sessionIds, (sessionId) => state.sessionIds.has(sessionId));
+});
+
 usePrWatchStore.subscribe((state, previous) => {
+  if (state.bySession === previous.bySession) return;
+  settleSessionsWithoutBackgroundWork(previous.bySession.keys(), (sessionId) => state.bySession.has(sessionId));
+});
+
+useExtensionWaitsStore.subscribe((state, previous) => {
   if (state.bySession === previous.bySession) return;
   settleSessionsWithoutBackgroundWork(previous.bySession.keys(), (sessionId) => state.bySession.has(sessionId));
 });
@@ -470,6 +349,48 @@ const setStatus = (
   });
 };
 
+const statusWriteWatchers = new Set<Set<string>>();
+
+const noteStatusWrite = (sessionId: string): void => {
+  for (const touched of statusWriteWatchers) touched.add(sessionId);
+};
+
+export const watchGlobalSessionStatusWrites = () => {
+  const touched = new Set<string>();
+  statusWriteWatchers.add(touched);
+  return { touched, stop: () => { statusWriteWatchers.delete(touched); } };
+};
+
+type ActiveListReconcileDependencies = {
+  skip: (sessionId: string) => boolean;
+  covers: (directory: string) => boolean;
+  resolveDirectory: (sessionId: string) => string | null;
+};
+
+export const buildActiveListReconcileEvents = (
+  activeSessionIds: ReadonlySet<string>,
+  deps: ActiveListReconcileDependencies,
+): Map<string, SyncEvent[]> => {
+  const { statusById } = useGlobalSessionStatusStore.getState();
+  const eventsByDirectory = new Map<string, SyncEvent[]>();
+  const push = (directory: string, sessionID: string, type: 'idle' | 'busy') => {
+    const events = eventsByDirectory.get(directory) ?? [];
+    events.push({ type: 'session.status', properties: { sessionID, status: { type } } });
+    eventsByDirectory.set(directory, events);
+  };
+  for (const [sessionId, entry] of statusById) {
+    if (activeSessionIds.has(sessionId) || deps.skip(sessionId) || !deps.covers(entry.directory)) continue;
+    push(entry.directory, sessionId, 'idle');
+  }
+  for (const sessionId of activeSessionIds) {
+    if (statusById.has(sessionId) || deps.skip(sessionId)) continue;
+    const directory = deps.resolveDirectory(sessionId);
+    if (!directory || !deps.covers(directory)) continue;
+    push(directory, sessionId, 'busy');
+  }
+  return eventsByDirectory;
+};
+
 export const setGlobalSessionStatus = (
   sessionId: string,
   directory: string | null | undefined,
@@ -477,6 +398,7 @@ export const setGlobalSessionStatus = (
   options?: { optimistic?: boolean },
 ): void => {
   if (!sessionId) return;
+  if (statusWriteWatchers.size > 0) noteStatusWrite(sessionId);
   setStatus(
     sessionId,
     normalizeDirectory(directory ?? ''),
@@ -490,6 +412,13 @@ export const setGlobalSessionStatus = (
 // (`session.idle` / `session.error` both resolve to idle).
 export const applyGlobalSessionStatusEvents = (directory: string, payloads: readonly SyncEvent[]): void => {
   if (payloads.length === 0) return;
+  if (statusWriteWatchers.size > 0) {
+    for (const payload of payloads) {
+      if (payload.type === 'session.status' || payload.type === 'session.idle' || payload.type === 'session.error' || payload.type === 'session.deleted') {
+        if (payload.properties.sessionID) noteStatusWrite(payload.properties.sessionID);
+      }
+    }
+  }
   const normalizedDirectory = normalizeDirectory(directory);
   const orderingMutations: SessionOrderingMutation[] = [];
   const timingMutations: SessionActivityTimingMutation[] = [];
@@ -673,6 +602,13 @@ export const applyGlobalSessionStatusSnapshot = (
 ): void => {
   const directory = normalizeDirectory(rawDirectory);
   const known = new Set(knownSessionIds ?? []);
+  if (statusWriteWatchers.size > 0) {
+    for (const sessionId of known) noteStatusWrite(sessionId);
+    for (const sessionId of Object.keys(raw)) noteStatusWrite(sessionId);
+    for (const [sessionId, entry] of useGlobalSessionStatusStore.getState().statusById) {
+      if (entry.directory === directory) noteStatusWrite(sessionId);
+    }
+  }
   const orderingActive = new Set<string>();
   const orderingKnown = new Set<string>();
 
@@ -830,3 +766,12 @@ export const subscribeSessionStatusTransitions = (listener: SessionStatusTransit
   transitionListeners.add(listener);
   return () => { transitionListeners.delete(listener); };
 };
+
+export {
+  useGlobalSessionStatusStore,
+  setSessionParentResolver,
+  hasActiveSubagent,
+  hasBackgroundWork,
+  getOpenTurnSessionIds,
+  resolveSessionTurnActivity,
+} from './session-turn-activity';

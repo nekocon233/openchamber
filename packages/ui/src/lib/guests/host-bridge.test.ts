@@ -28,6 +28,8 @@ const effects = (overrides: Partial<BridgeEffects> = {}): BridgeEffects => ({
   shellsUnsubscribe: overrides.shellsUnsubscribe ?? (() => {}),
   shellOutput: overrides.shellOutput ?? (async () => ({ output: '', cursor: 0, skipped: false })),
   shellStop: overrides.shellStop ?? (async () => ({ stopped: true })),
+  microphoneOpen: overrides.microphoneOpen ?? (async () => {}),
+  microphoneClose: overrides.microphoneClose ?? (() => {}),
   storage: overrides.storage ?? (async () => ({ storage: true, op: 'keys', keys: [] })),
   setStatusControls: overrides.setStatusControls ?? (() => {}),
   openSession: overrides.openSession ?? (() => {}),
@@ -51,6 +53,7 @@ const effects = (overrides: Partial<BridgeEffects> = {}): BridgeEffects => ({
   generate: overrides.generate ?? (async () => ({ ok: true, result: { text: '' } })),
   setBadge: overrides.setBadge ?? (() => {}),
   resize: overrides.resize ?? (() => {}),
+  answerBlock: overrides.answerBlock ?? (async () => {}),
   openCommit: overrides.openCommit ?? (async () => ({ ok: true })),
   resolveResult: overrides.resolveResult ?? (() => {}),
   openPopover: overrides.openPopover ?? (() => {}),
@@ -141,6 +144,26 @@ describe('answerGuestMessage', () => {
     expect(reply && reply.type === 'result' && reply.ok).toBe(false);
   });
 
+  test('a surface that did not open is a failed result with its code', async () => {
+    const reply = await answerGuestMessage({
+      channel: OPENCHAMBER_SDK_CHANNEL,
+      v: 1,
+      type: 'open-surface',
+      id: 'oc-3b',
+      payload: { surfaceId: 'git' },
+    }, effects({ openSurface: () => ({ ok: false, code: 'NO_DIRECTORY', message: 'No chat or project is open.' }) }));
+    expect(reply).toMatchObject({ type: 'result', id: 'oc-3b', ok: false, code: 'NO_DIRECTORY' });
+  });
+
+  test('a block answer reaches the block, and a refusal tells the frame why', async () => {
+    const message: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'block-answer', id: 'answer-1', payload: { text: 'Explain' } };
+    const seen: string[] = [];
+    const sent = await answerGuestMessage(message, effects({ answerBlock: async (text) => { seen.push(text); } }));
+    expect(seen).toEqual(['Explain']);
+    expect(sent).toMatchObject({ type: 'result', id: 'answer-1', ok: true });
+    const refused = await answerGuestMessage(message, effects({ answerBlock: async () => { throw new Error('answerBlock works only from a click.'); } }));
+    expect(refused).toMatchObject({ ok: false, error: 'answerBlock works only from a click.', code: 'HOST_REJECTED' });
+  });
   test('writes clipboard text', async () => {
     const seen: string[] = [];
     const reply = await answerGuestMessage({

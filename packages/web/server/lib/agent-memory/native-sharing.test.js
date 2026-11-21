@@ -113,7 +113,7 @@ describe('shared native CLI memory', () => {
   });
 
   it('writes only the hook events each CLI accepts and drops an event it no longer installs', async () => {
-    const hookPath = fileURLToPath(new URL('./native-hook.js', import.meta.url));
+    const hookPath = fileURLToPath(new URL('./native-hook.ts', import.meta.url));
     const { root, sharing, a } = await setup({ hookPath });
     const claudeFile = path.join(root, '.claude', 'settings.json');
     await fs.mkdir(path.dirname(claudeFile), { recursive: true });

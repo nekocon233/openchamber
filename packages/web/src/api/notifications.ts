@@ -231,8 +231,6 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
   }
 
   try {
-    // Some installed PWAs expose Notification.permission but only allow
-    // notifications through an active service worker registration.
     if (await notifyWithServiceWorker(payload)) {
       return true;
     }

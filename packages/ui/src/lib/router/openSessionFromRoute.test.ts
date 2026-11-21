@@ -5,15 +5,16 @@ import { useBtwStore } from '@/stores/useBtwStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { getRememberedSessionDirectory, useSessionUIStore } from '@/sync/session-ui-store';
+import { openSessionFromToast } from '@/sync/session-navigation';
 
-import { openSession, openSessionFromRoute } from './openSessionFromRoute';
+import { openSession, openSessionFromRoute, openSessionLink } from './openSessionFromRoute';
 
 const SESSION_ID = 'ses_linear_open';
 const PROJECT_DIR = '/projects/linear-from-url';
 const OTHER_DIR = '/projects/linear-from-url-other';
 const WORKTREE_DIR = '/projects/linear-from-url-worktrees/feature';
 
-const _BTW_PARENT_ID = 'ses_btw_parent';
+const BTW_PARENT_ID = 'ses_btw_parent';
 const BTW_FORK_ID = 'ses_btw_fork';
 
 const buildSession = (id: string, directory: string): Session => ({
@@ -26,7 +27,7 @@ const buildSession = (id: string, directory: string): Session => ({
   time: { created: 1, updated: 2 },
 });
 
-const _buildBtwFork = (parentId: string, directory: string): Session => ({
+const buildBtwFork = (parentId: string, directory: string): Session => ({
   ...buildSession(BTW_FORK_ID, directory),
   parentID: parentId,
   metadata: { openchamber: { kind: 'btw', originalSessionID: parentId } },
@@ -141,6 +142,98 @@ describe('openSessionFromRoute', () => {
     await openSessionFromRoute(SESSION_ID, PROJECT_DIR);
 
     expect(useSessionUIStore.getState().currentSessionId).toBe(SESSION_ID);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+  });
+
+  // A /btw fork is a side transcript inside its parent's panel: opening it by
+  // id (a completion notification, a push, a toast) must land on the parent.
+  test('opens a /btw fork as its parent and expands the parent panel', async () => {
+    useSessions([
+      buildSession(BTW_PARENT_ID, PROJECT_DIR),
+      buildBtwFork(BTW_PARENT_ID, PROJECT_DIR),
+    ]);
+    useBtwStore.getState().setPanelState(BTW_PARENT_ID, { collapsed: true });
+    useSessionUIStore.getState().setCurrentSession(SESSION_ID, OTHER_DIR);
+
+    await openSessionFromRoute(BTW_FORK_ID);
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_PARENT_ID);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+    expect(useBtwStore.getState().byParent[BTW_PARENT_ID]?.collapsed).toBe(false);
+  });
+
+  // A cold launch from a notification may not have the fork record yet: the
+  // first selection guesses, and the global list then resolves the parent.
+  test('resolves a fork once the global list arrives', async () => {
+    useGlobalSessionsStore.setState({
+      activeSessions: [
+        buildSession(BTW_PARENT_ID, PROJECT_DIR),
+        buildBtwFork(BTW_PARENT_ID, PROJECT_DIR),
+      ],
+      archivedSessions: [],
+      entityById: new Map(),
+      hasLoaded: false,
+      status: 'ready',
+    });
+
+    await openSessionFromRoute(BTW_FORK_ID);
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_PARENT_ID);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+    expect(useBtwStore.getState().byParent[BTW_PARENT_ID]?.collapsed).toBe(false);
+  });
+
+  test('opens a fork as itself when its parent is gone', async () => {
+    useSessions([buildBtwFork(BTW_PARENT_ID, PROJECT_DIR)]);
+
+    await openSessionFromRoute(BTW_FORK_ID);
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_FORK_ID);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+  });
+
+  // The toast's "Open session" reaches this module through the opener it
+  // registers, so moving that registration out of the session store must keep
+  // the toast path working.
+  test('opens a toast target through the opener this module registers', async () => {
+    useSessions([
+      buildSession(BTW_PARENT_ID, PROJECT_DIR),
+      buildBtwFork(BTW_PARENT_ID, PROJECT_DIR),
+    ]);
+
+    openSessionFromToast(BTW_FORK_ID, PROJECT_DIR);
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_PARENT_ID);
+    expect(useBtwStore.getState().byParent[BTW_PARENT_ID]?.collapsed).toBe(false);
+  });
+
+  // A message link names one message inside the transcript that holds it. For
+  // a `/btw` answer that transcript is the fork, so the fork opens alone.
+  test('keeps a /btw fork when a message link names it', async () => {
+    useSessions([
+      buildSession(BTW_PARENT_ID, PROJECT_DIR),
+      buildBtwFork(BTW_PARENT_ID, PROJECT_DIR),
+    ]);
+
+    await openSessionLink(BTW_FORK_ID, 'msg_btw_answer');
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_FORK_ID);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+    expect(useBtwStore.getState().byParent[BTW_PARENT_ID]).toBeUndefined();
+  });
+
+  // A desktop notification carries the directory of the session it names, so
+  // the parent is selected immediately instead of after the global list loads.
+  test('opens a notification target as the parent without waiting for the list', async () => {
+    useSessions([
+      buildSession(BTW_PARENT_ID, PROJECT_DIR),
+      buildBtwFork(BTW_PARENT_ID, PROJECT_DIR),
+    ]);
+
+    const opening = openSession(BTW_FORK_ID, { directory: PROJECT_DIR });
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(BTW_PARENT_ID);
+    await opening;
     expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
   });
 });

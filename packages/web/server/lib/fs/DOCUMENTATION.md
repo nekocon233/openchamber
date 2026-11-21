@@ -4,11 +4,12 @@
 Own filesystem API behavior for the web server runtime, including workspace-bound file operations, directory listing, reveal, and background command execution jobs.
 
 ## Entrypoints and structure
-- `packages/web/server/lib/fs/routes.js`: route registration and runtime-owned state for `/api/fs/*` endpoints.
-- `packages/web/server/lib/fs/search.js`: fuzzy filesystem search for workspace supplements and project icon discovery.
-- `packages/web/server/lib/fs/content-search.js`: find in files, run by ripgrep (`GET /api/fs/find-in-files`).
-- `packages/web/server/lib/fs/ripgrep.js`: where the ripgrep binary comes from.
-- `folder-change-watch.js` owns signal-driven fingerprint/settle scheduling for extension packages and custom themes. Each root has one watcher, one 30-second safety interval and at most one pending fast check. Its first fingerprint starts at creation; stop closes the watcher, cancels timers and suppresses in-flight results.
+- `packages/web/server/lib/fs/routes.ts`: route registration and runtime-owned state for `/api/fs/*` endpoints.
+- `packages/web/server/lib/fs/search.ts`: fuzzy filesystem search for workspace supplements and project icon discovery.
+- `canonical-path.ts` resolves existing path aliases and missing descendants without creating folders. Filesystem authorization and chat-directory cleanup share it so a missing child cannot hide its existing ancestor's identity. Permission, symlink-loop and non-directory failures propagate.
+- `packages/web/server/lib/fs/content-search.ts`: find in files, run by ripgrep (`GET /api/fs/find-in-files`).
+- `packages/web/server/lib/fs/ripgrep.ts`: where the ripgrep binary comes from.
+- `folder-change-watch.ts` owns signal-driven fingerprint/settle scheduling for extension packages and custom themes. Each root has one watcher, one 30-second safety interval and at most one pending fast check. Its first fingerprint starts at creation; stop closes the watcher, cancels timers and suppresses in-flight results.
 
 ### Why folder change checks retain a safety interval
 
@@ -24,8 +25,11 @@ The interval reopens the watcher before checking, so Linux/Windows folder deleti
     - `GET /api/fs/stat`
     - `GET /api/fs/directory-stat`
     - `POST /api/fs/directory-stats` — the batched form of `directory-stat`:
-      one request answers `{ results: [{ path, isDirectory, reason? }] }` for
+      one request answers `{ results: [{ path, isDirectory, reason?, realPath? }] }` for
       many paths with the same reason codes, isolating per-path failures.
+      A directory also carries `realPath`, the path with links followed, when
+      `realpath` resolves it: settings store a project under that path, so the
+      Add project dialog uses it to show a link to an added project as added.
     - `POST /api/fs/preview`
     - `GET /api/fs/preview/:grant/:path(*)`
     - `POST /api/fs/write`
@@ -84,6 +88,19 @@ names.
 `dist`, excludes only `.git` and `node_modules`, and removes the icon walk's
 10,000-file ceiling. A 30-second deadline fails the search rather than returning
 an unmarked partial answer. Default icon discovery keeps its existing bounds.
+
+When the client closes the response (a new letter aborted the request) the walk
+stops at its next batch, starts no more Git reads, kills the running one and
+sends nothing. Typing a name otherwise leaves one whole-tree walk per letter
+running at once. VS Code stops its own walk through `api:fs:search:abort`.
+
+### Why a stopped walk kills Git without `taskkill /T`
+
+On Windows the spawned `git.exe` is Git for Windows' launcher, so the kill leaves
+the real `git` to finish that one read, about 250 ms in a 20,000-file checkout.
+`taskkill` would start one more process per stopped read, on a path that exists
+to start fewer. The Git service's untracked listing uses it because that listing
+can walk for a minute.
 
 ### Why workspace search reads ignored paths per repository
 
@@ -161,6 +178,100 @@ twelve children. Workspace search applies the same timeout and fallback to its
 - `index.js` no longer owns FS route handlers or FS exec job state.
 - The composition root passes the Git network operation service's `cloneRepository` adapter. The FS module does not construct or spawn Git for clone.
 
+## Invariants
+
+- Missing chat roots retain the existing ancestor's disk casing, so the first directory creation and later OpenCode sessions address the same root.
+- Watch signals request fingerprint checks. A changed fingerprint is reported only after 2 consecutive equal checks, so callers observe settled changes.
+- An aborted workspace search never publishes results. A killed Git ignore read yields no ignored paths, so publishing that walk could expose an unfiltered answer.
+- Repository discovery skips unreadable descendants while root failures reach the route's shared error mapping. A bad subtree cannot hide other discoverable repositories.
+
+## Decisions
+
+### Why route inputs retain property and string guards
+
+HTTP bodies and thrown values expose only optional unchecked properties until
+their existing tests succeed. Property-access guards accept non-null primitives
+as JavaScript does; object-only error checks still exclude primitives and functions.
+Directory normalization preserves non-string inputs, so its generic overload
+does not promise that an unchecked preview path becomes a string. Exec commands
+remain unchecked array elements until each command passes its string test.
+The optional file-miss predicate retains the exact four accepted error codes.
+
+`FsRouteDependencies` owns the composition contract. Search accepts a nullable
+`resultRoot` because the project resolver can return null and the search already
+falls back with `options.resultRoot || rootPath`. Source imports retain `.js`
+specifiers, including the converted `../path-realpath-cache.ts` helper.
+
+### Why download filenames retain an ASCII fallback
+
+RFC 5987 clients receive the encoded full name through `filename*`; older clients
+receive the same name with every non-ASCII character removed through `filename`.
+The ASCII Unicode property expresses the original byte-range filter without a
+control-character regular expression.
+
+### Why folder watchers share a timer contract with their test clock
+
+Native timers and the deterministic clock have different handles. The watcher
+keeps the handle type supplied by its clock so cancellation uses that same type.
+The harness supplies clock advancement and watch signals without OS waits.
+
+### Why search checks pipe and ignore-read occupancy
+
+The spawn options request stdout and, for `check-ignore`, stdin. Missing pipes
+follow the existing failed-read fallback. Each workspace ignore map entry holds
+the query's pending read before the walk consumes it; an absent entry is an
+invariant failure.
+
+### Why the bare Node import test strips types from copied helpers
+
+The test copies helpers as JavaScript into a directory without dependencies or
+the source resolver. Removing type syntax from those copies preserves its check
+of the packaged JavaScript import graph.
+
+### Why project discovery uses JavaScript realpath and not native realpath
+
+Project probes use the same JavaScript `fs.realpath` as settings. Native realpath also resolves Windows `subst` and mapped drives, changing the identity settings retain and preventing recognition of an already-added project.
+
+### Why Git path reads share a bounded cache and not arbitrary exec results
+
+Repository path metadata stays effectively static during a short TTL, so a shared read absorbs repeated client initialization requests. Only successful allowlisted, side-effect-free `rev-parse` queries enter the cache; transient failures remain retryable, LRU hits preserve the original expiry, and entry-count and byte bounds limit growth in long-lived deployments.
+
+### Why repeated Git reads reuse environment state and not refresh commands
+
+Automatic Git path queries reuse the directory's environment variables without rerunning its environment command. Other exec commands may refresh that state while retaining the terminal's augmented PATH.
+
+### Why raw responses serve single ranges and not multipart bodies
+
+The media viewer's consumers request single spans, so multi-range headers receive the whole file without multipart machinery. Streaming keeps large recordings and PDFs out of server memory; empty files bypass range streams, files open before span headers commit, and response closure destroys the stream because `pipe()` alone can leave a paused source holding its file handle.
+
+### Why file writes publish completed temporary files and not direct truncation
+
+Text writes rename a completed temporary file so concurrent readers avoid the empty `O_TRUNC` window. Reads retry an unexpectedly empty result when the preceding stat reports content because another writer can still truncate between stat and read; new uploads publish a flushed same-directory temporary file through a no-replace hard link so a racing destination remains intact.
+
+### Why content search consumes chunks incrementally and not repeated growing buffers
+
+Minified files can produce lines tens of megabytes long. Pending chunks are joined once per complete line, sorted byte offsets advance through newly decoded bytes only, and stderr keeps draining after the retained diagnostic limit so the child cannot block on a full pipe.
+
+### Why search errors select a diagnostic line and not the whole stderr preamble
+
+Ripgrep's invalid-pattern diagnostics include the pattern and a caret before the useful `error:` line. Search failures show that reason when present and otherwise use the first diagnostic line.
+
+### Why preview annotation uses a parent bridge and byte-preserving injection
+
+The preview's opaque origin prevents direct app access, so only messages from the frame's parent can request evaluation inside the page's existing sandbox permissions. Injection uses a latin1 view to keep byte offsets and preserve ASCII-compatible encodings; placing the script after the document anchor preserves standards mode, and UTF-16 pages remain unchanged.
+
+### Why desktop ripgrep uses a staged binary and not the build host's package
+
+Cross-built desktop apps require the target architecture's staged binary because the optional npm package matches the build host. Failed lookups remain uncached so installing ripgrep makes a later search work without restarting the server.
+
+### Why bare-name lookups share a workspace listing and not one Git process per name
+
+Git startup and Windows untracked-file walks make repeated name lookups expensive, so concurrent requests share a short-lived workspace listing. A deadline and output-size cap bound the work and retained data; Git failure or a non-repository directory yields no match.
+
+### Why Windows folder reveal uses the default handler and not Explorer selection
+
+Opening a folder through its default handler respects replacement file managers. File selection inside a folder remains Explorer-specific.
+
 ## Legacy clone route
 
 `POST /api/fs/clone` remains for existing clients. It requires `unverifiedConfirmed: true` alongside `remoteUrl`, `destinationPath`, and optional `gitIdentityId`. Without explicit confirmation it returns `409 GIT_NETWORK_OPERATION_REQUIRED` before filesystem or Git work. First-party clients use the planned clone intent instead. If `destinationPath` names an existing directory or ends in a path separator, the route appends the repository name inferred from `remoteUrl`. Otherwise it treats the resolved path as the exact clone target.
@@ -186,5 +297,5 @@ The Git service validates a selected commit identity before planning or spawning
 - If adding new `/api/fs/*` endpoints, add them in `routes.js` and extend this document.
 - `routes.js` and the sibling modules it imports (`byte-range.js`, `workspace-file-names.js`, `content-search.js`, `../shared/guards.js`, `../git/redaction.js`, `../path-realpath-cache.js`) load with Node built-ins only: `routes.test.js` imports a copy of them in a bare Node process without `node_modules`, the way a packaged desktop build once failed to load them. A new sibling module goes into that test's copy list and takes its value guards from `../shared/guards.js` rather than from a dependency.
 - `GET /api/fs/list` may resolve symlinks with `realpath` to read directory contents, but the response `path` and each entry `path` must stay in the caller's requested path space (`path.join(requestedPath, name)`). Returning real paths breaks file-tree expansion for directories reached through workspace symlinks.
-- `POST /api/fs/upload` accepts one `application/octet-stream` body with `path` and optional `overwrite=true` query parameters. The body streams into a same-directory temp file with a 100 MiB default cap configurable through `OPENCHAMBER_FS_UPLOAD_MAX_BYTES`; failed and oversized uploads clean up that temp file. New files commit through an atomic no-replace link, existing files return `409` unless overwrite is explicit, directory targets are rejected, and the destination parent resolves before writing so uploads cannot escape through workspace symlinks.
+- `POST /api/fs/upload` accepts one `application/octet-stream` body with `path` and optional `overwrite=true` query parameters. The body streams into a same-directory temp file with a 100 MiB default cap configurable through `OPENCHAMBER_FS_UPLOAD_MAX_BYTES`; failed and oversized uploads clean up that temp file. An oversized body is rejected with `413` carrying `reason: 'too-large'` and the effective `maxBytes`, so a client can name the limit it hit. A path that resolves outside the workspace is rejected with `403` carrying `reason: 'outside-workspace'`. New files commit through an atomic no-replace link, existing files return `409` unless overwrite is explicit, directory targets are rejected, and the destination parent resolves before writing so uploads cannot escape through workspace symlinks.
 - `POST /api/fs/mkdir` checks the canonical workspace and target before creating directories. A missing target resolves its nearest existing ancestor and appends the missing segments, so a symlink outside the workspace cannot receive new children during a directory upload. Responses retain the requested path space, including workspace aliases. The files adapter accepts an optional directory scope for mkdir, matching individual uploads.

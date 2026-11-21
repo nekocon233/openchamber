@@ -153,10 +153,10 @@ const CheckRunDetails: React.FC<{
       ) : null}
 
       {run.output?.title ? (
-        <div className="typography-micro text-foreground">{run.output.title}</div>
+        <div dir="auto" className="typography-micro text-foreground">{run.output.title}</div>
       ) : null}
       {run.output?.summary ? (
-        <div className="typography-micro text-muted-foreground whitespace-pre-wrap break-words">
+        <div dir="auto" className="typography-micro text-muted-foreground whitespace-pre-wrap break-words">
           {run.output.summary}
         </div>
       ) : null}
@@ -182,11 +182,11 @@ const CheckRunDetails: React.FC<{
                   {annotation.startLine !== undefined ? `:${annotation.startLine}` : ''}
                   {annotation.endLine !== undefined && annotation.endLine !== annotation.startLine ? `-${annotation.endLine}` : ''}
                 </div>
-                <div className="typography-micro text-foreground whitespace-pre-wrap break-words mt-1">
+                <div dir="auto" className="typography-micro text-foreground whitespace-pre-wrap break-words mt-1">
                   {annotation.message}
                 </div>
                 {annotation.rawDetails ? (
-                  <div className="typography-micro text-muted-foreground whitespace-pre-wrap break-words mt-1">
+                  <div dir="auto" className="typography-micro text-muted-foreground whitespace-pre-wrap break-words mt-1">
                     {annotation.rawDetails}
                   </div>
                 ) : null}
@@ -246,13 +246,8 @@ const CheckRunDetails: React.FC<{
   );
 };
 
-/**
- * A change request's or workflow run's check jobs, each opening to its output,
- * failed annotations, steps and optional job log.
- */
 export const CheckRunList: React.FC<{
   runs: CIRun[];
-  /** The clock running checks count their time against. */
   now: number;
   expansion: CheckRunExpansion;
   formatTimestamp: (value?: string) => string;

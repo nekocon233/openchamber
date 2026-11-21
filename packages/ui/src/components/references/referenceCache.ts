@@ -1,29 +1,21 @@
-/**
- * What the reference picker has already fetched, shared across opens.
- *
- * Switching the picker's tab or filter, or opening it again, shows the list
- * it showed last time at once; a list older than `FRESH_MS` is refreshed in
- * the background and replaced when the answer arrives. A failed refresh keeps
- * what was shown and reports the error next to it: a failure never reads as
- * an empty list.
- *
- * Keys carry everything that changes the answer (runtime, account, project,
- * kind, filter, search text). What a key holds can still go out of date on
- * the host: `revalidateReferences` makes the lists and values on screen check
- * their age again, for a surface that stays mounted while nobody looks at it.
- */
-
 import * as React from 'react';
+
+import type { RepositoryReferencesAcrossSkip } from '@/lib/api/types';
 
 const FRESH_MS = 60_000;
 
+export type ListSkip = { directory: string; reason: RepositoryReferencesAcrossSkip };
+
+const mergeSkipped = (shown: readonly ListSkip[], next: readonly ListSkip[]): ListSkip[] => {
+    const known = new Set(shown.map((skip) => skip.directory));
+    return [...shown, ...next.filter((skip) => !known.has(skip.directory))];
+};
+
 export type ListPage<T> =
-    | { kind: 'page'; items: T[]; cursor: string | null; hasMore: boolean; total?: number }
-    /** The source answered but cannot list: not connected, or no repo. */
+    | { kind: 'page'; items: T[]; cursor: string | null; hasMore: boolean; total?: number; skipped?: ListSkip[] }
     | { kind: 'unavailable'; reason: 'disconnected' | 'no-repo' };
 
 export type CachedList<T> = {
-    /** `loading` only until the first answer; a refresh keeps the last one. */
     status: 'loading' | 'ready' | 'unavailable' | 'error';
     unavailable: 'disconnected' | 'no-repo' | null;
     items: T[];
@@ -31,9 +23,14 @@ export type CachedList<T> = {
     total?: number;
     refreshing: boolean;
     loadingMore: boolean;
-    /** The last failure, first page or a later one; cleared by the next success. */
     error: string | null;
+    skipped: ListSkip[];
+    pageReads: PageRead[];
 };
+
+export type ReadStamp = { at: number; forced: boolean };
+
+export type PageRead = { start: number; read: ReadStamp };
 
 export type CachedValue<T> =
     | { status: 'idle' }
@@ -46,18 +43,16 @@ type PageFetcher<T> = (cursor: string | null) => Promise<ListPage<T>>;
 type ListRecord<T> = CachedList<T> & {
     cursor: string | null;
     fetchedAt: number;
-    /** Bumped when the first page is asked again; older answers are dropped. */
     generation: number;
     fetchPage: PageFetcher<T>;
 };
 
-type ValueRecord<T> = { state: CachedValue<T>; fetchedAt: number };
+type ValueRecord<T> = { state: CachedValue<T>; fetchedAt: number; forced: boolean };
 
 type Listener = () => void;
 
 type Settled<R> = { ok: true; value: R } | { ok: false; message: string };
 
-/** A request's outcome as data, so every caller handles failure the same way. */
 const settle = async <R,>(request: Promise<R>): Promise<Settled<R>> => {
     try {
         return { ok: true, value: await request };
@@ -66,14 +61,9 @@ const settle = async <R,>(request: Promise<R>): Promise<Settled<R>> => {
     }
 };
 
-/**
- * A bounded map of keyed records with per-key listeners. A key someone is
- * subscribed to is never evicted, so the bound is a soft target.
- */
 class KeyedStore<R> {
     private readonly records = new Map<string, R>();
     private readonly listeners = new Map<string, Set<Listener>>();
-    /** Counts every write, so a reader can tell whether anything changed since it last looked. */
     version = 0;
 
     constructor(private readonly limit: number) {}
@@ -93,7 +83,6 @@ class KeyedStore<R> {
     }
 
     set(key: string, record: R): void {
-        // Re-inserting keeps the map in least-recently-written order.
         this.records.delete(key);
         this.records.set(key, record);
         this.version += 1;
@@ -115,8 +104,13 @@ class KeyedStore<R> {
     }
 
     clear(): void {
-        const keys = [...this.records.keys()];
-        this.records.clear();
+        this.forget(() => true);
+    }
+
+    forget(picked: (key: string) => boolean): void {
+        const keys = [...this.records.keys()].filter(picked);
+        if (keys.length === 0) return;
+        for (const key of keys) this.records.delete(key);
         this.version += 1;
         for (const key of keys) {
             for (const listener of this.listeners.get(key) ?? []) listener();
@@ -133,7 +127,6 @@ class KeyedStore<R> {
 }
 
 export type ListCache<T> = {
-    /** Show what `key` has and fetch it when missing or stale; settles when that fetch does, or at once when none starts. */
     ensure: (key: string, fetchPage: PageFetcher<T>, options?: { force?: boolean }) => Promise<void>;
     loadMore: (key: string) => void;
     read: (key: string) => CachedList<T> | null;
@@ -143,7 +136,6 @@ export type ListCache<T> = {
     clear: () => void;
 };
 
-/** `now` is the clock freshness is measured on; tests pass their own. */
 export function createListCache<T>(limit = 40, now: () => number = Date.now): ListCache<T> {
     const store = new KeyedStore<ListRecord<T>>(limit);
     const pendingReads = new Map<string, Promise<void>>();
@@ -184,12 +176,14 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                 refreshing: true,
                 loadingMore: false,
                 error: null,
+                skipped: [],
+                pageReads: [],
                 cursor: null,
                 fetchedAt: 0,
                 generation,
                 fetchPage,
             });
-        const pending = settle(fetchPage(null)).then((outcome) => {
+        const request = settle(fetchPage(null)).then((outcome) => {
             const current = store.get(key);
             if (!current || current.generation !== generation) return;
             if (!outcome.ok) {
@@ -207,29 +201,35 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                     unavailable: page.reason,
                     items: [],
                     cursor: null,
-                    total: undefined,
                     hasMore: false,
+                    total: undefined,
                     refreshing: false,
                     error: null,
+                    skipped: [],
+                    pageReads: [],
                     fetchedAt: now(),
                 });
                 return;
             }
+            const at = now();
             update(key, current, {
                 status: 'ready',
+                skipped: page.skipped ?? [],
                 unavailable: null,
                 items: page.items,
-                total: page.total,
                 cursor: page.cursor,
                 hasMore: page.hasMore,
+                total: page.total,
                 refreshing: false,
                 error: null,
-                fetchedAt: now(),
+                pageReads: [{ start: 0, read: { at, forced: Boolean(options?.force) } }],
+                fetchedAt: at,
             });
+        }).finally(() => {
+            if (pendingReads.get(key) === request) pendingReads.delete(key);
         });
-        pendingReads.set(key, pending);
-        void pending.finally(() => { if (pendingReads.get(key) === pending) pendingReads.delete(key); });
-        return pending;
+        pendingReads.set(key, request);
+        return request;
     };
 
     const loadMore: ListCache<T>['loadMore'] = (key) => {
@@ -251,11 +251,13 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
             }
             update(key, current, {
                 items: [...current.items, ...page.items],
-                total: page.total,
+                pageReads: [...current.pageReads, { start: current.items.length, read: { at: now(), forced: false } }],
                 cursor: page.cursor,
                 hasMore: page.hasMore,
+                total: page.total ?? current.total,
                 loadingMore: false,
                 error: null,
+                skipped: mergeSkipped(current.skipped, page.skipped ?? []),
             });
         });
     };
@@ -275,22 +277,13 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
 }
 
 export type ValueCache<T> = {
-    /**
-     * The value for `key`, fetched once and again when stale; one request at
-     * a time. `force` asks again even when fresh, after any request already
-     * running, so an answer from before a change never wins over one after it.
-     */
     ensure: (key: string, fetch: () => Promise<T>, options?: { force?: boolean }) => Promise<T>;
-    /**
-     * Every key of `keys` that is missing or stale, asked together: one
-     * `fetch` per `batchSize` of them. `fetch` answers each key it was given;
-     * a key it leaves out ends as an error, like a failed request.
-     */
     ensureMany: (keys: string[], fetch: (keys: string[]) => Promise<ReadonlyMap<string, T>>, batchSize: number) => void;
     read: (key: string) => CachedValue<T> | null;
+    readOf: (key: string) => ReadStamp | null;
     subscribe: (key: string, listener: Listener) => () => void;
-    /** Changes on every write; a snapshot for readers of several keys at once. */
     version: () => number;
+    forget: (picked: (key: string) => boolean) => void;
     invalidate: (matches: (key: string) => boolean) => void;
     clear: () => void;
 };
@@ -305,10 +298,9 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
         return existing?.state.status === 'ready' && now() - existing.fetchedAt < FRESH_MS;
     };
 
-    /** Track `key` as asked by `request`, keeping a stale value visible meanwhile. */
-    const track = (key: string, request: Promise<Settled<T>>): Promise<T> => {
+    const track = (key: string, request: Promise<Settled<T>>, forced = false): Promise<T> => {
         if (store.get(key)?.state.status !== 'ready') {
-            store.set(key, { state: { status: 'loading' }, fetchedAt: 0 });
+            store.set(key, { state: { status: 'loading' }, fetchedAt: 0, forced: false });
         }
         const promise = request.then((outcome) => {
             const stale = retired.delete(promise);
@@ -323,10 +315,10 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
             }
             inflight.delete(key);
             if (!outcome.ok) {
-                store.set(key, { state: { status: 'error', error: outcome.message }, fetchedAt: 0 });
+                store.set(key, { state: { status: 'error', error: outcome.message }, fetchedAt: 0, forced: false });
                 throw new Error(outcome.message);
             }
-            store.set(key, { state: { status: 'ready', value: outcome.value }, fetchedAt: now() });
+            store.set(key, { state: { status: 'ready', value: outcome.value }, fetchedAt: now(), forced });
             return outcome.value;
         });
         inflight.set(key, promise);
@@ -338,7 +330,7 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
         const running = inflight.get(key);
         if (options?.force || (running && retired.has(running))) {
             const after = running ? running.then(() => undefined, () => undefined) : Promise.resolve();
-            return track(key, settle(after.then(fetch)));
+            return track(key, settle(after.then(fetch)), Boolean(options?.force));
         }
         if (existing?.state.status === 'ready' && isFresh(key)) {
             return Promise.resolve(existing.state.value);
@@ -359,7 +351,6 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
                     }
                     return { ok: false, message: 'Not in the answer' };
                 });
-                // Nobody awaits a batch key; its failure lives in the store.
                 track(key, one).catch(() => undefined);
             }
         }
@@ -369,8 +360,21 @@ export function createValueCache<T>(limit = 40, now: () => number = Date.now): V
         ensure,
         ensureMany,
         read: (key) => store.get(key)?.state ?? null,
+        readOf: (key) => {
+            const record = store.get(key);
+            return record?.state.status === 'ready' ? { at: record.fetchedAt, forced: record.forced } : null;
+        },
         subscribe: (key, listener) => store.subscribe(key, listener),
         version: () => store.version,
+        forget: (picked) => {
+            for (const [key, running] of inflight) {
+                if (picked(key)) {
+                    retired.add(running);
+                    inflight.delete(key);
+                }
+            }
+            store.forget(picked);
+        },
         invalidate: (matches) => {
             for (const [key] of store.entries()) {
                 if (!matches(key)) continue;
@@ -398,21 +402,15 @@ const subscribeRevalidation = (listener: Listener) => {
     };
 };
 
-/** Lists and values on screen older than `FRESH_MS` are read again; fresh ones stay as they are. */
 export function revalidateReferences(): void {
     revalidation += 1;
     for (const listener of revalidationListeners) listener();
 }
 
-/** Changes on every `revalidateReferences`; an effect that fetches lists it among its dependencies. */
 export function useReferenceRevalidation(): number {
     return React.useSyncExternalStore(subscribeRevalidation, () => revalidation, () => revalidation);
 }
 
-/**
- * The cached list for `key`, refreshed when stale. A null key shows nothing
- * and fetches nothing.
- */
 export function useCachedList<T>(
     cache: ListCache<T>,
     key: string | null,
@@ -433,24 +431,18 @@ export function useCachedList<T>(
     const loadMore = React.useCallback(() => {
         if (key && active) cache.loadMore(key);
     }, [active, cache, key]);
-    /** Settles once the list is read again. */
     const retry = React.useCallback(
         () => (key && active ? cache.ensure(key, fetchPage, { force: true }) : Promise.resolve()),
         [active, cache, fetchPage, key],
     );
 
     return {
-        ...(snapshot ?? { status: 'loading', unavailable: null, items: [], hasMore: false, refreshing: false, loadingMore: false, error: null }),
+        ...(snapshot ?? { status: 'loading', unavailable: null, items: [], hasMore: false, refreshing: false, loadingMore: false, error: null, skipped: [], pageReads: [] }),
         loadMore,
         retry,
     };
 }
 
-/**
- * The cached value for `key`, fetched on first use. A null key stays idle.
- * With `fetchNow` false it shows what the cache already has and asks nothing,
- * so a caller can wait before asking without hiding a known answer.
- */
 export function useCachedValue<T>(
     cache: ValueCache<T>,
     key: string | null,
@@ -470,7 +462,3 @@ export function useCachedValue<T>(
 
     return snapshot ?? { status: 'idle' };
 }
-
-export type ListSkip = { reason: string; provider?: string; instanceId?: string };
-export type ReadStamp = { revision: number; fetchedAt: number };
-export type PageRead<T> = { items: T[]; hasMore: boolean; nextCursor?: string | null; skips?: ListSkip[] };

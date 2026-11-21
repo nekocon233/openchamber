@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -49,8 +50,15 @@ const parse = (content) => {
   return { version: parsedVersion, releaseDate, files };
 };
 
+// external: https://www.electron.build/auto-update.html#updateinfo minimumSystemVersion uses the Darwin kernel release, so Darwin 22 keeps unsupported Macs from updating to Electron 45.
+const MAC_MINIMUM_DARWIN_VERSION = '22.0.0';
+
 const serialize = (data) => {
-  const lines = [`version: ${data.version}`, 'files:'];
+  const lines = [`version: ${data.version}`];
+  if (data.minimumSystemVersion) {
+    lines.push(`minimumSystemVersion: ${data.minimumSystemVersion}`);
+  }
+  lines.push('files:');
   for (const file of data.files) {
     lines.push(`  - url: ${file.url}`);
     lines.push(`    sha512: ${file.sha512}`);
@@ -72,15 +80,41 @@ const read = async (subdir, filename) => {
   }
 };
 
+const manifestFromReleaseAsset = async (assets, name, token) => {
+  const asset = assets.find((entry) => entry.name === name);
+  if (!asset) throw new Error(`Release asset ${name} is missing, so its update manifest cannot be built`);
+  const response = await fetch(asset.url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/octet-stream' },
+  });
+  if (!response.ok) throw new Error(`Failed to download ${name}: ${response.status} ${await response.text()}`);
+  const hash = createHash('sha512');
+  let size = 0;
+  for await (const chunk of response.body) {
+    hash.update(chunk);
+    size += chunk.length;
+  }
+  if (size !== asset.size) throw new Error(`Downloaded ${size} bytes of ${name}, the release lists ${asset.size}`);
+  return { version, releaseDate: asset.updated_at, files: [{ url: name, sha512: hash.digest('base64'), size }] };
+};
+
 const output = {};
 
-// Finishing a published release rebuilds macOS only; its Windows manifests
-// are already on the release and stay untouched.
-const macOnly = process.env.MAC_ONLY === '1';
+const windowsFromRelease = process.env.WINDOWS_FROM_RELEASE === '1';
 
 let winX64 = null;
 let winArm64 = null;
-if (!macOnly) {
+if (windowsFromRelease) {
+  const releaseId = process.env.RELEASE_ID;
+  const token = process.env.GITHUB_TOKEN;
+  if (!releaseId || !token) throw new Error('RELEASE_ID and GITHUB_TOKEN are required to read the Windows installers');
+  const response = await fetch(`https://api.github.com/repos/${repo}/releases/${releaseId}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+  });
+  if (!response.ok) throw new Error(`Failed to read release ${releaseId}: ${response.status} ${await response.text()}`);
+  const { assets } = await response.json();
+  output['latest.yml'] = serialize(await manifestFromReleaseAsset(assets, `OpenChamber-${version}-win-x64.exe`, token));
+  output['latest-arm64.yml'] = serialize(await manifestFromReleaseAsset(assets, `OpenChamber-${version}-win-arm64.exe`, token));
+} else {
   winX64 = await read('latest-yml-x86_64-pc-windows-msvc', 'latest.yml');
   winArm64 = await read('latest-yml-aarch64-pc-windows-msvc', 'latest.yml');
   if (!winX64 || !winArm64) {
@@ -90,17 +124,14 @@ if (!macOnly) {
   output['latest-arm64.yml'] = serialize(winArm64);
 }
 
-// One manifest serves both Mac architectures. The updater falls back to x64
-// files when it lists no arm64 ones, so a manifest missing an architecture
-// moves Apple Silicon users onto the Intel build under Rosetta.
 const macX64 = await read('latest-yml-x86_64-apple-darwin', 'latest-mac.yml');
 const macArm64 = await read('latest-yml-aarch64-apple-darwin', 'latest-mac.yml');
 if (!macX64 || !macArm64) {
   throw new Error('Both x64 and arm64 macOS update manifests are required');
 }
 // A manifest from another tag would point the updater at a different version's
-// files. A macOS-only run leaves the Windows manifests unset, and those stay
-// on the release as they are.
+// files. A WINDOWS_FROM_RELEASE run builds Windows manifests from the release
+// assets directly, leaving winX64 and winArm64 unset here.
 for (const [name, manifest] of Object.entries({ winX64, winArm64, macX64, macArm64 })) {
   if (manifest && manifest.version !== version) {
     throw new Error(`${name} update manifest version ${manifest.version || '<missing>'} does not match ${version}`);
@@ -108,6 +139,7 @@ for (const [name, manifest] of Object.entries({ winX64, winArm64, macX64, macArm
 }
 output['latest-mac.yml'] = serialize({
   version: macArm64.version,
+  minimumSystemVersion: MAC_MINIMUM_DARWIN_VERSION,
   files: [...macArm64.files, ...macX64.files],
   releaseDate: macArm64.releaseDate,
 });

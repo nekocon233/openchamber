@@ -68,6 +68,33 @@ describe('ui auth client credential seam', () => {
     auth.dispose();
   });
 
+  it('preserves upgrade cookie handling with a null response', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth();
+    try {
+      const req = { headers: { host: 'localhost:3000', upgrade: 'websocket' } };
+      await expect(auth.ensureSessionToken(req, null)).rejects.toThrow("Cannot read properties of null (reading 'setHeader')");
+      req.headers.cookie = 'oc_ui_session_3000=existing';
+      expect(await auth.ensureSessionToken(req, null)).toBe('existing');
+    } finally {
+      auth.dispose();
+    }
+  });
+
+  it('accepts upgrade bearer credentials without a response', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({
+      clientAuthController: {
+        authenticateBearerToken: async () => ({ ok: true, clientId: 'device-1' }),
+      },
+    });
+    try {
+      expect(await auth.ensureSessionToken({ headers: { authorization: 'Bearer client-token', upgrade: 'websocket' } }, null)).toBe('client:device-1');
+    } finally {
+      auth.dispose();
+    }
+  });
+
   it('accepts bearer client credentials when UI password auth is enabled', async () => {
     const createUiAuth = await loadCreateUiAuth();
     const auth = createUiAuth({
@@ -391,6 +418,8 @@ describe('ui auth client credential seam', () => {
       { method: 'GET', path: '/api/event', url: `/api/event?oc_url_token=${encodeURIComponent(guestToken)}` },
       { method: 'GET', path: '/api/guests/other/panel/main.js', url: `/api/guests/other/panel/main.js?oc_url_token=${encodeURIComponent(guestToken)}` },
       { method: 'GET', path: '/api/guests', url: `/api/guests?oc_url_token=${encodeURIComponent(guestToken)}` },
+      // A route named like the guest (`/api/guests/marks` for a guest `marks`) is not one of its files.
+      { method: 'GET', path: '/api/guests/hello', url: `/api/guests/hello?oc_url_token=${encodeURIComponent(guestToken)}` },
     ]) {
       const forbiddenRes = createResponse();
       let forbiddenCalled = false;

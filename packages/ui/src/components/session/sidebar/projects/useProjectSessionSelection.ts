@@ -30,17 +30,6 @@ type MissingProjectSessionSelection =
   | { kind: 'select-session'; sessionId: string }
   | { kind: 'none' };
 
-/**
- * Resolves the active-project action after its rendered session map does not
- * contain the current session.
- *
- * Authoritative ownership decides. A session owned by this project is kept, and
- * so is a session whose owner is still unknown: an unresolved owner is not
- * evidence that the session belongs elsewhere, and replacing the selection on
- * that basis discards a choice the user just made. The caller leaves the
- * project unprocessed while ownership is unknown, so this runs again — and can
- * still select — once ownership resolves.
- */
 export function resolveMissingProjectSessionSelection<T>({
   activeProjectId,
   currentSessionId,
@@ -158,11 +147,6 @@ const useProjectSessionSelection = (args: Args): void => {
       return;
     }
 
-    // The project active when the list mounts (app start, the sidebar
-    // reopening or switching modes) is not a project the user just switched
-    // to. What opens then belongs to the launch (the last session, a link, or
-    // the draft); picking this project's remembered or first session here
-    // replaced it with a session the user never chose.
     if (previousActiveProjectRef.current === null) {
       previousActiveProjectRef.current = activeProjectId;
       return;
@@ -192,9 +176,6 @@ const useProjectSessionSelection = (args: Args): void => {
       fallbackSessionId: projectSessionMeta.firstSessionByProject.get(activeProjectId)?.id ?? null,
     });
 
-    // Only a confirmed owner marks this project done. While ownership is still
-    // resolving the project stays unprocessed, so the selection runs again once
-    // the owner is known instead of being skipped for the rest of the session.
     if (selection.kind === 'preserve-current') {
       if (currentSessionOwnerProjectId === activeProjectId) {
         previousActiveProjectRef.current = activeProjectId;

@@ -3,10 +3,6 @@ import type { Part } from '@/lib/opencode/model';
 
 import type { MessageSlice } from '../lib/turns/timelineRows';
 
-/**
- * The part of its message a transcript row draws, when a long answer spans
- * several rows (`timelineRows.ts`); null draws the whole message.
- */
 export const MessageSliceContext = createContext<MessageSlice | null>(null);
 
 /** Select the row's parts without changing the complete message used by actions. */

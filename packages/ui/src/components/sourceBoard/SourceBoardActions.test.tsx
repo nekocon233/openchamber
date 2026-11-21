@@ -74,7 +74,7 @@ const render = async (pull = PULL, context: SourceControlReadContext | null = CO
     root ??= createRoot(host);
     await act(async () => root?.render(
         <I18nProvider><RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="">
-            <SourceBoardActions item={{ source: 'github', reference: pull }} project={null} context={context}
+            <SourceBoardActions item={{ source: 'repository', reference: pull }} project={null} context={context}
                 onStartWorktree={() => { throw new Error('This test must never start a worktree'); }} onChanged={() => { refreshes++; }}
                 onMergeSubmitted={returnOnSubmit ? () => { completions.push(refreshes); } : undefined} />
         </SyncProvider></RuntimeAPIContext.Provider></I18nProvider>,

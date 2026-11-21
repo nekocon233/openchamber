@@ -1,208 +1,137 @@
 import { create } from 'zustand';
-
-import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import { normalizePath } from '@/lib/pathNormalization';
+import { z } from 'zod';
+import type { Session } from '@/lib/opencode/model';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { normalizePath } from '@/lib/pathNormalization';
+import { getPinnedSessionKey, isSessionPinnedInMetadata } from '@/lib/sessionPins';
 import { useSidebarStateStore } from './useSidebarStateStore';
+export { getPinnedSessionKey } from '@/lib/sessionPins';
+import { useGlobalSessionsStore } from './useGlobalSessionsStore';
 import { getDeferredSafeStorage } from './utils/safeStorage';
+
+type SessionPinnedStore = { ids: Set<string> };
 
 const STORAGE_KEY = 'oc.sessions.pinned.v2';
 const LEGACY_STORAGE_KEY = 'oc.sessions.pinned';
 
-type SessionPinnedTarget = { directory: string; sessionId: string };
-
-type PersistedPins = { version: 2; sessions: Record<string, number> };
-
-const setsEqual = (left: Set<string>, right: Set<string>): boolean => (
-  left.size === right.size && [...left].every((id) => right.has(id))
-);
-
-const usesAuthoritativeSidebarState = (): boolean => (
-  getRegisteredRuntimeAPIs()?.sidebarState?.supported === true
-);
-
-type PinnedSessionState = {
-  ids: Set<string>;
-  touchedAt: Record<string, number>;
-};
-
-type SessionPinnedStore = PinnedSessionState & {
-  setIds: (next: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
-  toggle: (target: SessionPinnedTarget | string) => void;
-  clearPinnedSession: (runtimeKey: string, directory: string, sessionId: string) => void;
-};
+type LegacyPin = { key: string; runtimeKey: string; directory: string; sessionId: string };
 
 const storage = getDeferredSafeStorage();
 
-export const getPinnedSessionKey = (runtimeKey: string, directory: string, sessionId: string): string | null => {
-  const normalizedDirectory = normalizePath(directory);
-  if (!runtimeKey || !normalizedDirectory || !sessionId) return null;
-  return JSON.stringify([runtimeKey, normalizedDirectory, sessionId]);
-};
+const pinKeySchema = z.tuple([z.string(), z.string(), z.string()]);
 
-const parsePinnedSessionKey = (key: string): [string, string, string] | null => {
+const parsePinnedSessionKey = (key: string): LegacyPin | null => {
   try {
-    const parsed = JSON.parse(key) as unknown;
-    if (!Array.isArray(parsed) || parsed.length !== 3) return null;
-    const [runtimeKey, directory, sessionId] = parsed;
-    if (typeof runtimeKey !== 'string' || typeof directory !== 'string' || typeof sessionId !== 'string') return null;
+    const parsed = pinKeySchema.safeParse(JSON.parse(key));
+    if (!parsed.success) return null;
+    const [runtimeKey, directory, sessionId] = parsed.data;
     const normalizedDirectory = normalizePath(directory);
     if (!runtimeKey || !normalizedDirectory || normalizedDirectory !== directory || !sessionId) return null;
-    return [runtimeKey, normalizedDirectory, sessionId];
+    return { key, runtimeKey, directory: normalizedDirectory, sessionId };
   } catch {
     return null;
   }
 };
 
-export const isSessionPinned = (ids: Set<string>, directory: string | null | undefined, sessionId: string): boolean => {
-  if (ids.has(sessionId)) return true;
-  if (!directory) return false;
-  const key = getPinnedSessionKey(getRuntimeKey(), directory, sessionId);
-  return key ? ids.has(key) : false;
-};
+const legacyStorageSchema = z.object({ version: z.literal(2), sessions: z.record(z.string(), z.number()) });
 
-const readPinned = (): PinnedSessionState => {
+const readLegacyPins = (): Map<string, LegacyPin> => {
   storage.removeItem(LEGACY_STORAGE_KEY);
   const raw = storage.getItem(STORAGE_KEY);
-  if (raw === null) return { ids: new Set(), touchedAt: {} };
+  if (raw === null) return new Map();
   try {
-    const parsed = JSON.parse(raw) as Partial<PersistedPins>;
-    if (parsed.version !== 2 || !parsed.sessions || typeof parsed.sessions !== 'object') return { ids: new Set(), touchedAt: {} };
-    const entries = Object.entries(parsed.sessions)
-      .filter(([key, touchedAt]) => parsePinnedSessionKey(key) && typeof touchedAt === 'number' && Number.isFinite(touchedAt))
-      .sort((left, right) => right[1] - left[1]);
-    return { ids: new Set(entries.map(([key]) => key)), touchedAt: Object.fromEntries(entries) };
+    const parsed = legacyStorageSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return new Map();
+    const pins = Object.keys(parsed.data.sessions).flatMap((key) => {
+      const pin = parsePinnedSessionKey(key);
+      return pin ? [[key, pin] as const] : [];
+    });
+    return new Map(pins);
   } catch {
     storage.removeItem(STORAGE_KEY);
-    return { ids: new Set(), touchedAt: {} };
+    return new Map();
   }
 };
 
-const boundPinnedState = (ids: Set<string>, touchedAt: Record<string, number>): PinnedSessionState => {
-  const entries = [...ids]
-    .filter((key) => parsePinnedSessionKey(key) !== null)
-    .map((key) => [key, touchedAt[key] ?? Date.now()] as const)
-    .sort((left, right) => right[1] - left[1]);
-  return {
-    ids: new Set(entries.map(([key]) => key)),
-    touchedAt: Object.fromEntries(entries),
-  };
+const legacyPins = readLegacyPins();
+const pendingPins = new Map<string, boolean>();
+const pinnedBySession = new WeakMap<Session, boolean>();
+
+const isPinnedInMetadata = (session: Session): boolean => {
+  const cached = pinnedBySession.get(session);
+  if (cached !== undefined) return cached;
+  const pinned = isSessionPinnedInMetadata(session);
+  pinnedBySession.set(session, pinned);
+  return pinned;
 };
 
-const persistPinned = ({ ids, touchedAt }: PinnedSessionState): void => {
-  const sessions = Object.fromEntries([...ids].map((key) => [key, touchedAt[key] ?? Date.now()]));
-  storage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, sessions }));
-};
+function sharedPins(runtimeKey: string): LegacyPin[] {
+  const sidebar = useSidebarStateStore.getState();
+  if (sidebar.runtimeKey !== runtimeKey || !sidebar.snapshot?.pinnedSessionIds.length) return [];
+  const records = useGlobalSessionsStore.getState().entityById;
+  const pins: LegacyPin[] = [];
+  for (const sessionId of sidebar.snapshot.pinnedSessionIds) {
+    const directory = records.get(sessionId)?.directory;
+    const key = directory ? getPinnedSessionKey(runtimeKey, directory, sessionId) : null;
+    if (key && directory) pins.push({ key, runtimeKey, directory, sessionId });
+  }
+  return pins;
+}
 
-const getSharedSessionIds = (ids: Set<string>): Set<string> => {
-  const result = new Set<string>();
+const derivePinnedIds = (): Set<string> => {
   const runtimeKey = getRuntimeKey();
-  for (const id of ids) {
-    const parsed = parsePinnedSessionKey(id);
-    if (!parsed) result.add(id);
-    else if (parsed[0] === runtimeKey) result.add(parsed[2]);
+  const ids = new Set<string>();
+  for (const session of useGlobalSessionsStore.getState().activeSessions) {
+    if (!session.directory || !isPinnedInMetadata(session)) continue;
+    const key = getPinnedSessionKey(runtimeKey, session.directory, session.id);
+    if (key) ids.add(key);
   }
-  return result;
+  for (const pin of legacyPins.values()) {
+    if (pin.runtimeKey === runtimeKey) ids.add(pin.key);
+  }
+  for (const pin of sharedPins(runtimeKey)) ids.add(pin.key);
+  for (const [key, pinned] of pendingPins) {
+    if (parsePinnedSessionKey(key)?.runtimeKey !== runtimeKey) continue;
+    if (pinned) ids.add(key);
+    else ids.delete(key);
+  }
+  return ids;
 };
 
-const submitSharedPinChanges = (current: Set<string>, next: Set<string>): void => {
-  for (const sessionId of current) {
-    if (!next.has(sessionId)) {
-      void useSidebarStateStore.getState().mutate({ type: 'session.unpin', sessionId }).catch(() => {});
-    }
-  }
-  for (const sessionId of next) {
-    if (!current.has(sessionId)) {
-      void useSidebarStateStore.getState().mutate({ type: 'session.pin', sessionId }).catch(() => {});
-    }
-  }
+const sameIds = (left: ReadonlySet<string>, right: ReadonlySet<string>): boolean => (
+  left.size === right.size && [...left].every((key) => right.has(key))
+);
+
+export const useSessionPinnedStore = create<SessionPinnedStore>(() => ({ ids: derivePinnedIds() }));
+
+const publishPinnedIds = (): void => {
+  const next = derivePinnedIds();
+  if (!sameIds(next, useSessionPinnedStore.getState().ids)) useSessionPinnedStore.setState({ ids: next });
 };
 
-const initial = readPinned();
-
-export const useSessionPinnedStore = create<SessionPinnedStore>((set, get) => ({
-  ids: initial.ids,
-  touchedAt: initial.touchedAt,
-  setIds: (next) => {
-    const current = get().ids;
-    const resolved = typeof next === 'function' ? next(current) : next;
-    if (usesAuthoritativeSidebarState()) {
-      const currentShared = getSharedSessionIds(current);
-      const nextShared = getSharedSessionIds(resolved);
-      if (setsEqual(currentShared, nextShared)) return;
-      set({ ids: nextShared, touchedAt: {} });
-      submitSharedPinChanges(currentShared, nextShared);
-      return;
-    }
-
-    if (resolved === current || setsEqual(resolved, current)) return;
-    const pinnedState = boundPinnedState(resolved, get().touchedAt);
-    set(pinnedState);
-    persistPinned(pinnedState);
-  },
-  toggle: (target) => {
-    const authoritative = usesAuthoritativeSidebarState();
-    const sessionId = typeof target === 'string' ? target : target.sessionId;
-    if (authoritative) {
-      const ids = getSharedSessionIds(get().ids);
-      if (ids.has(sessionId)) ids.delete(sessionId);
-      else ids.add(sessionId);
-      get().setIds(ids);
-      return;
-    }
-    const key = typeof target === 'string'
-      ? null
-      : getPinnedSessionKey(getRuntimeKey(), target.directory, sessionId);
-    if (!key) return;
-    const ids = new Set(get().ids);
-    const touchedAt = { ...get().touchedAt };
-    if (ids.has(key)) {
-      ids.delete(key);
-      delete touchedAt[key];
-    } else {
-      ids.add(key);
-      touchedAt[key] = Date.now();
-    }
-    const pinnedState = boundPinnedState(ids, touchedAt);
-    set(pinnedState);
-    persistPinned(pinnedState);
-  },
-  clearPinnedSession: (runtimeKey, directory, sessionId) => {
-    if (usesAuthoritativeSidebarState()) {
-      const ids = getSharedSessionIds(get().ids);
-      if (runtimeKey !== getRuntimeKey() || !ids.has(sessionId)) return;
-      ids.delete(sessionId);
-      get().setIds(ids);
-      return;
-    }
-    const key = getPinnedSessionKey(runtimeKey, directory, sessionId);
-    if (!key || !get().ids.has(key)) return;
-    const ids = new Set(get().ids);
-    ids.delete(key);
-    get().setIds(ids);
-  },
-}));
-
-const synchronizePinnedSessionsFromSidebarState = (): void => {
-  const snapshot = useSidebarStateStore.getState().snapshot;
-  if (!snapshot) return;
-  const current = useSessionPinnedStore.getState().ids;
-  const next = new Set(snapshot.pinnedSessionIds);
-  if (!setsEqual(current, next)) {
-    useSessionPinnedStore.setState({ ids: next, touchedAt: {} });
-  }
-};
-
-useSidebarStateStore.subscribe((state, previousState) => {
-  if (state.snapshot) {
-    synchronizePinnedSessionsFromSidebarState();
-    return;
-  }
-  if (state.runtimeKey !== previousState.runtimeKey && previousState.snapshot) {
-    useSessionPinnedStore.setState(
-      usesAuthoritativeSidebarState()
-        ? { ids: new Set(), touchedAt: {} }
-        : readPinned(),
-    );
-  }
+useSidebarStateStore.subscribe((state, previous) => {
+  if (state.snapshot !== previous.snapshot || state.runtimeKey !== previous.runtimeKey) publishPinnedIds();
 });
+
+useGlobalSessionsStore.subscribe((state, previous) => {
+  if (state.activeSessions !== previous.activeSessions) publishPinnedIds();
+});
+
+export const setPendingPin = (key: string, pinned: boolean | null): void => {
+  if (pinned === null) pendingPins.delete(key);
+  else pendingPins.set(key, pinned);
+  publishPinnedIds();
+};
+
+export const getLegacyPins = (runtimeKey: string): LegacyPin[] => (
+  [...new Map([...legacyPins.values(), ...sharedPins(runtimeKey)].filter((pin) => pin.runtimeKey === runtimeKey).map((pin) => [pin.key, pin])).values()]
+);
+
+export const forgetLegacyPins = (keys: readonly string[]): void => {
+  let changed = false;
+  for (const key of keys) changed = legacyPins.delete(key) || changed;
+  if (!changed) return;
+  if (legacyPins.size === 0) storage.removeItem(STORAGE_KEY);
+  else storage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, sessions: Object.fromEntries([...legacyPins.keys()].map((key) => [key, 0])) }));
+  publishPinnedIds();
+};

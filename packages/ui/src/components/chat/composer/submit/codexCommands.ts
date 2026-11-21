@@ -5,7 +5,7 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { CODEX_COMMAND_USAGE, codexSpeedVariant, codexReviewTarget, type CodexComposerCommand } from '@/lib/native-agents/codex-commands';
 import { codexVariantSettings } from '@/lib/native-agents/codex-speed';
 import { NATIVE_PROVIDER_CODEX, isUnifiedNativeSessionId } from '@/lib/native-agents/ids';
-import { useConfigStore } from '@/stores/useConfigStore';
+import { selectProvidersForDirectory, useConfigStore } from '@/stores/useConfigStore';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -30,6 +30,7 @@ type CommandContext = {
   t: ReturnType<typeof useI18n>['t'];
   isCurrent: () => boolean;
   openModelMenu: () => void;
+  pinned?: boolean;
 };
 
 export const executeCodexComposerCommand = async (
@@ -39,6 +40,17 @@ export const executeCodexComposerCommand = async (
   const { sessionId, directory, model, variant, agent, api, t, isCurrent } = context;
   const { name, argument } = command;
   const initialSelection = useConfigStore.getState();
+  const providers = context.pinned ? selectProvidersForDirectory(initialSelection, directory) : initialSelection.providers;
+  const pinnedSelectionOf = (id: string) => {
+    const state = useSelectionStore.getState();
+    const selectedAgent = state.getSessionAgentSelection(id) ?? agent;
+    const selectedModel = state.getSessionModelSelection(id);
+    const selectedVariant = state.getAgentModelVariantForSession(
+      id, selectedAgent, selectedModel?.providerId ?? NATIVE_PROVIDER_CODEX, selectedModel?.modelId ?? model,
+    );
+    return JSON.stringify([selectedAgent, selectedModel, selectedVariant]);
+  };
+  const initialPinnedSelection = context.pinned && sessionId ? pinnedSelectionOf(sessionId) : null;
   const invalid = () => new Error(t('chat.codexCommand.invalid', { command: CODEX_COMMAND_USAGE.get(name) ?? `/${name}` }));
   const requireSession = () => {
     if (!sessionId) throw new Error(t('chat.codexCommand.needsSession'));
@@ -48,16 +60,20 @@ export const executeCodexComposerCommand = async (
   const setSelection = async (nextModel: string, nextVariant: string | undefined, nextAgent = agent) => {
     if (!isCurrent()) return;
     const config = useConfigStore.getState();
-    if (config.currentProviderId !== initialSelection.currentProviderId
+    if (context.pinned) {
+      if (!sessionId || pinnedSelectionOf(sessionId) !== initialPinnedSelection) return;
+    } else if (config.currentProviderId !== initialSelection.currentProviderId
       || config.currentModelId !== initialSelection.currentModelId
       || config.currentVariant !== initialSelection.currentVariant
       || config.currentVariantSelection.override !== initialSelection.currentVariantSelection.override
       || config.currentAgentName !== initialSelection.currentAgentName) return;
     const selections = useSelectionStore.getState();
-    config.setAgent(nextAgent);
-    config.setProvider(NATIVE_PROVIDER_CODEX);
-    config.setModel(nextModel);
-    config.setCurrentVariantOverride(nextVariant ?? null, undefined);
+    if (!context.pinned) {
+      config.setAgent(nextAgent);
+      config.setProvider(NATIVE_PROVIDER_CODEX);
+      config.setModel(nextModel);
+      config.setCurrentVariantOverride(nextVariant ?? null, undefined);
+    }
     if (sessionId) {
       selections.saveSessionAgentSelection(sessionId, nextAgent);
       selections.saveSessionModelSelection(sessionId, NATIVE_PROVIDER_CODEX, nextModel);
@@ -73,7 +89,7 @@ export const executeCodexComposerCommand = async (
     case 'model':
     case 'reasoning': {
       if (!argument) { context.openModelMenu(); break; }
-      const models = useConfigStore.getState().providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models ?? [];
+      const models = providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models ?? [];
       const [requestedModel, effort, extra] = argument.split(/\s+/);
       if (extra || (name === 'reasoning' && effort)) throw invalid();
       const nextModel = models.find((entry) => entry.id === (name === 'model' ? requestedModel : model));
@@ -90,7 +106,7 @@ export const executeCodexComposerCommand = async (
     }
     case 'fast':
     case 'ultrafast': {
-      const current = useConfigStore.getState().providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models.find((entry) => entry.id === model);
+      const current = providers.find((provider) => provider.id === NATIVE_PROVIDER_CODEX)?.models.find((entry) => entry.id === model);
       const variants = listModelVariantIds(current?.variants);
       let effort = variant;
       if (effort === undefined && !variants.includes(`default-${name}`)) {

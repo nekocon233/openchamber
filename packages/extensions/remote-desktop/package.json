@@ -7,7 +7,7 @@
     "apiVersion": 1,
     "engines": { "openchamber": ">=2.6.1" },
     "contributes": {
-      "panel": { "id": "openchamber-builtin-desktop", "name": "Remote Desktop", "icon": "computer", "entry": "panel/index.html" },
+      "panel": { "id": "openchamber-builtin-desktop", "name": "Remote Desktop", "icon": "computer", "entry": "panel/index.html", "mobile": true },
       "page": true,
       "service": {
         "entry": "service/main.js",

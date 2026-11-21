@@ -2,6 +2,7 @@ import type { FormRequest, Session, SessionStatus } from '@/lib/opencode/model';
 
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
+import { isSpaceDirectory } from '@/lib/spaces/space-route';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { opencodeClient } from '@/lib/opencode/client';
 import { projectNativeQuestion } from '@/lib/native-agents/forms';
@@ -19,6 +20,7 @@ type ReadOptions = { signal?: AbortSignal };
 
 /** Statuses of the directory's native sessions: `{}` where this runtime has none, `null` when the read failed. */
 export const readNativeStatuses = async (directory: string, options?: ReadOptions): Promise<StatusMap | null> => {
+  if (isSpaceDirectory(directory)) return null;
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
   if (!nativeAgents?.supported) return {};
   try {
@@ -33,6 +35,7 @@ export const readNativeStatuses = async (directory: string, options?: ReadOption
 
 /** Questions the directory's native sessions wait on: `[]` where this runtime has none, `null` when the read failed. */
 export const readNativeForms = async (directory: string, options?: ReadOptions): Promise<FormRequest[] | null> => {
+  if (isSpaceDirectory(directory)) return [];
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
   if (!nativeAgents?.supported) return [];
   try {

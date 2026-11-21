@@ -7,10 +7,11 @@ import { emitSyncConfigChanged } from "./sync-refs"
 import { warmChatsRootDirectory } from "../lib/chatDirectories"
 import { runBackgroundNetworkTask } from "../lib/background-network"
 import { refreshBackgroundShells } from "./background-shells"
-import { isNativeSessionId } from '../lib/native-agents/ids';
-import { heldNativeForms, heldNativeStatuses, readNativeForms, readNativeStatuses } from './native-directory-snapshots';
+import { isNativeSessionId } from "../lib/native-agents/ids"
+import { heldNativeForms, heldNativeStatuses, readNativeForms, readNativeStatuses } from "./native-directory-snapshots"
 import {
   readDirectoryStatusSnapshot,
+  selectHeldSessionStatuses,
   readDirectoryFormSnapshot,
   readDirectoryPermissionSnapshot,
   type DirectoryRecoverySource,
@@ -20,6 +21,7 @@ import {
   getDirectoryOwnedSessionIds,
   getGlobalSessionStatusRevision,
 } from "./global-session-status"
+import { noteQuestionFormSnapshot } from "./recoverable-questions"
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
@@ -29,14 +31,9 @@ function projectID(directory: string, projects: Project[]) {
   )?.id
 }
 
-// ---------------------------------------------------------------------------
-// Bootstrap global state
-// ---------------------------------------------------------------------------
 
 export async function bootstrapGlobal(set: (patch: Partial<GlobalState>) => void) {
   const results = await Promise.allSettled([
-    // Sync chat classification needs the chats root before session lists load;
-    // it resolves alongside the other bootstrap calls, not ahead of them.
     warmChatsRootDirectory(),
     retry(async () => {
       const [location, home] = await Promise.all([opencodeClient.getLocation(), opencodeClient.getFilesystemHome()])
@@ -60,8 +57,6 @@ export async function bootstrapGlobal(set: (patch: Partial<GlobalState>) => void
     console.error("[bootstrap] global bootstrap failed", errors[0])
   }
 
-  // If ALL requests failed, OpenCode is likely down — fetch the OpenChamber
-  // health endpoint (outside the readiness gate) to get the actual error reason.
   if (errors.length === results.length) {
     let message = errors[0] instanceof Error ? errors[0].message : String(errors[0])
     try {
@@ -83,9 +78,6 @@ export async function bootstrapGlobal(set: (patch: Partial<GlobalState>) => void
   }
 }
 
-// ---------------------------------------------------------------------------
-// Bootstrap per-directory state
-// ---------------------------------------------------------------------------
 
 type DirectoryBootstrapInput = {
   directory: string
@@ -114,18 +106,16 @@ export function bootstrapDirectory(input: DirectoryBootstrapInput) {
       return "failed"
     }
   })()
-  // Initialization has its own completion and network capacity. A slow config
-  // or directory cannot hold the session-list scheduler's slot.
-  const environment = initializeDirectory(input)
+  const environment = initializeDirectory(input, sessions)
   return { sessions, environment }
 }
 
-async function initializeDirectory(input: DirectoryBootstrapInput): Promise<BootstrapResult> {
+async function initializeDirectory(input: DirectoryBootstrapInput, sessions: Promise<BootstrapResult>): Promise<BootstrapResult> {
   const { directory, store, set, global: g } = input
-  const read = <T>(request: () => Promise<T>) => retry(() => runBackgroundNetworkTask(() => {
+  const read = <T>(request: () => Promise<T>, priority?: "active-session") => retry(() => runBackgroundNetworkTask(() => {
     if (input.isStale?.()) throw new Error("Directory initialization superseded")
     return request()
-  }))
+  }, priority))
   const commit = (patch: Partial<State>): boolean => {
     if (input.isStale?.()) return false
     set(patch)
@@ -133,7 +123,6 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
   }
   const state = store.getState()
 
-  // Seed from global state while we fetch directory-specific data
   const seededProject = projectID(directory, g.projects)
   if (seededProject) commit({ project: seededProject })
   if (Object.keys(state.config ?? {}).length === 0 && Object.keys(g.config ?? {}).length > 0) {
@@ -142,39 +131,37 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
   commit({ status: "partial" })
   if (input.isStale?.()) return "stale"
 
-  // Queue live recovery first. Each read commits independently and a failing
-  // config read cannot suppress pending form or permission recovery.
   const critical = Promise.allSettled([
-    read(async () => {
-      // Capture the global-status baseline before the fetch so statuses
-      // changed by events while the request is in flight are not overwritten.
-      const statusBaselineRevision = getGlobalSessionStatusRevision()
-      // A failed native read keeps the held native statuses, and the global
-      // settle below leaves native sessions alone.
-      let covers: (sessionId: string) => boolean = () => true
-      let nativeSessionStatusReady = false
-      const session_status = await readDirectoryStatusSnapshot(store, async () => {
-        const [openCode, native] = await Promise.all([
-          opencodeClient.getActiveSessionStatuses(directory),
-          readNativeStatuses(directory),
-        ])
-        if (openCode === null) throw new Error("session.active failed")
-        nativeSessionStatusReady = native !== null
-        if (native === null) covers = (sessionId) => !isNativeSessionId(sessionId)
-        return {
-          ...openCode,
-          ...(native ?? heldNativeStatuses(store.getState().session_status)),
-        }
-      })
-      if (!commit({ session_status, sessionStatusReady: true, nativeSessionStatusReady })) return
-      applyGlobalSessionStatusSnapshot(
-        directory,
-        session_status,
-        getDirectoryOwnedSessionIds(directory, store.getState().session),
-        statusBaselineRevision,
-        "authoritative",
-        covers,
-      )
+    sessions.then(async (listed) => {
+      if (listed !== "complete") return
+      await read(async () => {
+        const statusBaselineRevision = getGlobalSessionStatusRevision()
+        let covers: (sessionId: string) => boolean = () => true
+        let nativeSessionStatusReady = false
+        const session_status = await readDirectoryStatusSnapshot(store, async () => {
+          const [openCode, native] = await Promise.all([
+            opencodeClient.getActiveSessionStatuses(directory),
+            readNativeStatuses(directory),
+          ])
+          if (openCode === null) throw new Error("session.active failed")
+          nativeSessionStatusReady = native !== null
+          if (native === null) covers = (sessionId) => !isNativeSessionId(sessionId)
+          const merged = {
+            ...openCode,
+            ...(native ?? heldNativeStatuses(store.getState().session_status)),
+          }
+          return selectHeldSessionStatuses(merged, store.getState().session)
+        })
+        if (!commit({ session_status, sessionStatusReady: true, nativeSessionStatusReady })) return
+        applyGlobalSessionStatusSnapshot(
+          directory,
+          session_status,
+          getDirectoryOwnedSessionIds(directory, store.getState().session),
+          statusBaselineRevision,
+          "authoritative",
+          covers,
+        )
+      }, "active-session")
     }),
     read(async () => {
       const form = await readDirectoryFormSnapshot(store, async () => {
@@ -184,7 +171,7 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
         ])
         return [...openCode, ...(native ?? heldNativeForms(store.getState().form))]
       })
-      commit({ form })
+      if (commit({ form })) noteQuestionFormSnapshot(directory, Object.values(form).flat())
     }),
     read(async () => {
       const permission = await readDirectoryPermissionSnapshot(store, () => (
@@ -204,15 +191,8 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
       }),
     ),
   ])
-  // MCP status and the command list are deliberately not read here. Reading
-  // MCP state initializes the directory's whole stdio server fleet as an
-  // OpenCode side effect, and listing commands enumerates MCP prompts, which
-  // touches that same state. Both surfaces fetch on demand through their own
-  // stores (useMcpStore, useCommandsStore) instead.
   const enrichment = Promise.allSettled([
     read(() => opencodeClient.getVcs(directory).then((vcs) => commit({ vcs }))),
-    // Commands the agent left running in the background, including ones whose
-    // start or exit this client missed.
     read(() => refreshBackgroundShells(directory, (target) => opencodeClient.listRunningShells(target))),
   ])
   const [results, enrichmentResults] = await Promise.all([critical, enrichment])

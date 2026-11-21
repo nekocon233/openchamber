@@ -13,9 +13,14 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Button } from '@/components/ui/button';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { notifyFileContentInvalidated } from '@/lib/fileContentInvalidation';
+import { formatFileSize } from '@/lib/fileSize';
 import { useI18n } from '@/lib/i18n';
 import { captureRuntimeInstance, getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { droppedUploadFiles, selectedUploadFiles, uploadFileTree, type UploadDropData, type UploadEntry, type UploadSelection } from './fileTreeUpload';
+
+import type { UploadFailure } from './uploadFailure';
+
+const MAX_REPORTED_FAILURES = 3;
 
 type UploadDestination = {
   directory: string;
@@ -29,7 +34,6 @@ type UploadConflicts = UploadDestination & {
 };
 
 type FileTreeUploadOptions = {
-  /** Normalized workspace root the tree shows; uploads are scoped to it. */
   root: string;
   refreshDirectories: (directories: string[]) => Promise<void>;
 };
@@ -94,6 +98,25 @@ export const useFileTreeUpload = ({ root, refreshDirectories }: FileTreeUploadOp
     };
   }, [root]);
 
+  const describeFailure = React.useCallback(({ name, reason, limitBytes }: UploadFailure): string => {
+    switch (reason) {
+      case 'too-large': {
+        const limit = formatFileSize(limitBytes);
+        return limit
+          ? t('sidebarFilesTree.toast.uploadFailedTooLarge', { name, limit })
+          : t('sidebarFilesTree.toast.uploadFailedUnknown', { name });
+      }
+      case 'permission':
+        return t('sidebarFilesTree.toast.uploadFailedPermission', { name });
+      case 'outside-workspace':
+        return t('sidebarFilesTree.toast.uploadFailedOutsideWorkspace', { name });
+      case 'folder-missing':
+        return t('sidebarFilesTree.toast.uploadFailedFolderMissing', { name });
+      default:
+        return t('sidebarFilesTree.toast.uploadFailedUnknown', { name });
+    }
+  }, [t]);
+
   const uploadSelection = React.useCallback(async (
     destination: UploadDestination,
     readSelection: () => UploadSelection | Promise<UploadSelection>,
@@ -134,8 +157,30 @@ export const useFileTreeUpload = ({ root, refreshDirectories }: FileTreeUploadOp
           ? 'sidebarFilesTree.toast.uploadedWithoutConflicts'
           : 'sidebarFilesTree.toast.uploaded'));
       }
-      if (result.failures.length > 0) {
-        toast.error(t('sidebarFilesTree.toast.uploadFailed'), { description: result.failures.filter(Boolean).slice(0, 5).join('\n') });
+      const failures = result.failureDetails;
+      if (failures.length > 0) {
+        const reported = failures.filter((failure) => failure.name);
+        const unreportedCount = reported.length - MAX_REPORTED_FAILURES;
+        if (failures.length === 1 && failures[0].name) {
+          toast.error(describeFailure(failures[0]));
+        } else {
+          toast.error(t('sidebarFilesTree.toast.uploadFailed'), reported.length > 0 ? {
+            description: (
+              <div className="flex flex-col gap-0.5">
+                {reported.slice(0, MAX_REPORTED_FAILURES).map((failure, index) => (
+                  <div key={`${failure.name}-${index}`}>{describeFailure(failure)}</div>
+                ))}
+                {unreportedCount > 0 ? (
+                  <div>
+                    {unreportedCount === 1
+                      ? t('sidebarFilesTree.toast.uploadFailedAndMoreSingle', { count: unreportedCount })
+                      : t('sidebarFilesTree.toast.uploadFailedAndMorePlural', { count: unreportedCount })}
+                  </div>
+                ) : null}
+              </div>
+            ),
+          } : undefined);
+        }
       }
       if (result.conflicts.length > 0) {
         setUploadConflicts({ ...destination, entries: result.conflicts });
@@ -148,7 +193,7 @@ export const useFileTreeUpload = ({ root, refreshDirectories }: FileTreeUploadOp
         setUploadingDirectory(null);
       }
     }
-  }, [files, t]);
+  }, [describeFailure, files, t]);
 
   const uploadDroppedFiles = React.useCallback((directory: string, dataTransfer: UploadDropData) => {
     const destination = captureDestination(directory);

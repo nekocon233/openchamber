@@ -7,38 +7,12 @@ import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/useUIStore';
 import { LAYOUT_ANIMATION_EASING } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
-import { WorkStatusGoalRow } from './WorkStatusGoalRow';
-import { WorkStatusPrimaryGroup } from './WorkStatusPrimaryGroup';
-import { WorkStatusUsageSection } from './WorkStatusUsageSection';
-import { WorkStatusTelemetrySection } from './WorkStatusTelemetrySection';
-import { WorkStatusSubagentsSection } from './WorkStatusSubagentsSection';
-import { WorkStatusChecklistSection } from './WorkStatusChecklistSection';
-import { WorkStatusBackgroundTasksSection } from './WorkStatusBackgroundTasksSection';
-import { WorkStatusPlanSection } from './WorkStatusPlanSection';
-import { WorkStatusTodosSection } from './WorkStatusTodosSection';
-import { WorkStatusMcpSection } from './WorkStatusMcpSection';
-import { WorkStatusPinnedSection } from './WorkStatusPinnedSection';
-import { WorkStatusContextSection } from './WorkStatusContextSection';
 import { WorkStatusSectionsDialog } from './WorkStatusSectionsDialog';
-import { WorkStatusExtensionSection } from './WorkStatusExtensionSection';
-import {
-  areAllWorkStatusSectionsHidden,
-  getWorkStatusPanelPresentation,
-  isExtensionSectionId,
-  isWorkStatusSectionVisible,
-  resolveWorkStatusSectionOrder,
-  type WorkStatusSectionId,
-} from './sections';
-import { useWorkStatusExtensionSections } from './useWorkStatusExtensionSections';
+import { WorkStatusSectionList } from './WorkStatusSectionList';
+import { useWorkStatusSectionLayout } from './useWorkStatusSectionLayout';
+import { getWorkStatusPanelPresentation } from './sections';
 import { WorkStatusPresenceProvider } from './presence';
 import { Icon } from '@/components/icon/Icon';
-import { isNativeSessionId } from '@/lib/native-agents/ids';
-import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
-
-// What these list is OpenCode's (its MCP servers and skills) or context
-// OpenChamber adds to OpenCode prompts (pins, memory). A native CLI session
-// uses none of it, so the panel leaves them out there rather than misreport.
-const OPENCODE_CONTEXT_SECTIONS = new Set<WorkStatusSectionId>(['mcp', 'pinned', 'contextSources']);
 
 type WorkStatusPresentation = 'overlay' | 'sheet';
 
@@ -79,30 +53,17 @@ const WORK_STATUS_PANEL_WIDTH = 300;
  */
 export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, presentation = 'overlay', sectionControlsHost = null, prewarmPrStatus = false }) => {
   const { t, direction } = useI18n();
-  const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
-  const nativeBackend = useNativeSessionBackend(sessionId, directory);
   const isOverlay = presentation === 'overlay';
   const isSheet = presentation === 'sheet';
   // The card's fade and lift follow the side columns' animation setting.
   const panelTransitionMs = useLayoutAnimationMs();
   const setScrollTop = useUIStore((state) => state.setWorkStatusScrollTop);
   const setOverlayOpen = useUIStore((state) => state.setWorkStatusOverlayOpen);
-  const hiddenSections = useUIStore((state) => state.workStatusHiddenSections);
-  const storedOrder = useUIStore((state) => state.workStatusSectionOrder);
-  const extensionSections = useWorkStatusExtensionSections();
-  const sectionOrder = React.useMemo(
-    () => resolveWorkStatusSectionOrder(storedOrder, extensionSections.ids),
-    [extensionSections.ids, storedOrder],
-  );
+  const sectionLayout = useWorkStatusSectionLayout();
   const [sectionsDialogOpen, setSectionsDialogOpen] = React.useState(false);
   // Starts optimistic: sections report after their first commit, and rendering
   // nothing on the way in would make the card flash out and back on arrival.
   const [renderedSections, setRenderedSections] = React.useState(1);
-  const sectionVisible = React.useCallback(
-    (sectionId: Parameters<typeof isWorkStatusSectionVisible>[1]) =>
-      isWorkStatusSectionVisible(hiddenSections, sectionId),
-    [hiddenSections],
-  );
   const frameRef = React.useRef<number | null>(null);
 
   // Restoring the offset has to happen the moment the scroller attaches, and
@@ -119,7 +80,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   // re-enable sections. The previous `renderedSections > 0` guard is preserved
   // for the transient "no data yet" state so the panel doesn't flash a bare
   // bordered card on first mount.
-  const allSectionsHidden = areAllWorkStatusSectionsHidden(hiddenSections, extensionSections.ids);
+  const { allSectionsHidden } = sectionLayout;
   const presentationState = getWorkStatusPanelPresentation({
     visible,
     contentMounted,
@@ -137,6 +98,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       setRenderedSections((count) => Math.max(count, 1));
       return undefined;
     }
+    setSectionsDialogOpen(false);
     const timer = window.setTimeout(() => setContentMounted(false), panelTransitionMs);
     return () => window.clearTimeout(timer);
   }, [panelTransitionMs, visible]);
@@ -204,40 +166,17 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
 
   // Keep these elements owned by the panel so primary readout updates do not
   // rerender unrelated sections through the composition callback.
-  const secondarySections = {
-    usage: <WorkStatusUsageSection visible={visible} />,
-    telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
-    subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
-    taskChecklist: nativeBackend === 'codex'
-      ? <WorkStatusTodosSection sessionId={sessionId} directory={directory} />
-      : <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
-    taskBackground: <WorkStatusBackgroundTasksSection sessionId={sessionId} directory={directory} />,
-    mcp: <WorkStatusMcpSection sessionId={sessionId} directory={directory} />,
-    pinned: <WorkStatusPinnedSection sessionId={sessionId} directory={directory} />,
-    contextSources: <WorkStatusContextSection sessionId={sessionId} directory={directory} />,
-    taskPlan: <WorkStatusPlanSection sessionId={sessionId} directory={directory} />,
-  } satisfies Record<Exclude<WorkStatusSectionId, 'session' | 'repository'>, React.ReactNode>;
-
   const sections = (
     <WorkStatusPresenceProvider onChange={setRenderedSections}>
-      <WorkStatusPrimaryGroup
+      <WorkStatusSectionList
         sessionId={sessionId}
         directory={directory}
-        showSession={sectionVisible('session')}
-        showRepository={repositoryEnabled && sectionVisible('repository')}
+        repositoryEnabled={repositoryEnabled}
+        layout={sectionLayout}
+        visible={visible}
         showContextTokens={isSheet}
         prewarmPrStatus={prewarmPrStatus}
-        goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
-      >
-        {(primary) => sectionOrder.map((id) => {
-          if (!sectionVisible(id) || (nativeSession && !isExtensionSectionId(id) && OPENCODE_CONTEXT_SECTIONS.has(id))) return null;
-          if (isExtensionSectionId(id)) {
-            const guest = extensionSections.byId.get(id);
-            return guest ? <WorkStatusExtensionSection key={id} guest={guest} directory={directory} /> : null;
-          }
-          return <React.Fragment key={id}>{id === 'session' || id === 'repository' ? primary[id] : secondarySections[id]}</React.Fragment>;
-        })}
-      </WorkStatusPrimaryGroup>
+      />
     </WorkStatusPresenceProvider>
   );
 
@@ -358,7 +297,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       ) : null}
       </div>
 
-      <WorkStatusSectionsDialog open={sectionsDialogOpen} onOpenChange={setSectionsDialogOpen} />
+      <WorkStatusSectionsDialog open={visible && sectionsDialogOpen} onOpenChange={setSectionsDialogOpen} />
     </aside>
   );
 };
