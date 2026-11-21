@@ -208,6 +208,9 @@ so it survives the sidebar closing and reopening. A folder change remounts the t
   output watches across views. Run observation is reference-counted, detects
   other clients' runs and pauses while hidden; a running action wins the header
   pick so its Stop control remains reachable.
+- The repository's DevHMR action and auto-discovery omit their idle run
+  shortcuts in the header and Work Status. The project actions dialog and the
+  command palette list both actions.
 - Action settings and trust belong to the project, while execution and discovery
   use the session checkout. Session lookup uses the store's own directory key
   normalization to avoid Windows path mismatches. Transient fetch failure retains
