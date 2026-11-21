@@ -205,6 +205,9 @@ over it keep their glass.
 
 The panel keeps keyboard focus while visibility changes reflow the session list.
 Outside presses, Escape and the close control dismiss it.
+The header that opens the panel owns its popup and clears the draft when it
+leaves. The main sidebar and the conversation's session picker can coexist
+with the same section settings and independent popup lifetimes.
 
 ### Why Pin to replaces the Pin item
 

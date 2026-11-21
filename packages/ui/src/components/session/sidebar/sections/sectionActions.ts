@@ -15,7 +15,7 @@ type PinListRequest = { pin: (listId: string) => void };
 type PinToRequest = { current: string | null; pin: (list: string | null) => void; unpin: () => void };
 
 type SidebarSectionsUiState = {
-  managerOpen: boolean;
+  managerOwner: string | null;
   draft: CustomSidebarSection | null;
   draftIsNew: boolean;
   draftMatchCount: number | null;
@@ -24,7 +24,7 @@ type SidebarSectionsUiState = {
 };
 
 export const useSidebarSectionsUiStore = create<SidebarSectionsUiState>(() => ({
-  managerOpen: false,
+  managerOwner: null,
   draft: null,
   draftIsNew: false,
   draftMatchCount: null,
@@ -32,9 +32,20 @@ export const useSidebarSectionsUiStore = create<SidebarSectionsUiState>(() => ({
   pinToRequest: null,
 }));
 
-export const openSectionsManager = (): void => useSidebarSectionsUiStore.setState({ managerOpen: true });
-export const closeSectionsManager = (): void => useSidebarSectionsUiStore.setState({ managerOpen: false, draft: null, draftIsNew: false, draftMatchCount: null });
-export const editSection = (section: CustomSidebarSection, isNew: boolean): void => useSidebarSectionsUiStore.setState({ managerOpen: true, draft: section, draftIsNew: isNew });
+export const openSectionsManager = (owner: string): void => useSidebarSectionsUiStore.setState({
+  managerOwner: owner, draft: null, draftIsNew: false, draftMatchCount: null,
+});
+export const closeSectionsManager = (owner: string): void => useSidebarSectionsUiStore.setState((state) => (
+  state.managerOwner === owner ? { managerOwner: null, draft: null, draftIsNew: false, draftMatchCount: null } : state
+));
+export const editSection = (
+  section: CustomSidebarSection,
+  isNew: boolean,
+  owner = useSidebarSectionsUiStore.getState().managerOwner,
+): void => {
+  if (owner === null) return;
+  useSidebarSectionsUiStore.setState({ managerOwner: owner, draft: section, draftIsNew: isNew, draftMatchCount: null });
+};
 export const updateSectionDraft = (draft: CustomSidebarSection): void => useSidebarSectionsUiStore.setState({ draft });
 export const discardSectionDraft = (): void => useSidebarSectionsUiStore.setState({ draft: null, draftIsNew: false, draftMatchCount: null });
 

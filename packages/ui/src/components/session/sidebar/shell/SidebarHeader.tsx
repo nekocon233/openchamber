@@ -69,10 +69,17 @@ export function SidebarHeader(props: Props): React.ReactNode {
   const { t } = useI18n();
   const headerRef = React.useRef<HTMLDivElement | null>(null);
   const sectionsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const sectionsManagerOpen = useSidebarSectionsUiStore((state) => state.managerOpen);
+  const sectionsManagerOwner = React.useId();
+  const sectionsManagerOpen = useSidebarSectionsUiStore((state) => state.managerOwner === sectionsManagerOwner);
+  const canManageSections = props.showSectionControls && !props.hideDirectoryControls;
+  const closeManager = React.useCallback(() => closeSectionsManager(sectionsManagerOwner), [sectionsManagerOwner]);
+  const bindHeader = React.useCallback((element: HTMLDivElement | null) => {
+    headerRef.current = element;
+    if (element === null) closeManager();
+  }, [closeManager]);
   const sidebarSections = useSessionDisplayStore((state) => state.sections);
   const hideProjectsCaption = useSessionDisplayStore((state) => state.hiddenSections.includes('projects'));
-  const SectionsManager = useOnDemandComponent(props.showSectionControls && sectionsManagerOpen, loadSectionsManager, closeSectionsManager);
+  const SectionsManager = useOnDemandComponent(canManageSections && sectionsManagerOpen, loadSectionsManager, closeManager);
   const {
     hideDirectoryControls,
     showProjectDisplayControls,
@@ -216,11 +223,11 @@ export function SidebarHeader(props: Props): React.ReactNode {
   displayMenuSections.push(<MarkAllReadItem />);
 
   const searchText = sessionSearchQuery.trim();
-  const canSaveSearch = showSectionControls && searchText !== '' && !searchText.toLowerCase().startsWith('ses_')
+  const canSaveSearch = canManageSections && searchText !== '' && !searchText.toLowerCase().startsWith('ses_')
     && canAddSidebarSection(sidebarSections);
   const saveSearchAsSection = () => {
     const section = createSidebarSectionFromTemplate('blank', searchText.slice(0, SIDEBAR_SECTION_NAME_MAX));
-    editSection({ ...section, filter: { ...section.filter, text: [searchText.slice(0, SIDEBAR_SECTION_TEXT_MAX)] } }, true);
+    editSection({ ...section, filter: { ...section.filter, text: [searchText.slice(0, SIDEBAR_SECTION_TEXT_MAX)] } }, true, sectionsManagerOwner);
     closeSessionSearch();
   };
 
@@ -269,7 +276,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
                 <button
                   ref={sectionsTriggerRef}
                   type="button"
-                  onClick={sectionsManagerOpen ? closeSectionsManager : openSectionsManager}
+                  onClick={sectionsManagerOpen ? closeManager : () => openSectionsManager(sectionsManagerOwner)}
                   className={cn(headerActionButtonClass, IDLE_BUTTON_CLASS, sectionsManagerOpen && 'text-foreground')}
                   aria-label={t('sessions.sidebar.sections.customize')}
                   aria-expanded={sectionsManagerOpen}
@@ -280,7 +287,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
               <TooltipContent side="bottom" sideOffset={4}><p>{t('sessions.sidebar.sections.customize')}</p></TooltipContent>
             </Tooltip>
           ) : null}
-          {showSectionControls && SectionsManager ? <SectionsManager anchor={headerRef} trigger={sectionsTriggerRef} pages={showPagesSection} /> : null}
+          {showSectionControls && SectionsManager ? <SectionsManager open={sectionsManagerOpen} onClose={closeManager} anchor={headerRef} trigger={sectionsTriggerRef} pages={showPagesSection} /> : null}
 
           <DropdownMenu>
             <Tooltip>
@@ -310,7 +317,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
   );
 
   return (
-    <div ref={headerRef} className="select-none flex-shrink-0 px-2.5 py-1">
+    <div ref={canManageSections ? bindHeader : undefined} className="select-none flex-shrink-0 px-2.5 py-1">
       <div className="flex h-auto min-h-8 flex-col gap-1">
         <div className="ms-[3px] flex min-h-8 items-center gap-1.5">
           <div className="min-w-0 flex-1">
