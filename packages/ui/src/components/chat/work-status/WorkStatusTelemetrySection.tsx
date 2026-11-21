@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Message, Part } from '@/lib/opencode/model';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
@@ -7,6 +8,7 @@ import {
   useDirectorySync,
   useSessionMessageLoadState,
   useSessionMessageRecords,
+  useSessionMessagesSelector,
   useSessionSelector,
   useSyncDirectory,
   useSyncRuntime,
@@ -34,6 +36,26 @@ type Props = {
 
 const formatCost = (cost: number): string => `$${cost.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}`;
 
+// Text deltas can arrive after idle. Timing changes and tool transitions still
+// matter to the heading, even when the metric rows are collapsed.
+const sameTelemetryParts = (before: readonly Part[], after: readonly Part[]): boolean =>
+  before.length === after.length && before.every((part, index) => {
+    const next = after[index];
+    if (part === next) return true;
+    if ((part.type !== 'text' && part.type !== 'reasoning') || next?.type !== part.type) return false;
+    return part.id === next.id && part.time?.start === next.time?.start && part.time?.end === next.time?.end
+      && Boolean(part.text) === Boolean(next.text)
+      && (part.type !== 'text' || (next.type === 'text' && part.metadata?.nativeSubagentMessage === next.metadata?.nativeSubagentMessage));
+  });
+
+const lastUserId = (messages: readonly Message[]): string | undefined => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === 'user') return message.id;
+  }
+  return undefined;
+};
+
 const TelemetryRow: React.FC<{ label: string; description: string; value: React.ReactNode }> = ({ label, description, value }) => (
   <Tooltip delayDuration={750}>
     <TooltipTrigger asChild>
@@ -51,7 +73,7 @@ const TelemetryRow: React.FC<{ label: string; description: string; value: React.
 export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directory }) => {
   const { t } = useI18n();
   const expanded = useUIStore(
-    React.useCallback((state) => state.workStatusExpandedSections['telemetry'] ?? true, []),
+    React.useCallback((state) => state.workStatusExpandedSections['telemetry'] ?? false, []),
   );
   const { runtimeKey } = useSyncRuntime();
   const syncDirectory = useSyncDirectory();
@@ -80,12 +102,12 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
   if (historyRuntime.current.key !== runtimeKey) historyRuntime.current = { key: runtimeKey, switched: true };
   const historyReady = !historyRuntime.current.switched || loadState.resolved;
   const turnInProgress = status === 'busy' || status === 'retry';
-  const eligibleForStats = Boolean(sessionId && expanded && historyReady && status === 'idle');
+  const eligibleForStats = Boolean(sessionId && historyReady && status === 'idle');
 
   const records = useSessionMessageRecords(
     sessionId ?? '',
     directory ?? undefined,
-    { enabled: eligibleForStats },
+    { enabled: eligibleForStats, ignorePartChanges: expanded ? undefined : sameTelemetryParts },
   );
 
   const computed = React.useMemo(() => {
@@ -99,24 +121,28 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     revertMessageID: string | undefined;
     computed: CompletedTurnTelemetry;
   } | null>(null);
-  const retainedForScope = hasRecords && retained?.scope === scope && retained.revertMessageID === revertMessageID
-    ? retained.computed
-    : null;
+  const retainedForScope = historyReady && hasRecords && retained?.scope === scope && retained.revertMessageID === revertMessageID
+    ? retained.computed : null;
+  const sampleRunning = turnInProgress && historyReady && hasRecords && !retainedForScope;
+  // Busy may arrive before the new user message. A cold panel resamples when
+  // that boundary arrives, without following the running assistant's deltas.
+  const runningUserId = useSessionMessagesSelector(
+    sampleRunning ? sessionId ?? '' : '', effectiveDirectory,
+    lastUserId,
+  );
   const runningSnapshot = React.useMemo(() => {
-    if (!sessionId || !expanded || !turnInProgress || !hasRecords || !historyReady) return null;
-    if (retained?.scope === scope && retained.revertMessageID === revertMessageID) return retained.computed;
-    if (loadState.status === 'loading' && !loadState.resolved) return null;
-    // Sample once on opening or history publication, without a live records
-    // subscription. A delayed initial history load can then supply the last turn.
+    if (!sampleRunning || !runningUserId || !sessionId || (loadState.status === 'loading' && !loadState.resolved)) return null;
     const snapshot = buildSessionMessageRecordsSnapshot(store.getState(), sessionId);
-    return getCompletedTurnTelemetry(snapshot.list, true);
-  }, [scope, sessionId, expanded, turnInProgress, hasRecords, historyReady, retained, store, loadState, revertMessageID]);
-  const current = status === 'unknown' ? null : expanded ? computed ?? runningSnapshot : retainedForScope;
+    return snapshot.revertMessageID === revertMessageID ? getCompletedTurnTelemetry(snapshot.list, true) : null;
+  }, [sampleRunning, runningUserId, sessionId, store, loadState, revertMessageID]);
+  const current = turnInProgress ? retainedForScope ?? runningSnapshot : computed;
   React.useEffect(() => {
-    if (expanded || !current) {
-      setRetained(current ? { scope, revertMessageID, computed: current } : null);
+    if (computed && computed !== retainedForScope) {
+      setRetained({ scope, revertMessageID, computed });
+    } else if (!computed && (!turnInProgress || !retainedForScope)) {
+      setRetained(null);
     }
-  }, [scope, revertMessageID, expanded, current]);
+  }, [scope, revertMessageID, turnInProgress, retainedForScope, computed]);
   const stats = current?.stats ?? null;
   const summaryRate = stats?.tokensPerSecond ?? null;
   const summary = summaryRate !== null ? formatThroughputRate(summaryRate) : undefined;
