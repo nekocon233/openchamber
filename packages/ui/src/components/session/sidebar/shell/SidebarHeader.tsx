@@ -23,6 +23,7 @@ import { resolveSidebarGrouping, useSessionDisplayStore } from '@/stores/useSess
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { updateDesktopSettings } from '@/lib/persistence';
+import { sessionEvents } from '@/lib/sessionEvents';
 import { SessionSearchInput } from '@/components/session/SessionSearchInput';
 import { markAllSessionsViewed } from '@/sync/notification-store';
 import { useHasUnreadSession } from '@/sync/session-unread';
@@ -70,6 +71,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
   const sectionsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const sectionsManagerOpen = useSidebarSectionsUiStore((state) => state.managerOpen);
   const sidebarSections = useSessionDisplayStore((state) => state.sections);
+  const hideProjectsCaption = useSessionDisplayStore((state) => state.hiddenSections.includes('projects'));
   const SectionsManager = useOnDemandComponent(props.showSectionControls && sectionsManagerOpen, loadSectionsManager, closeSectionsManager);
   const {
     hideDirectoryControls,
@@ -202,6 +204,14 @@ export function SidebarHeader(props: Props): React.ReactNode {
         <span>{t('sessions.sidebar.header.displayMode.expandAll')}</span>
       </DropdownMenuItem>
     </>);
+  }
+  if (showSectionControls && hideProjectsCaption) {
+    displayMenuSections.push(
+      <DropdownMenuItem onClick={() => sessionEvents.requestDirectoryDialog()} className="flex items-center gap-2">
+        <Icon name="add" className="h-4 w-4" />
+        <span>{t('sessions.sidebar.header.actions.addProject')}</span>
+      </DropdownMenuItem>,
+    );
   }
   displayMenuSections.push(<MarkAllReadItem />);
 

@@ -43,6 +43,8 @@ Sections: Runtimes and backends, Platform scope, Localization, Composer, Session
 - No cross-session message bus (#3757). Agents already send to and read other sessions through the `openchamber` tool.
 - Chats are isolated sessions.
 - No built-in Recent section. Users build their own sidebar sections, a Recent one included.
+- The desktop tool rail uses equal spacing and a single order for built-in and extension buttons.
+- The session sidebar can hide the Projects heading while keeping its project rows visible.
 - In work rows show the project as an icon; the header and Work Status name it. Users give projects distinct icons.
 - Cmd+P shows no session status dot; a separate overview view is the plan. No manual unread mark.
 - The agent's todo list is not editable from the UI until OpenCode has an API for the current list.

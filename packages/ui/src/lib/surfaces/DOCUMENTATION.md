@@ -470,5 +470,5 @@ chat/palette go through the `openContext*` actions in `useUIStore`.
   (`components/sourceBoard`). A Linear tab persisted by an older version is
   dropped on load, like any unknown mode.
 
-- User ordering keeps surfaces together in groups at each group's first position, preserving saved pre-group orders. Missing known surfaces append in default order, and unknown IDs drop.
+- Tool rail buttons share one spacing and sort order. The rail and its settings use saved surface IDs in order, with missing known surfaces appended in default order. Unavailable entries stay in the settings cache.
 - Walkthrough visibility requires room for a stop list beside code and OpenChamber's Git routes. VS Code exposes no browser surface because its host lacks Chromium annotation, agent control and remote-preview capabilities.

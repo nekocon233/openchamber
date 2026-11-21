@@ -14,7 +14,6 @@ interface SortableVisibilityItem {
   label: string;
   visible: boolean;
   locked?: boolean;
-  groupStart?: boolean;
 }
 
 const SortableVisibilityRow: React.FC<{
@@ -30,7 +29,6 @@ const SortableVisibilityRow: React.FC<{
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn('relative flex items-center gap-2', isDragging && 'z-10 opacity-60')}
     >
-      {item.groupStart ? <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 -top-px h-px bg-edge-muted" /> : null}
       <Tooltip open={isDragging ? false : undefined}>
         <TooltipTrigger asChild>
           <Button

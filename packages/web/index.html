@@ -370,8 +370,9 @@
       };
     </script>
 
+    <meta name="theme-color" content="#151313" />
     <script>
-      // Blocking script to detect and apply theme before first paint
+      // Apply the splash and browser frame colors before the app loads.
       (function() {
         try {
           var themeMode = localStorage.getItem('themeMode');
@@ -406,6 +407,10 @@
           var splashBgDark = localStorage.getItem('splashBgDark');
           var splashFgDark = localStorage.getItem('splashFgDark');
 
+          document.querySelector('meta[name="theme-color"]').content = isDark
+            ? (splashBgDark || '#151313')
+            : (splashBgLight || '#FFFCF0');
+
           if (splashBgLight) document.documentElement.style.setProperty('--splash-background-light', splashBgLight);
           if (splashFgLight) document.documentElement.style.setProperty('--splash-stroke-light', splashFgLight);
           if (splashBgDark) document.documentElement.style.setProperty('--splash-background-dark', splashBgDark);
@@ -415,10 +420,6 @@
         }
       })();
     </script>
-
-    <!-- Theme color - Safari iOS 26+ prioritizes CSS background-color over this, but keep as fallback -->
-    <meta name="theme-color" content="#151313" />
-    <meta name="theme-color" content="#151313" media="(prefers-color-scheme: dark)" />
 
     <!-- iOS Safari PWA styling -->
     <meta name="apple-mobile-web-app-capable" content="yes" />

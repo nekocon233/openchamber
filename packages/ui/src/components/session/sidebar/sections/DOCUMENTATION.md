@@ -106,7 +106,10 @@ with its named pin lists. How the rows are drawn stays with the row model
   is its own: the user's sections through `sidebarHiddenSections` (per surface),
   the built-in ones through the show toggles they always had
   (`sidebarShowChatsSection`, `sidebarShowPinnedSection`, `sidebarShowWorkSection`),
-  which older clients still read. Projects is always shown.
+  which older clients still read. Projects always contributes its rows.
+  The reserved `projects` entry in `sidebarHiddenSections` hides its caption
+  in either list arrangement. A section drag can still expose the caption as a
+  drop target.
 - Sections, pin lists and hidden sections belong to the instance they came
   from (`sectionsOwner` in the display store, stamped by every write). The local
   copy is a startup cache: switching to another instance, or starting on one,
@@ -199,6 +202,9 @@ The editor opens menus over the panel. A glass panel under a glass menu left
 the menu looking transparent, as the menu could not blur through it. The panel
 takes the opaque floating surface with the same light and shadow; the menus
 over it keep their glass.
+
+The panel keeps keyboard focus while visibility changes reflow the session list.
+Outside presses, Escape and the close control dismiss it.
 
 ### Why Pin to replaces the Pin item
 

@@ -321,21 +321,6 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
       document.head.appendChild(metaThemeColor);
     }
     metaThemeColor.setAttribute('content', chromeColor);
-
-    const mediaQuery =
-      theme.metadata.variant === 'dark'
-        ? '(prefers-color-scheme: dark)'
-        : '(prefers-color-scheme: light)';
-    let metaThemeColorMedia = document.querySelector(
-      `meta[name="theme-color"][media="${mediaQuery}"]`,
-    ) as HTMLMetaElement;
-    if (!metaThemeColorMedia) {
-      metaThemeColorMedia = document.createElement('meta');
-      metaThemeColorMedia.setAttribute('name', 'theme-color');
-      metaThemeColorMedia.setAttribute('media', mediaQuery);
-      document.head.appendChild(metaThemeColorMedia);
-    }
-    metaThemeColorMedia.setAttribute('content', chromeColor);
   }, []);
 
   const applyVSCodeRuntimeClass = useCallback((enabled: boolean) => {

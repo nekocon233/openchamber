@@ -1100,19 +1100,18 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
           && getSessionFolderScopes(rootGroup).some(({ scopeKey }) => (args.foldersMap[scopeKey] ?? EMPTY_FOLDERS).length > 0);
         return hasFolders ? [{ section, rootGroup }] : [];
       });
-      if (entries.length > 0 || foldered.length > 0) {
-        const collapsed = appendActivityHeader('timeline');
-        if (!collapsed) {
-          for (const { section, rootGroup } of foldered) {
-            const filedWorktrees = collectFiledWorktrees(buildGroupRenderDescriptors(section, { mainWorkspaceOnly: false }));
-            appendGroup(rootGroup, `${section.project.id}:${rootGroup.id}`, section.project.id, true, undefined, {
-              keyPrefix: 'activity:timeline:', depth: 0, mixed: args.sections.length > 1, foldersOnly: true,
-            }, filedWorktrees);
-          }
-          appendWorkEntries(entries, 'activity:timeline', 'activity:timeline');
+      const hasContent = entries.length > 0 || foldered.length > 0;
+      const collapsed = hasContent && args.projectsCaption !== false && appendActivityHeader('timeline');
+      if (hasContent && !collapsed) {
+        for (const { section, rootGroup } of foldered) {
+          const filedWorktrees = collectFiledWorktrees(buildGroupRenderDescriptors(section, { mainWorkspaceOnly: false }));
+          appendGroup(rootGroup, `${section.project.id}:${rootGroup.id}`, section.project.id, true, undefined, {
+            keyPrefix: 'activity:timeline:', depth: 0, mixed: args.sections.length > 1, foldersOnly: true,
+          }, filedWorktrees);
         }
+        appendWorkEntries(entries, 'activity:timeline', 'activity:timeline');
       }
-      if (!((entries.length > 0 || foldered.length > 0) && args.collapsedActivities.has('timeline'))) {
+      if (!collapsed) {
         const listedProjects = new Set(timeEntries.map((entry) => entry.kind === 'session' ? entry.item.projectId : entry.projectId));
         const shown = new Set<string>();
         for (const section of args.sections) {

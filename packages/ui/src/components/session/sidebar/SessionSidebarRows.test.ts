@@ -91,6 +91,17 @@ describe('SessionSidebarRows section spacing', () => {
     expect(closed.some((row) => row.kind === 'project-header')).toBe(false);
   });
 
+  test('hiding the Projects caption leaves the project rows visible', () => {
+    const rows = buildSessionSidebarRowModel({
+      ...input(true),
+      projectsCaption: false,
+      collapsedActivities: new Set(['projects']),
+    }).rows;
+    expect(rows.some((row) => row.kind === 'caption' && row.caption === 'projects')).toBe(false);
+    expect(rows.some((row) => row.kind === 'project-header')).toBe(true);
+    expect(rows.some((row) => row.kind === 'session' && row.renderContext === 'project')).toBe(true);
+  });
+
   test('the project divider is optional and the gap survives without it', () => {
     const rows = buildSessionSidebarRowModel(input(true)).rows;
     const index = rows.findIndex((row) => row.kind === 'project-header');
