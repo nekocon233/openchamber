@@ -22,6 +22,7 @@ Sections: Runtimes and backends, Platform scope, Localization, Composer, Session
 - Scheduled git sync of agents or dotfiles is a cron or launchd job on the user's side (#4323).
 - A catalog of agents pulled from git repositories is declined as one company's need (#4501); it fits an extension. A bundle of agent, plugin and ready MCP server would be considered. Private skills catalogs exist (#4494).
 - Several instances under one hub: later.
+- The chat header opens Work Status in the mobile PWA. A workspace tab would duplicate that entry point.
 - Isolated spaces are unfinished. Nothing else builds on them yet.
 
 ## Localization

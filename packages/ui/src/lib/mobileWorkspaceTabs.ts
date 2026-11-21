@@ -6,7 +6,9 @@ const ALL_BUILT_IN_MOBILE_WORKSPACE_TABS = ['status', 'changes', 'files', 'termi
 export type BuiltInMobileWorkspaceTab = (typeof ALL_BUILT_IN_MOBILE_WORKSPACE_TABS)[number];
 
 const builtInMobileWorkspaceTabs = (): readonly BuiltInMobileWorkspaceTab[] => (
-  isCapacitorApp() ? ALL_BUILT_IN_MOBILE_WORKSPACE_TABS : ALL_BUILT_IN_MOBILE_WORKSPACE_TABS.filter((id) => id !== 'preview')
+  isCapacitorApp()
+    ? ALL_BUILT_IN_MOBILE_WORKSPACE_TABS
+    : ALL_BUILT_IN_MOBILE_WORKSPACE_TABS.filter((id) => id !== 'status' && id !== 'preview')
 );
 export type MobileWorkspaceTab = OrderedMobileWorkspaceTab | 'pages';
 

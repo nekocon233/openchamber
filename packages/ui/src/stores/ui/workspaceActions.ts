@@ -324,13 +324,14 @@ export const createWorkspaceActions: UIStoreSlice<
   setMobileWorkspaceTabVisible: (tab, visible, extensions) => {
     set((state) => {
       const hidden = state.mobileWorkspaceHiddenTabs;
+      const shown = new Set<string>(shownMobileWorkspaceTabs(state.mobileWorkspaceTabOrder, hidden, extensions));
+      if (visible === shown.has(tab)) return state;
       if (visible) {
         return hidden.includes(tab) ? { mobileWorkspaceHiddenTabs: hidden.filter((entry) => entry !== tab) } : state;
       }
-      if (hidden.includes(tab)) return state;
-      const shown = shownMobileWorkspaceTabs(state.mobileWorkspaceTabOrder, hidden, extensions);
-      if (shown.length <= 1) return state;
-      return { mobileWorkspaceHiddenTabs: [...hidden, tab] };
+      if (shown.size <= 1) return state;
+      // The all-hidden fallback can show tabs that are still in the saved hidden list.
+      return { mobileWorkspaceHiddenTabs: [...hidden.filter((id) => !shown.has(id)), tab] };
     });
   },
 });

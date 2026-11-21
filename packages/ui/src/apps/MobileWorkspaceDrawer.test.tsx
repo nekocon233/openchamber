@@ -116,6 +116,9 @@ test('MobileWorkspaceDrawer exposes standalone PR and CI tabs, retains visited p
     if (url.pathname === '/api/fs/git-dirs') {
       return Response.json({ repositories: [] });
     }
+    if (url.pathname === '/api/session-warming') {
+      return Response.json({ revision: 0, enabled: false, minutes: 30, sessions: [] });
+    }
     if (url.pathname === '/api/source-control/binding') {
       const directory = url.searchParams.get('directory');
       if (directory === '/repo-unbound') {
@@ -160,34 +163,29 @@ test('MobileWorkspaceDrawer exposes standalone PR and CI tabs, retains visited p
         },
       });
     }
-    if (url.pathname === '/api/source-control/github/references') {
+    if (url.pathname === '/api/source-control/github/pulls/list') {
       return Response.json({
-        connected: true,
-        scope: 'repository',
-        repo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app' },
         items: [{
-          kind: 'pull',
+          provider: 'github',
+          instance: 'github.com',
+          project: PROJECT,
+          id: '12',
           number: 12,
           title: 'Separate CI runs surface',
           url: 'https://github.com/acme/app/pull/12',
           body: 'PR body',
-          bodyTruncated: false,
           state: 'open',
           draft: false,
           head: 'feat/ci',
           base: 'main',
           headSha: 'a'.repeat(40),
-          headRepo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app', cloneUrl: 'https://github.com/acme/app.git' },
-          sourceRepo: { owner: 'acme', repo: 'app', source: 'origin' },
-          author: { login: 'octocat' },
+          author: USER,
           createdAt: '2026-11-10T09:00:00Z',
           updatedAt: '2026-11-10T10:00:00Z',
           labels: [],
-          commentCount: 0,
         }],
-        cursor: null,
+        page: 1,
         hasMore: false,
-        total: 1,
       });
     }
     if (url.pathname === '/api/source-control/github/references/status') {
