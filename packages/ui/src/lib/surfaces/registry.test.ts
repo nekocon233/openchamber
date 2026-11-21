@@ -61,22 +61,28 @@ describe('getVisibleContextRailSurfaces', () => {
     expect(getVisibleContextRailSurfaces(baseOptions).some((s) => s.id === 'browser')).toBe(true);
   });
 
-  test('respects the persisted user rail order inside each group', () => {
+  test('respects the persisted rail order', () => {
     const surfaces = getVisibleContextRailSurfaces({ ...baseOptions, railOrder: ['diff', 'git', 'context'] });
     expect(surfaces.slice(0, 2).map((surface) => surface.id)).toEqual(['diff', 'git']);
   });
 
-  test('keeps each group together, placed where its first surface stands', () => {
-    // A saved order from before groups: Notes ahead of Files, Context last.
+  test('keeps built-in and extension buttons in their saved order', () => {
+    const remoteDesktop = {
+      id: 'plugin:openchamber-builtin-desktop',
+      mode: 'plugin:openchamber-builtin-desktop',
+      icon: 'window',
+      label: 'Remote Desktop',
+      labelKey: 'contextRail.surface.notes',
+      descriptionKey: 'contextRail.surface.notes.description',
+      availability: 'always',
+    } as const;
     const surfaces = getVisibleContextRailSurfaces({
       ...baseOptions,
-      railOrder: ['notes', 'git', 'editor', 'pr', 'terminal', 'context'],
+      extras: [remoteDesktop],
+      railOrder: ['notes', remoteDesktop.id, 'git', 'editor', 'pr', 'terminal', 'context'],
     });
     expect(surfaces.map((surface) => surface.id)).toEqual([
-      'notes',
-      'git', 'pr', 'ci', 'diff', 'walkthrough',
-      'editor', 'terminal', 'browser',
-      'context',
+      'notes', remoteDesktop.id, 'git', 'editor', 'pr', 'terminal', 'context', 'ci', 'diff', 'walkthrough', 'browser',
     ]);
   });
 

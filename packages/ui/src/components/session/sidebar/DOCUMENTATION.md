@@ -1238,13 +1238,12 @@ membership, and a sidebar with only pages still shows its empty state.
 
 ### Add project
 
-Adding a project has four ways in, all `sessionEvents.requestDirectoryDialog()`:
-the "+" at the end of the Projects caption (and of the list by time's caption),
-always shown with its tooltip and shortcut; the last item of the composer's
-project picker (Add project…, desktop popup and phone sheet); the `add_project`
-shortcut (`mod+k o` by default, the leader's "open" key); and the new-install
-empty state's Add project button under its two lines. A group of projects the
-user made has no "+".
+Each Add project entry calls `sessionEvents.requestDirectoryDialog()`. The
+Projects caption and the list-by-time caption have a "+" with its tooltip and
+shortcut. The composer project picker, the `add_project` shortcut and the
+new-install empty state also open the dialog. With the Projects caption hidden,
+the desktop display menu offers Add project. A custom group of projects has no
+"+".
 
 Queries beginning with `ses_` match only the full session ID,
 case-insensitively and ignoring surrounding whitespace. Partial IDs and typos

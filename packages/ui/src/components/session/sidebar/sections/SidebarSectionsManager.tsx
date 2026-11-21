@@ -137,10 +137,10 @@ export const SidebarSectionsManager: React.FC<{
   return (
     <Popover.Root
       open={open}
+      modal="trap-focus"
       onOpenChange={(next, details) => {
         if (next) return;
-        const target = details.reason === 'outside-press' ? details.event.target
-          : details.reason === 'focus-out' && details.event instanceof FocusEvent ? details.event.relatedTarget : null;
+        const target = details.reason === 'outside-press' ? details.event.target : null;
         if (target instanceof Node && trigger.current?.contains(target)) {
           details.cancel();
           return;
@@ -158,9 +158,10 @@ export const SidebarSectionsManager: React.FC<{
           <Popover.Popup
             aria-label={t('sessions.sidebar.sections.title')}
             className={cn(SECTIONS_PANEL_CLASS, 'flex max-h-[min(40rem,calc(100vh-4rem))] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden')}
-            initialFocus={false}
+            finalFocus={trigger}
           >
             {draft ? <SectionEditor key={draft.id} draft={draft} /> : <SectionList pages={pages} />}
+            <Popover.Close className="sr-only" tabIndex={-1}>{t('dialog.common.actions.close')}</Popover.Close>
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
@@ -273,9 +274,10 @@ const SectionRow: React.FC<{ entry: SidebarSectionEntry }> = ({ entry }) => {
   const keepWorkInPlace = useSessionDisplayStore((state) => state.keepWorkInPlace);
   const keepPinnedInPlace = useSessionDisplayStore((state) => state.keepPinnedInPlace);
   const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
-  const name = entry.kind === 'builtin' ? t(BUILTIN_TITLE_KEY[entry.id]) : entry.name;
+  const name = entry.kind === 'custom' ? entry.name
+    : t(entry.id === 'projects' ? 'sessions.sidebar.sections.projectsHeading' : BUILTIN_TITLE_KEY[entry.id]);
   let visibility: { shown: boolean; set: (shown: boolean) => void } | null = null;
-  if (entry.kind === 'custom' || entry.id === 'pages') {
+  if (entry.kind === 'custom' || entry.id === 'pages' || entry.id === 'projects') {
     visibility = { shown: !hiddenSections.includes(entry.id), set: (shown) => setSidebarSectionHidden(entry.id, !shown) };
   } else if (entry.id === 'chats') {
     visibility = { shown: showChats, set: (shown) => { useSessionDisplayStore.getState().setShowChatsSection(shown); void updateDesktopSettings({ sidebarShowChatsSection: shown }); } };

@@ -11,7 +11,6 @@ import {
   closestCenter,
   useSensor,
   useSensors,
-  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -34,7 +33,6 @@ import { useDeviceInfo } from '@/lib/device';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { useI18n } from '@/lib/i18n';
 import {
-  contextSurfaceGroup,
   getVisibleContextRailSurfaces,
   sortContextSurfaces,
   type ContextSurfaceDescriptor,
@@ -411,51 +409,21 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
       return;
     }
 
-    const ordered = sortContextSurfaces(useUIStore.getState().contextRailOrder, guestSurfaces);
-    const groupOf = (id: string | number) => {
-      const surface = ordered.find((entry) => entry.id === id);
-      return surface ? contextSurfaceGroup(surface) : null;
-    };
-    if (groupOf(active.id) !== groupOf(over.id)) {
-      return;
-    }
-    const orderedIds = ordered.map((surface) => surface.id);
-    const fromIndex = orderedIds.indexOf(active.id as (typeof orderedIds)[number]);
-    const toIndex = orderedIds.indexOf(over.id as (typeof orderedIds)[number]);
+    const savedOrder = useUIStore.getState().contextRailOrder;
+    const orderedIds = sortContextSurfaces(savedOrder, guestSurfaces).map((surface) => surface.id);
+    const fromIndex = orderedIds.findIndex((id) => id === active.id);
+    const toIndex = orderedIds.findIndex((id) => id === over.id);
     if (fromIndex === -1 || toIndex === -1) {
       return;
     }
 
-    setContextRailOrder(arrayMove(orderedIds, fromIndex, toIndex));
+    const known = new Set<string>(orderedIds);
+    setContextRailOrder([...arrayMove(orderedIds, fromIndex, toIndex), ...savedOrder.filter((id) => !known.has(id))]);
   }, [directoryKey, guestSurfaces, setContextRailOrder]);
-
-  const groups = React.useMemo(() => {
-    const runs: ContextSurfaceDescriptor[][] = [];
-    for (const surface of surfaces) {
-      const last = runs.at(-1);
-      if (last && contextSurfaceGroup(last[0]) === contextSurfaceGroup(surface)) last.push(surface);
-      else runs.push([surface]);
-    }
-    return runs;
-  }, [surfaces]);
-  const collisionDetection = React.useCallback<CollisionDetection>((args) => {
-    const activeSurface = surfaces.find((surface) => surface.id === args.active.id);
-    if (!activeSurface) return closestCenter(args);
-    const activeGroup = contextSurfaceGroup(activeSurface);
-    return closestCenter({
-      ...args,
-      droppableContainers: args.droppableContainers.filter((container) => {
-        const surface = surfaces.find((entry) => entry.id === container.id);
-        return surface !== undefined && contextSurfaceGroup(surface) === activeGroup;
-      }),
-    });
-  }, [surfaces]);
 
   if (!directoryKey) {
     return null;
   }
-
-  let orderNumber = 0;
 
   return (
     <nav
@@ -471,13 +439,9 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
         size={RAIL_SCROLL_FADE_PX}
         className="scrollbar-none flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overflow-x-hidden pt-2"
       >
-      <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
-        {groups.map((group, groupIndex) => (
-          <React.Fragment key={contextSurfaceGroup(group[0])}>
-          {groupIndex > 0 ? <div aria-hidden="true" className="h-1.5 shrink-0" /> : null}
-          <SortableContext items={group.map((surface) => surface.id)} strategy={verticalListSortingStrategy}>
-          {group.map((surface) => {
-            orderNumber += 1;
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+        <SortableContext items={surfaces.map((surface) => surface.id)} strategy={verticalListSortingStrategy}>
+          {surfaces.map((surface, index) => {
             const label = surface.label ?? t(changeRequestCopy(surface.labelKey, changeRequestTerm));
             const gitChangedCount = surface.id === 'git' ? changedFilesCount : 0;
             const guestBadgeCount = isPluginContextPanelMode(surface.mode) && !shownModes.has(surface.mode)
@@ -516,7 +480,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
                       { count: badgeCount },
                     )
                   : null}
-                orderNumber={orderNumber}
+                orderNumber={index + 1}
                 showOrderNumber={revealNumbers}
                 workspaceSide={workspaceSide}
                 canMoveZone={!editorLayout || surface.mode !== DESKTOP_PANEL_MODE}
@@ -527,9 +491,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
               />
             );
           })}
-          </SortableContext>
-          </React.Fragment>
-        ))}
+        </SortableContext>
       </DndContext>
       </ScrollShadow>
       <ScrollShadowBands surface="var(--background)" size={RAIL_SCROLL_FADE_PX} />

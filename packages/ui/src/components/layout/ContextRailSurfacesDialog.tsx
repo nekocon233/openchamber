@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
-import { contextSurfaceGroup, sortContextSurfaces } from '@/lib/surfaces/registry';
+import { sortContextSurfaces } from '@/lib/surfaces/registry';
 
 export const ContextRailSurfacesDialog: React.FC<{
   open: boolean;
@@ -35,16 +35,14 @@ export const ContextRailSurfacesDialog: React.FC<{
   const allVisible = hidden.length === 0;
   const noneVisible = surfaces.every((surface) => hidden.includes(surface.id));
   const dragging = React.useRef(false);
-  const items = React.useMemo(() => surfaces.map((surface, index) => ({
+  const items = React.useMemo(() => surfaces.map((surface) => ({
     id: surface.id,
     label: surface.label ?? t(surface.labelKey),
     visible: !hidden.includes(surface.id),
-    groupStart: index > 0 && contextSurfaceGroup(surfaces[index - 1]) !== contextSurfaceGroup(surface),
   })), [hidden, surfaces, t]);
   const handleReorder = (next: string[]) => {
-    const grouped = sortContextSurfaces(next, guestSurfaces).map((surface) => surface.id).filter((id) => next.includes(id));
-    const shown = new Set<string>(grouped);
-    setSurfaceOrder([...grouped, ...contextRailOrder.filter((id) => !shown.has(id))]);
+    const shown = new Set(next);
+    setSurfaceOrder([...next, ...contextRailOrder.filter((id) => !shown.has(id))]);
   };
 
   return (

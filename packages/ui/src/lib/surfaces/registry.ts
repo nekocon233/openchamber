@@ -180,37 +180,6 @@ export const getContextSurfaceDefaultWidth = (mode: ContextPanelMode): number =>
   if (isPluginContextPanelMode(mode)) return GUEST_SURFACE_DEFAULT_WIDTH;
   return DEFAULT_WIDTH_BY_MODE.get(mode) ?? GUEST_SURFACE_DEFAULT_WIDTH;
 };
-type ContextSurfaceGroup = 'context' | 'changes' | 'tools' | 'workspace' | 'extensions';
-
-const BUILT_IN_SURFACE_GROUPS = {
-  context: 'context',
-  git: 'changes',
-  pr: 'changes',
-  ci: 'changes',
-  diff: 'changes',
-  walkthrough: 'changes',
-  editor: 'tools',
-  terminal: 'tools',
-  browser: 'tools',
-  notes: 'workspace',
-  workflows: 'workspace',
-  subagents: 'workspace',
-  chat: 'workspace',
-  pages: 'workspace',
-} satisfies Record<BuiltInContextSurfaceId, ContextSurfaceGroup>;
-
-const isBuiltInSurfaceId = (id: ContextSurfaceId): id is BuiltInContextSurfaceId => Object.hasOwn(BUILT_IN_SURFACE_GROUPS, id);
-
-export const contextSurfaceGroup = (surface: Pick<ContextSurfaceDescriptor, 'id' | 'mode'>): ContextSurfaceGroup => (
-  !isPluginContextPanelMode(surface.mode) && isBuiltInSurfaceId(surface.id)
-    ? BUILT_IN_SURFACE_GROUPS[surface.id]
-    : 'extensions'
-);
-
-const isKnownSurfaceId = (value: string, byId: ReadonlyMap<string, ContextSurfaceDescriptor>): boolean => {
-  return byId.has(value);
-};
-
 export const sortContextSurfaces = (
   railOrder: readonly string[],
   extras: readonly ContextSurfaceDescriptor[] = [],
@@ -221,7 +190,7 @@ export const sortContextSurfaces = (
   const seen = new Set<string>();
 
   for (const id of railOrder) {
-    if (!isKnownSurfaceId(id, byId) || seen.has(id)) {
+    if (seen.has(id)) {
       continue;
     }
     const surface = byId.get(id);
@@ -237,12 +206,7 @@ export const sortContextSurfaces = (
     }
   }
 
-  const groupOrder: ContextSurfaceGroup[] = [];
-  for (const surface of ordered) {
-    const group = contextSurfaceGroup(surface);
-    if (!groupOrder.includes(group)) groupOrder.push(group);
-  }
-  return groupOrder.flatMap((group) => ordered.filter((surface) => contextSurfaceGroup(surface) === group));
+  return ordered;
 };
 
 type VisibleRailSurfacesOptions = {
