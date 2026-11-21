@@ -38,7 +38,7 @@ import type {
 } from '../records.js';
 import { mapClaudeToolResult, mapClaudeToolUse } from './tools.js';
 import type { SlimClaudeToolResult } from './tools.js';
-import { isInstructionsBlock } from '../prompt-parts.js';
+import { promptTextAttachmentFile, readPromptTextBlock } from '../prompt-parts.js';
 import type { ClaudePromptBlock } from '../prompt-parts.js';
 import { buildSkillReadPart } from '../skill-records.js';
 
@@ -436,41 +436,37 @@ export const createClaudeProjection = ({
   };
 
   const applyUserContent = (record: NativeMessageRecord, content: ClaudePromptContent, time: number): void => {
-    if (content.kind === 'text') {
-      upsertPart(record, buildTextPart({
-        id: userTextPartId(record.info.id, 0),
-        sessionID: sessionId,
-        messageID: record.info.id,
-        text: content.text,
-        start: time,
-        end: time,
-      }));
-      return;
-    }
     let textIndex = 0;
     let fileIndex = 0;
-    for (const block of content.blocks) {
-      const text = textBlock.safeParse(block);
-      if (text.success && isInstructionsBlock(text.data.text)) continue;
-      if (text.success) {
+    const identity = { sessionID: sessionId, messageID: record.info.id };
+    const isBlocks = content.kind === 'blocks';
+    const blocks = isBlocks ? content.blocks : [{ type: 'text', text: content.text }];
+    const allowLegacy = isBlocks && sendRecordFor(record.info.id) !== null;
+    for (const block of blocks) {
+      const text = textBlock.safeParse(block).data?.text;
+      if (text !== undefined) {
+        const part = isBlocks ? readPromptTextBlock(text, allowLegacy) : { type: 'text' as const, text };
+        if (part === null) continue;
+        if (part.type === 'file') {
+          const id = userFilePartId(identity.messageID, fileIndex++);
+          upsertPart(record, buildFilePart({ ...identity, ...promptTextAttachmentFile(part), id }));
+          continue;
+        }
         upsertPart(record, buildTextPart({
-          id: userTextPartId(record.info.id, textIndex),
-          sessionID: sessionId,
-          messageID: record.info.id,
-          text: text.data.text,
+          ...identity,
+          id: userTextPartId(identity.messageID, textIndex++),
+          text: part.text,
           start: time,
           end: time,
         }));
-        textIndex += 1;
         continue;
       }
       const media = imageBlock.safeParse(block).data ?? documentBlock.safeParse(block).data;
       if (!media) continue;
       const tooLarge = byteLengthOfBase64(media.source.data) > MAX_INLINE_IMAGE_BYTES;
       upsertPart(record, buildFilePart({
-        id: userFilePartId(record.info.id, fileIndex),
-        sessionID: sessionId,
-        messageID: record.info.id,
+        ...identity,
+        id: userFilePartId(identity.messageID, fileIndex),
         mime: media.source.media_type,
         url: tooLarge ? '' : `data:${media.source.media_type};base64,${media.source.data}`,
         filename: media.type === 'document' ? (media.title ?? 'document') : `image-${fileIndex + 1}`,

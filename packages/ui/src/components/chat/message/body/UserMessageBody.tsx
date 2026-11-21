@@ -421,6 +421,7 @@ export const UserMessageBody = React.memo(({ parts, messageCreatedAt, isMobile, 
                 files={attachmentRowParts}
                 onShowPopup={onShowPopup}
                 compact
+                showImageThumbnails={false}
                 className={userContentParts.length > 0 ? 'mb-2' : 'mt-0'}
             />
             <div className="leading-relaxed text-foreground/90 text-base overflow-hidden scrollbar-none in-data-[turn-sticky-header]:max-h-[40dvh] in-data-[turn-sticky-header]:overflow-y-auto in-data-[turn-sticky-header]:overscroll-contain">

@@ -4,8 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createNativeRegistry } from '../registry.js';
+import { codexPromptInput } from '../prompt-parts.js';
 
-import { parseCodexUserMessageItem } from './items.js';
 import { projectCodexTurns } from './projector.js';
 import { materializeSessionSnapshots } from '@openchamber/ui/sync/materialization';
 
@@ -26,6 +26,30 @@ const project = (turns, options = {}) => projectCodexTurns({
 
 describe('Codex history projection', () => {
   const records = project(fixture('gpt55-tools.turns.json').data);
+
+  it.each(['current', 'legacy'])('keeps %s text attachments out of the user message text', (format) => {
+    const text = 'File contents stay in the preview.\n';
+    const url = `data:text/plain;base64,${Buffer.from(text).toString('base64')}`;
+    const [attachment] = format === 'current'
+      ? codexPromptInput([{ type: 'file', filename: 'notes.txt', mime: 'text/plain', url }])
+      : [{ type: 'text', text: `Attached file notes.txt:\n\n${text}` }];
+    const typed = 'Attached file notes.txt:\n\nThis heading is part of my prompt.';
+    const savedImage = 'data:image/png;base64,AAAA';
+    const [user, cliUser] = project([{ id: 'attachment-turn', items: [
+      { type: 'userMessage', id: 'attachment', clientId: CLIENT_MESSAGE_ID, content: [
+        { type: 'text', text: 'Review the attachments.' }, { type: 'image', url: savedImage }, attachment,
+        ...codexPromptInput([{ type: 'text', text: typed }]),
+      ] },
+      { type: 'userMessage', id: 'typed', content: [{ type: 'text', text: 'Attached file notes.txt:\n\nA prompt typed in the CLI.' }] },
+    ] }]);
+    expect(user.parts).toMatchObject([
+      { type: 'text', text: 'Review the attachments.' },
+      { type: 'text', text: typed },
+      { id: `${CLIENT_MESSAGE_ID}_f0`, type: 'file', filename: 'image', url: savedImage },
+      { id: `${CLIENT_MESSAGE_ID}_f1`, type: 'file', filename: 'notes.txt', mime: 'text/plain', url },
+    ]);
+    expect(cliUser.parts).toMatchObject([{ type: 'text', text: 'Attached file notes.txt:\n\nA prompt typed in the CLI.' }]);
+  });
 
   it('keeps the user message id OpenChamber sent and answers it with one assistant message', () => {
     expect(records.map((record) => record.info.role)).toEqual(['user', 'assistant']);
@@ -309,14 +333,15 @@ describe('Codex compaction projection', () => {
 
 describe('Codex feature instructions', () => {
   it("leaves a feature's instructions out of the user message", () => {
-    expect(parseCodexUserMessageItem({
+    const [user] = project([{ id: 'turn', items: [{
       type: 'userMessage',
       id: 'item-1',
-      clientId: 'ncx_u_1',
+      clientId: CLIENT_MESSAGE_ID,
       content: [
         { type: 'text', text: 'what is this file?' },
         { type: 'text', text: '<openchamber-instructions>\nAnswer the side question only.\n</openchamber-instructions>' },
       ],
-    })).toEqual({ id: 'item-1', clientId: 'ncx_u_1', texts: ['what is this file?'], images: [], skills: [] });
+    }] }]);
+    expect(user.parts).toMatchObject([{ type: 'text', text: 'what is this file?' }]);
   });
 });

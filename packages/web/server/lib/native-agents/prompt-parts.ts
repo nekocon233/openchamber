@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 import { invalidRequestError } from './errors.js';
 import type { NativeAgentError } from './errors.js';
@@ -38,7 +39,93 @@ const decodeDataUrl = (url: string): { mime: string; base64: string } | null => 
   return { mime, base64: base64 ? payload : Buffer.from(decodeURIComponent(payload)).toString('base64') };
 };
 
-const fileTextBlock = (name: string, text: string): string => `Attached file ${name}:\n\n${text}`;
+const ATTACHMENT_TAG = 'openchamber-attachment-';
+const USER_TEXT_TAG = 'openchamber-user-text-';
+const LEGACY_ATTACHMENT_HEADER = /^Attached file ([^\r\n]+):\r?\n\r?\n/;
+const attachmentFieldsSchema = z.object({ filename: z.string(), mime: z.string().regex(/^text\/[\w.+-]+$/) });
+
+export type PromptTextAttachment = { type: 'file'; filename: string; mime: string; text: string | null };
+
+const framedText = (prefix: string, fields: string, text: string): string => {
+  const tag = prefix + createHash('sha256').update(text).digest('hex').slice(0, 16);
+  return `<${tag}>${fields}\n${text}\n</${tag}>`;
+};
+
+const fileTextBlock = (filename: string, { mime, base64 }: { mime: string; base64: string }): string => (
+  framedText(ATTACHMENT_TAG, JSON.stringify({ filename, mime }), Buffer.from(base64, 'base64').toString('utf8'))
+);
+
+const userTextBlock = (text: string): string => (
+  text.includes(`<${ATTACHMENT_TAG}`) || text.includes(`<${USER_TEXT_TAG}`) || LEGACY_ATTACHMENT_HEADER.test(text)
+    ? framedText(USER_TEXT_TAG, '', text)
+    : text
+);
+
+export const promptTextAttachmentFile = ({ filename, mime, text }: PromptTextAttachment): PromptFilePart & { filename: string } => ({
+  type: 'file',
+  filename: filename.trim() ? filename : 'file',
+  mime,
+  url: text === null ? '' : `data:${mime};base64,${Buffer.from(text).toString('base64')}`,
+});
+
+const attachmentFields = (fields: string) => {
+  try { return attachmentFieldsSchema.safeParse(JSON.parse(fields)).data ?? null; }
+  catch { return null; }
+};
+
+const splitPromptTextAttachments = (text: string) => {
+  const header = /<(openchamber-(?:attachment|user-text)-[0-9a-f]{16})>([^\r\n]*)\r?\n/g;
+  const attachments: PromptTextAttachment[] = [];
+  const visible: string[] = [];
+  let cursor = 0;
+  for (let match = header.exec(text); match; match = header.exec(text)) {
+    const [, tag, fields] = match;
+    if (!tag || fields === undefined) continue;
+    const isUserText = tag.startsWith(USER_TEXT_TAG);
+    if (isUserText && fields !== '') continue;
+    const metadata = isUserText ? null : attachmentFields(fields);
+    if (!isUserText && !metadata) continue;
+    const start = header.lastIndex;
+    const closing = `\n</${tag}>`;
+    const end = text.indexOf(closing, start);
+    const payload = end === -1 ? null : text.slice(start, end);
+    visible.push(text.slice(cursor, match.index));
+    cursor = end === -1 ? text.length : end + closing.length;
+    if (metadata) {
+      attachments.push({ type: 'file', ...metadata, text: payload });
+      if (text.startsWith('\n\n', cursor)) cursor += 2;
+    } else {
+      visible.push(payload ?? text.slice(start));
+    }
+    header.lastIndex = cursor;
+  }
+  return { text: cursor === 0 ? text : visible.join('') + text.slice(cursor), attachments };
+};
+
+export const readPromptTextBlock = (text: string, allowLegacy: boolean): PromptTextAttachment | PromptTextPart | null => {
+  if (text.startsWith(`<${USER_TEXT_TAG}`)) {
+    const visible = splitPromptTextAttachments(text).text;
+    return isInstructionsBlock(visible) ? null : { type: 'text', text: visible };
+  }
+  if (isInstructionsBlock(text)) return null;
+  if (text.startsWith(`<${ATTACHMENT_TAG}`)) {
+    const split = splitPromptTextAttachments(text);
+    if (split.text === '' && split.attachments[0] && split.attachments.length === 1) return split.attachments[0];
+  }
+  const header = allowLegacy ? LEGACY_ATTACHMENT_HEADER.exec(text) : null;
+  const filename = header?.[1];
+  return filename && header ? { type: 'file', filename, mime: 'text/plain', text: text.slice(header[0].length) } : { type: 'text', text };
+};
+
+export const inlinePromptFileText = (part: Pick<PromptFilePart, 'mime' | 'url'>): string | null => {
+  if (!part.mime.startsWith('text/') || !part.url.startsWith('data:text/')) return null;
+  try {
+    const data = decodeDataUrl(part.url);
+    return data ? Buffer.from(data.base64, 'base64').toString('utf8') : null;
+  } catch {
+    return null;
+  }
+};
 
 const INSTRUCTIONS_OPEN = '<openchamber-instructions>';
 const INSTRUCTIONS_CLOSE = '</openchamber-instructions>';
@@ -67,7 +154,7 @@ export const claudePromptBlocks = (parts: ReadonlyArray<PromptPart>): ClaudeProm
   const blocks: ClaudePromptBlock[] = [];
   for (const part of parts) {
     if (part.type === 'text') {
-      if (part.text !== '') blocks.push({ type: 'text', text: part.text });
+      if (part.text !== '') blocks.push({ type: 'text', text: userTextBlock(part.text) });
       continue;
     }
     const filePath = pathOf(part.url);
@@ -81,7 +168,7 @@ export const claudePromptBlocks = (parts: ReadonlyArray<PromptPart>): ClaudeProm
     } else if (data?.mime === 'application/pdf') {
       blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: data.base64 }, title: part.filename ?? 'document.pdf' });
     } else if (data?.mime.startsWith('text/')) {
-      blocks.push({ type: 'text', text: fileTextBlock(part.filename ?? 'file', Buffer.from(data.base64, 'base64').toString('utf8')) });
+      blocks.push({ type: 'text', text: fileTextBlock(part.filename ?? 'file', data) });
     } else {
       throw unsupported('Claude Code', part);
     }
@@ -94,7 +181,7 @@ export const codexPromptInput = (parts: ReadonlyArray<PromptPart>): CodexPromptI
   const input: CodexPromptInputItem[] = [];
   for (const part of parts) {
     if (part.type === 'text') {
-      if (part.text !== '') input.push({ type: 'text', text: part.text });
+      if (part.text !== '') input.push({ type: 'text', text: userTextBlock(part.text) });
       continue;
     }
     const filePath = pathOf(part.url);
@@ -106,7 +193,7 @@ export const codexPromptInput = (parts: ReadonlyArray<PromptPart>): CodexPromptI
     if (data?.mime.startsWith('image/')) {
       input.push({ type: 'image', url: part.url });
     } else if (data?.mime.startsWith('text/')) {
-      input.push({ type: 'text', text: fileTextBlock(part.filename ?? 'file', Buffer.from(data.base64, 'base64').toString('utf8')) });
+      input.push({ type: 'text', text: fileTextBlock(part.filename ?? 'file', data) });
     } else {
       throw unsupported('Codex', part);
     }
@@ -119,7 +206,7 @@ export const antigravityPromptText = (parts: ReadonlyArray<PromptPart>): string 
   const blocks: string[] = [];
   for (const part of parts) {
     if (part.type === 'text') {
-      if (part.text !== '') blocks.push(part.text);
+      if (part.text !== '') blocks.push(userTextBlock(part.text));
       continue;
     }
     const filePath = pathOf(part.url);
@@ -130,7 +217,7 @@ export const antigravityPromptText = (parts: ReadonlyArray<PromptPart>): string 
     }
     const data = decodeDataUrl(part.url);
     if (data?.mime.startsWith('text/')) {
-      blocks.push(fileTextBlock(part.filename ?? 'file', Buffer.from(data.base64, 'base64').toString('utf8')));
+      blocks.push(fileTextBlock(part.filename ?? 'file', data));
     } else {
       throw unsupported('Antigravity', part);
     }
@@ -160,3 +247,16 @@ export const antigravityVisiblePromptText = (text: string, expectedPlanFingerpri
 export const antigravityPromptFingerprint = (text: string): string => createHash('sha256')
   .update(antigravityVisiblePromptText(text))
   .digest('hex');
+
+export const antigravityDisplayPromptParts = (text: string, expectedPlanFingerprint?: string): PromptPart[] => {
+  const split = splitPromptTextAttachments(text);
+  let visible = antigravityVisiblePromptText(split.text, expectedPlanFingerprint);
+  if (split.text !== text && expectedPlanFingerprint !== undefined && /^\/plan(?: |$)/.test(visible)
+    && antigravityVisiblePromptText(text, expectedPlanFingerprint) !== antigravityVisiblePromptText(text)) {
+    visible = visible.replace(/^\/plan(?: |$)/, '').trimStart();
+  }
+  return [
+    ...(visible ? [{ type: 'text' as const, text: visible }] : []),
+    ...split.attachments.map(promptTextAttachmentFile),
+  ];
+};

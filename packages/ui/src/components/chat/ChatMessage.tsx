@@ -599,11 +599,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     const setImagePreviewOpen = useUIStore((state) => state.setImagePreviewOpen);
 
     const handleShowPopup = React.useCallback((content: ToolPopupContent) => {
-
-        if (content.image || content.mermaid) {
-            setPopupContent(content);
-            setImagePreviewOpen(true);
-        }
+        setPopupContent(content);
+        setImagePreviewOpen(true);
     }, [setImagePreviewOpen]);
 
     const handlePopupChange = React.useCallback((open: boolean) => {

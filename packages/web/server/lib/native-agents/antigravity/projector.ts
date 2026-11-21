@@ -1,15 +1,12 @@
-import { userTextPartId } from '../ids.js';
 import {
   antigravityPromptFingerprint,
   antigravityVisiblePromptText,
-  isInstructionsBlock,
 } from '../prompt-parts.js';
 import type { PromptPart } from '../prompt-parts.js';
 import {
   buildAssistantMessage,
   buildCompactionMessage,
   buildCompactionPart,
-  buildFilePart,
   buildTextPart,
   buildToolPart,
   stoppedError,
@@ -135,39 +132,6 @@ export const resolveAntigravityBindings = async ({
   return { bindings, sends };
 };
 
-const liveUserParts = ({
-  sessionId,
-  messageID,
-  parts,
-  created,
-}: {
-  sessionId: string;
-  messageID: string;
-  parts: readonly PromptPart[];
-  created: number;
-}): NativePart[] => {
-  let textIndex = 0;
-  let fileIndex = 0;
-  return parts.flatMap((part): NativePart[] => {
-    if (part.type === 'text') {
-      if (part.text === '' || isInstructionsBlock(part.text)) return [];
-      const id = userTextPartId(messageID, textIndex);
-      textIndex += 1;
-      return [buildTextPart({ id, sessionID: sessionId, messageID, text: part.text, start: created, end: created })];
-    }
-    const id = `${messageID}_f${fileIndex}`;
-    fileIndex += 1;
-    return [buildFilePart({
-      id,
-      sessionID: sessionId,
-      messageID,
-      mime: part.mime,
-      url: part.url,
-      filename: part.filename ?? 'attachment',
-    })];
-  });
-};
-
 export const createAntigravityLiveProjection = ({
   sessionId,
   nativeId,
@@ -203,13 +167,7 @@ export const createAntigravityLiveProjection = ({
     id: request.messageID,
     created: created(request.sentAt),
     send: selection,
-    text: '',
-  });
-  user.parts = liveUserParts({
-    sessionId,
-    messageID: request.messageID,
     parts: request.parts,
-    created: user.info.time.created,
   });
   records.set(user.info.id, user);
 

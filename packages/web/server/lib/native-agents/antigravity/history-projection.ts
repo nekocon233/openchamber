@@ -1,9 +1,10 @@
-import { NATIVE_PROVIDER_ANTIGRAVITY, encodeAntigravitySessionId, userTextPartId } from '../ids.js';
-import { antigravityVisiblePromptText } from '../prompt-parts.js';
+import { NATIVE_PROVIDER_ANTIGRAVITY, encodeAntigravitySessionId, userFilePartId, userTextPartId } from '../ids.js';
+import { antigravityDisplayPromptParts, isInstructionsBlock, type PromptPart } from '../prompt-parts.js';
 import {
   buildAssistantMessage,
   buildCompactionMessage,
   buildCompactionPart,
+  buildFilePart,
   buildReasoningPart,
   buildTextPart,
   buildToolPart,
@@ -102,7 +103,7 @@ export const userRecord = ({
   id,
   created,
   send,
-  text,
+  parts,
 }: {
   sessionId: string;
   id: string;
@@ -110,7 +111,7 @@ export const userRecord = ({
   send: (Pick<RegistrySendRecord, 'providerID' | 'modelID' | 'agent' | 'variant'> & {
     antigravity?: RegistrySendRecord['antigravity'];
   }) | null | undefined;
-  text: string;
+  parts: readonly PromptPart[];
 }): AgyUserRecord => {
   const selection = selectionOf(send);
   const model: NativeMessageModel = {
@@ -118,7 +119,9 @@ export const userRecord = ({
     modelID: selection.modelID,
   };
   if (selection.variant !== undefined) model.variant = selection.variant;
-  const record: AgyUserRecord = {
+  let textIndex = 0;
+  let fileIndex = 0;
+  return {
     info: buildUserMessage({
       id,
       sessionID: sessionId,
@@ -126,19 +129,14 @@ export const userRecord = ({
       agent: selection.agent,
       model,
     }),
-    parts: [],
+    parts: send?.antigravity?.interactionReply ? [] : parts.flatMap((part): NativePart[] => {
+      if (part.type === 'text') {
+        if (part.text === '' || isInstructionsBlock(part.text)) return [];
+        return [buildTextPart({ id: userTextPartId(id, textIndex++), sessionID: sessionId, messageID: id, text: part.text, start: created, end: created })];
+      }
+      return [buildFilePart({ ...part, id: userFilePartId(id, fileIndex++), sessionID: sessionId, messageID: id, filename: part.filename ?? 'attachment' })];
+    }),
   };
-  if (text !== '' && !send?.antigravity?.interactionReply) {
-    record.parts.push(buildTextPart({
-      id: userTextPartId(id, 0),
-      sessionID: sessionId,
-      messageID: id,
-      text,
-      start: created,
-      end: created,
-    }));
-  }
-  return record;
 };
 
 export const reasoningPart = ({
@@ -284,7 +282,7 @@ export const projectAntigravityHistory = ({
     const fallbackParentID = `nag_u_${sessionKey(nativeId)}_context`;
     parentID = fallbackParentID;
     parentSend = null;
-    records.push(userRecord({ sessionId, id: fallbackParentID, created: time - 1, send: null, text: '' }));
+    records.push(userRecord({ sessionId, id: fallbackParentID, created: time - 1, send: null, parts: [] }));
     return fallbackParentID;
   };
 
@@ -305,7 +303,7 @@ export const projectAntigravityHistory = ({
         id,
         created: created(entry, send?.sentAt),
         send,
-        text: antigravityVisiblePromptText(
+        parts: antigravityDisplayPromptParts(
           parentTask && message ? message.content : entry.content ?? '',
           send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined,
         ),

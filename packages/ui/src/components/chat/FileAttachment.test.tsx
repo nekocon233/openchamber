@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { OpenCode } from '@opencode/client';
 import { Window } from 'happy-dom';
 
 const browser = new Window({ url: 'http://localhost/' });
@@ -20,6 +21,7 @@ const { act } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { I18nProvider } = await import('@/lib/i18n');
 const { TooltipProvider } = await import('@/components/ui/tooltip');
+const { SyncProvider } = await import('@/sync/sync-context');
 const { MessageFilesDisplay } = await import('./FileAttachment');
 const { useUIStore } = await import('@/stores/useUIStore');
 const { useProjectsStore } = await import('@/stores/useProjectsStore');
@@ -56,19 +58,25 @@ const container = document.createElement('div');
 document.body.appendChild(container);
 const root = createRoot(container);
 let popups: ToolPopupContent[] = [];
+const sdk = OpenCode.make({
+  baseUrl: 'http://localhost',
+  fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
+});
 
-const renderFiles = async (files: FilePart[], compact: boolean) => {
+const renderFiles = async (files: FilePart[], compact: boolean, showImageThumbnails = true) => {
   popups = [];
   const onShowPopup = (popup: ToolPopupContent) => {
     popups.push(popup);
   };
   await act(async () => {
     root.render(
-      <I18nProvider>
-        <TooltipProvider>
-          <MessageFilesDisplay files={files} onShowPopup={onShowPopup} compact={compact} />
-        </TooltipProvider>
-      </I18nProvider>,
+      <SyncProvider sdk={sdk} directory="/repo">
+        <I18nProvider>
+          <TooltipProvider>
+            <MessageFilesDisplay files={files} onShowPopup={onShowPopup} compact={compact} showImageThumbnails={showImageThumbnails} />
+          </TooltipProvider>
+        </I18nProvider>
+      </SyncProvider>,
     );
   });
 };
@@ -162,18 +170,25 @@ describe('MessageFilesDisplay pasted text files', () => {
     expect(popups[0].content).toBe(content);
   });
 
-  test('a compact image thumbnail keeps the image popup payload', async () => {
-    await renderFiles([file({ mime: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,aGVsbG8=' })], true);
+  for (const showImageThumbnails of [false, true]) {
+    test(`a compact image ${showImageThumbnails ? 'thumbnail' : 'file label'} opens the original image`, async () => {
+      await renderFiles([file({ mime: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,aGVsbG8=' })], true, showImageThumbnails);
 
-    const chip = [...container.querySelectorAll('button')].find((entry) => entry.getAttribute('aria-label') === 'shot.png');
-    expect(chip).toBeDefined();
-    await clickChip(chip!);
+      const chip = container.querySelector('button[aria-label="shot.png"]');
+      expect(chip).toBeDefined();
+      if (!showImageThumbnails) {
+        expect(chip?.textContent).toContain('shot.png');
+        expect(chip?.querySelector('img')).toBeNull();
+        expect(popups).toHaveLength(0);
+      }
+      await clickChip(chip!);
 
-    expect(popups).toHaveLength(1);
-    expect(popups[0].content).toBe('');
-    expect(popups[0].image?.url).toBe('data:image/png;base64,aGVsbG8=');
-    expect(popups[0].image?.mimeType).toBe('image/png');
-  });
+      expect(popups).toHaveLength(1);
+      expect(popups[0].content).toBe('');
+      expect(popups[0].image?.url).toBe('data:image/png;base64,aGVsbG8=');
+      expect(popups[0].image?.mimeType).toBe('image/png');
+    });
+  }
 
   for (const compact of [false, true]) {
     test(`a ${compact ? 'compact ' : ''}pdf sent inline opens the document dialog`, async () => {
