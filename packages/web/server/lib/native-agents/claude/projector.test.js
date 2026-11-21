@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { claudePromptBlocks } from '../prompt-parts.js';
 import { createClaudeProjection } from './projector.js';
 import { slimToolResult } from './tools.js';
 import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
@@ -31,6 +32,27 @@ const toolParts = (records) => records.flatMap((record) => record.parts).filter(
 
 describe('Claude history projection', () => {
   const records = projectHistory(fixture('haiku-tools.session-messages.json'));
+
+  it('keeps the uploaded text as a file in live and saved messages', () => {
+    const file = { type: 'file', filename: 'notes.md', mime: 'text/markdown', url: 'data:text/markdown;base64,SGVsbG8=' };
+    const typed = 'Attached file notes.md:\n\nThis heading is part of my prompt.';
+    const blocks = claudePromptBlocks([{ type: 'text', text: typed }, file]);
+    const legacy = { type: 'text', text: 'Attached file archive.txt:\n\nOld notes.' };
+    const sendRecordFor = (id) => id === USER_ID ? { modelID: 'haiku', agent: 'build' } : null;
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', sendRecordFor });
+    const content = [...blocks, legacy];
+    projection.startUserPrompt(USER_ID, { kind: 'blocks', blocks: content });
+    const expectedParts = [
+      { id: `${USER_ID}_p0`, type: 'text', text: typed },
+      { id: `${USER_ID}_f0`, ...file },
+      { id: `${USER_ID}_f1`, type: 'file', filename: 'archive.txt', url: `data:text/plain;base64,${Buffer.from('Old notes.').toString('base64')}` },
+    ];
+    expect(projection.records()[0].parts).toMatchObject(expectedParts);
+    const [saved] = projectHistory([
+      { type: 'user', uuid: USER_ID.slice('ncl_u_'.length), message: { role: 'user', content } },
+    ], { sendRecordFor });
+    expect(saved.parts).toMatchObject(expectedParts);
+  });
 
   it.each([{}, { plan: 'Fix the parser.' }])('projects an ExitPlanMode call with input %j', (input) => {
     const entries = fixture('haiku-tools.session-messages.json');

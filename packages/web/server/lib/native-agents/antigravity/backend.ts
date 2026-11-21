@@ -653,7 +653,7 @@ export const createAntigravityBackend = ({
         }
         signal?.throwIfAborted();
         const nativeText = session.firstPrompt && session.globalInstructions
-          ? antigravityPromptText(withInstructions([{ type: 'text', text: userText }], session.globalInstructions))
+          ? `${userText}\n\n${antigravityPromptText(withInstructions([], session.globalInstructions))}`
           : userText;
         const send: RegistrySendRecordInput = {
           messageId: request.messageID,

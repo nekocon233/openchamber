@@ -252,6 +252,9 @@ depends on:
 - Every part carries `sessionID`. Finished text parts have `time.end`;
   finished tools have `state.time.end`. A tool that never got a result is
   settled as interrupted.
+- Native prompt adapters preserve text uploads as file parts in live turns and
+  saved history. The transcript presents the filename and the attachment viewer
+  reads the file body. The backend receives the complete text upload.
 - Codex history recovers each item's start and end from the rollout's
   `item_completed` records. Synthesized question and skill rows take the time
   of the response record that produced them. An item without a recorded time
@@ -413,6 +416,22 @@ Codex gotchas:
 - Only JSON-RPC `-32600` "thread not loaded" or "invalid thread id" means a
   thread is missing. Every other error propagates, so a transport failure is
   never reported as a deleted session.
+
+### Why text prompt attachments carry explicit boundaries
+
+Codex, Claude Code and Antigravity send text uploads as model-readable text.
+OpenChamber wraps each upload with its filename, MIME type and a content-derived
+closing tag. The native transcript keeps both the content and its boundaries,
+including when Antigravity joins several prompt parts into one string. The
+projector can recover file parts after restart without a second transcript.
+A truncated upload with a readable header keeps its filename.
+Ordinary prompt text that matches the attachment syntax is framed as user text
+and restored verbatim.
+
+The older format has only a heading. Codex and Claude Code can recover it from
+a separate text block on a known OpenChamber send. Earlier flattened Antigravity
+prompts preserve their original text because the heading does not identify where
+an attachment ends.
 
 ### Why Codex throughput uses tool returns
 

@@ -12,7 +12,10 @@ describe('conversation context model aliases', () => {
         { segmentId: 'claude', record: { info: { id: 'old', role: 'user' }, parts: [{ type: 'text', text: 'Covered history '.repeat(20000) }] } },
         { segmentId: 'claude', record: { info: { id: 'boundary', role: 'compaction', status: 'completed', summary: '' }, parts: [] } },
         { segmentId: 'claude', record: { info: { id: 'summary', role: 'assistant', summary: true }, parts: [{ type: 'text', text: 'Native Claude checkpoint' }] } },
-        { segmentId: 'claude', record: { info: { id: 'recent', role: 'user' }, parts: [{ type: 'text', text: 'Continue this work' }] } },
+        { segmentId: 'claude', record: { info: { id: 'recent', role: 'user' }, parts: [
+          { type: 'text', text: 'Continue this work' },
+          { type: 'file', mime: 'text/plain', filename: 'notes.txt', url: 'data:text/plain;base64,UmV0YWluZWQgbm90ZXMu' },
+        ] } },
       ],
       target: { model: { providerID: 'codex-native', modelID: 'codex-model' } },
       catalog: { models: [{ id: 'codex-model', contextWindow: 64000 }] },
@@ -22,6 +25,7 @@ describe('conversation context model aliases', () => {
     });
     expect(context).toContain('Native Claude checkpoint');
     expect(context).toContain('Continue this work');
+    expect(context).toContain('Attached file notes.txt:\n\nRetained notes.');
     expect(context).not.toContain('Covered history');
   });
   it('hands off validated Antigravity tasks and child reports while keeping reasoning at the source', async () => {

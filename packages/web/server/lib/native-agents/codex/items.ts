@@ -3,9 +3,10 @@ import { z } from 'zod';
 
 import type { JsonValue } from '../../shared/json-values.js';
 import { codexFileEntry, fileDiffMetadata } from '../file-diff.js';
-import { codexPartId, encodeCodexSessionId } from '../ids.js';
-import { isInstructionsBlock } from '../prompt-parts.js';
+import { codexPartId, encodeCodexSessionId, isNativeClientUserMessageId } from '../ids.js';
+import { readPromptTextBlock, type PromptTextAttachment } from '../prompt-parts.js';
 import { buildReasoningPart, buildTextPart, buildToolPart } from '../records.js';
+import type { NativeFilePart } from '../records.js';
 import { buildSkillReadPart } from '../skill-records.js';
 
 const jsonValueSchema = z.custom<JsonValue>(() => true);
@@ -345,11 +346,6 @@ const textInput = z.object({ type: z.literal('text'), text: z.string() }).passth
 const imageInput = z.object({ type: z.enum(['image', 'localImage']), url: z.string().optional(), path: z.string().optional() }).passthrough();
 const skillInput = z.object({ type: z.literal('skill'), name: z.string(), path: z.string() });
 
-export interface ParsedCodexUserImage {
-  url: string;
-  filename: string;
-}
-
 export interface ParsedCodexUserSkill {
   type: 'skill';
   name: string;
@@ -360,7 +356,7 @@ export interface ParsedCodexUserMessage {
   id: string;
   clientId: string | null;
   texts: string[];
-  images: ParsedCodexUserImage[];
+  files: Array<PromptTextAttachment | Pick<NativeFilePart, 'mime' | 'url' | 'filename'>>;
   skills: ParsedCodexUserSkill[];
 }
 
@@ -368,24 +364,29 @@ export const parseCodexUserMessageItem = (rawItem: CodexRawItem): ParsedCodexUse
   const parsed = userMessageItem.safeParse(rawItem);
   if (!parsed.success) return null;
   const texts: string[] = [];
-  const images: ParsedCodexUserImage[] = [];
+  const files: ParsedCodexUserMessage['files'] = [];
   const skills: ParsedCodexUserSkill[] = [];
+  const allowLegacy = isNativeClientUserMessageId(parsed.data.clientId ?? '');
   for (const entry of parsed.data.content) {
     const skill = skillInput.safeParse(entry);
     if (skill.success) { skills.push(skill.data); continue; }
     const text = textInput.safeParse(entry);
     if (text.success) {
-      if (!isInstructionsBlock(text.data.text)) texts.push(text.data.text);
+      const part = readPromptTextBlock(text.data.text, allowLegacy);
+      if (part?.type === 'text') texts.push(part.text);
+      else if (part) files.push(part);
       continue;
     }
     const image = imageInput.safeParse(entry);
     if (image.success) {
       const source = image.data.url ?? image.data.path ?? '';
-      images.push({
-        url: source.startsWith('data:') ? source : '',
-        filename: source.split('/').at(-1) || 'image',
+      const inline = source.startsWith('data:');
+      files.push({
+        mime: 'image/*',
+        url: inline ? source : '',
+        filename: inline ? 'image' : source.split('/').at(-1) || 'image',
       });
     }
   }
-  return { id: parsed.data.id, clientId: parsed.data.clientId ?? null, texts, images, skills };
+  return { id: parsed.data.id, clientId: parsed.data.clientId ?? null, texts, files, skills };
 };

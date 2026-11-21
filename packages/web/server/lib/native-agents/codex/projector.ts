@@ -11,6 +11,7 @@ import {
   userFilePartId,
   userTextPartId,
 } from '../ids.js';
+import { promptTextAttachmentFile } from '../prompt-parts.js';
 import {
   buildAssistantMessage,
   buildCompactionMessage,
@@ -271,8 +272,9 @@ export const projectCodexTurns = ({
             : basePart;
           userRecord.parts.push(part);
         });
-        userItem.images.forEach((image, index) => {
-          userRecord.parts.push(buildFilePart({ id: userFilePartId(id, index), sessionID: sessionId, messageID: id, mime: 'image/*', url: image.url, filename: image.filename }));
+        userItem.files.forEach((attachment, index) => {
+          const file = 'text' in attachment ? promptTextAttachmentFile(attachment) : attachment;
+          userRecord.parts.push(buildFilePart({ ...file, id: userFilePartId(id, index), sessionID: sessionId, messageID: id }));
         });
         currentUser = userRecord;
         records.push(userRecord);

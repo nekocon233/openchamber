@@ -152,7 +152,9 @@ Logical checklist identities include conversation, segment and rewind boundary.
 Events from a bounded or rewound source cannot update that logical list.
 
 `context.js` transfers user text, visible replies and plans, tool inputs and
-results, and attachment references through server-generated hidden instructions.
+results, and attachments through server-generated hidden instructions.
+Inline text uploads contribute their contents. Other attachments contribute
+their filename or path.
 It leaves native reasoning and tool protocol execution with the source CLI.
 The public client instruction limit does not constrain this server-built context.
 

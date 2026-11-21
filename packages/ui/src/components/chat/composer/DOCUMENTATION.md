@@ -860,11 +860,9 @@ caret). There are no thumbnails above the input.
   space and the caret beside it, so a long name truncates instead of filling
   the line.
 - The collapsed mobile pill draws the chips in its one line.
-- The sent message keeps a quick look at its images and files: one strip
-  (`MessageFilesDisplay`, compact) of tiles of one height, images as
-  thumbnails and files as small pages: the name on up to two lines, then the
-  type and the size when the part carries it, scrolled sideways when they
-  do not fit. Everything else the message carries is its chip in the text.
+- The sent message uses a compact strip of attachment tiles. Each tile shows
+  the filename, type and available size. Open a tile to see its contents.
+  The strip scrolls sideways when the tiles do not fit.
 An Android image paste arrives from the input method rather than from a paste event, because
 a WebView declares no content types on its `EditorInfo` and the IME refuses the paste before
 the page can hear about it. The Capacitor Android shell declares image content on the editor

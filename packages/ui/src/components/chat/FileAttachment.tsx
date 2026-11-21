@@ -498,9 +498,10 @@ interface MessageFilesDisplayProps {
   onShowPopup?: (content: ToolPopupContent) => void;
   compact?: boolean;
   className?: string;
+  showImageThumbnails?: boolean;
 }
 
-export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, className }: MessageFilesDisplayProps) => {
+export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, className, showImageThumbnails = true }: MessageFilesDisplayProps) => {
   const { t } = useI18n();
   const mobile = useMobileAppActions();
   const isMobile = useUIStore((state) => state.isMobile);
@@ -575,7 +576,7 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
             const fileName = resolveDisplayName(file) || 'File';
             const openTarget = resolveOpenTarget(file);
             const issueLinkKind = getIssueLinkKind(file);
-            const isImage = Boolean(file.mime?.startsWith('image/') && file.url) && !issueLinkKind;
+            const showThumbnail = showImageThumbnails && file.mime?.startsWith('image/') && file.url && !issueLinkKind;
             const sizeText = formatFileSize(file.size);
             const ext = fileName.includes('.') ? fileName.split('.').pop() ?? '' : '';
             const kindText = [issueLinkKind ? null : ext.toUpperCase() || null, sizeText || null].filter(Boolean).join(' · ');
@@ -596,11 +597,11 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
                     onClick={open}
                     disabled={!open}
                     aria-label={fileName}
-                    className={cn(tileClass, isImage
+                    className={cn(tileClass, showThumbnail
                       ? 'w-16 bg-muted/10 cursor-zoom-in'
                       : 'oc-tile flex w-36 flex-col justify-between px-2 py-1 text-start enabled:hover:text-foreground disabled:cursor-default')}
                   >
-                    {isImage && file.url ? (
+                    {showThumbnail && file.url ? (
                       <StatusImage
                         src={file.url}
                         alt={fileName}

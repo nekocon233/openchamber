@@ -1,6 +1,7 @@
 import { NativeAgentError } from '../errors.js';
 import { isString } from '../../shared/guards.js';
 import { isEnterpriseMode } from '../../enterprise-mode.js';
+import { inlinePromptFileText } from '../prompt-parts.js';
 import type { NativeMessageRecord } from '../records.js';
 import type { ConversationCheckpoint, ConversationManifest, ConversationSelection } from './store.js';
 import type { ConversationHistoryEntry } from './history.js';
@@ -55,7 +56,11 @@ const textOf = ({ info, parts }: NativeMessageRecord): string => {
   if (info.role === 'compaction') return info.summary || '';
   const content = parts.flatMap((part) => {
     if (part.type === 'text' && !part.synthetic) return [part.text];
-    if (part.type === 'file') return [`Attached file: ${part.filename || (part.url?.startsWith('file://') ? part.url : 'attachment')}`];
+    if (part.type === 'file') {
+      const filename = part.filename || (part.url?.startsWith('file://') ? part.url : 'attachment');
+      const text = info.role === 'user' ? inlinePromptFileText(part) : null;
+      return [text === null ? `Attached file: ${filename}` : `Attached file ${filename}:\n\n${text}`];
+    }
     if (part.type === 'tool') {
       if (part.state.status === 'running') return [];
       const result = part.state.status === 'error' ? part.state.error : part.state.output;

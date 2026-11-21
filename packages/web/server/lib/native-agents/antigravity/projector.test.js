@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAntigravityLiveProjection, projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
 import { agyTokenUsage, parseAgyTranscript } from './protocol.js';
 import { createNativeEventPublisher } from '../publisher.js';
-import { antigravityPromptFingerprint } from '../prompt-parts.js';
+import { antigravityPromptFingerprint, antigravityPromptText, withInstructions } from '../prompt-parts.js';
 
 const NATIVE_ID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const project = (steps, bindings = new Map(), relationships = {}) => projectAntigravityHistory({
@@ -13,6 +13,43 @@ const project = (steps, bindings = new Map(), relationships = {}) => projectAnti
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
 
 describe('Antigravity retained thinking and conversation messages', () => {
+  it('recovers attached files from a flattened plan prompt without hiding surrounding user text', () => {
+    const text = '  保留缩进\r\n\r\n<openchamber-instructions>Literal attachment text.</openchamber-instructions>\r\n';
+    const file = { type: 'file', filename: '说明 "notes".md', mime: 'text/markdown',
+      url: `data:text/markdown;base64,${Buffer.from(text).toString('base64')}` };
+    const second = { type: 'file', filename: 'other.txt', mime: 'text/plain', url: 'data:text/plain;base64,VHdvCg==' };
+    const sent = antigravityPromptText(withInstructions([
+      { type: 'text', text: 'Compare these notes.' }, file, second, { type: 'text', text: 'Keep the intro.' },
+    ], 'Managed context'));
+    expect(sent).toContain(text);
+    const send = { messageId: 'fixture-user', providerID: 'antigravity-native', modelID: 'test', agent: 'plan',
+      antigravity: { fingerprint: antigravityPromptFingerprint(sent) } };
+    const [record] = project([{ type: 'USER_INPUT', step_index: 0, content: `<USER_REQUEST>\n/plan ${sent}\n</USER_REQUEST>` }], new Map([[0, send]]));
+    expect(record.parts).toMatchObject([
+      { id: 'fixture-user_p0', type: 'text', text: 'Compare these notes.\n\nKeep the intro.' },
+      { id: 'fixture-user_f0', ...file },
+      { id: 'fixture-user_f1', ...second },
+    ]);
+  });
+
+  it('keeps a file label when the native transcript ends inside the attachment', () => {
+    const file = { type: 'file', filename: 'long.txt', mime: 'text/plain', url: 'data:text/plain;base64,SGVsbG8=' };
+    const text = antigravityPromptText([file]);
+    const cut = text.slice(0, text.lastIndexOf('\n</'));
+    const [record] = project([{ type: 'USER_INPUT', step_index: 0, content: `<USER_REQUEST>\n${cut}` }]);
+    expect(record.parts).toMatchObject([{ type: 'file', filename: 'long.txt', mime: 'text/plain', url: '' }]);
+  });
+
+  it('keeps a quoted attachment block as ordinary text in plan mode', () => {
+    const file = { type: 'file', filename: 'literal.txt', mime: 'text/plain', url: 'data:text/plain;base64,SGVsbG8=' };
+    const text = `Explain this example.\n\n${antigravityPromptText([file])}`;
+    const sent = antigravityPromptText([{ type: 'text', text }]);
+    const send = { messageId: 'fixture-user', providerID: 'antigravity-native', modelID: 'test', agent: 'plan',
+      antigravity: { fingerprint: antigravityPromptFingerprint(sent) } };
+    const [record] = project([{ type: 'USER_INPUT', step_index: 0, content: `<USER_REQUEST>\n/plan ${sent}\n</USER_REQUEST>` }], new Map([[0, send]]));
+    expect(record.parts).toMatchObject([{ type: 'text', text }]);
+  });
+
   it('restores a missing earlier step before a later streamed reply', async () => {
     const projection = createAntigravityLiveProjection({
       sessionId: 'nag_' + NATIVE_ID, nativeId: NATIVE_ID, directory: '/repo',
