@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { startExampleService } from './fixtures/example-service';
 import { FAKE_FORGE_FORK, FAKE_FORGE_STRANGER, startFakeForge, type FakeForge } from '../examples/source-control-provider/fake-forge';
 import { sourceControlProviderSchemasV1 as schemas } from '../src/service-provider-schemas';
 import {
@@ -25,15 +25,6 @@ import {
 
 const serviceEntry = fileURLToPath(new URL('../examples/source-control-provider/service/main.js', import.meta.url));
 const PROVIDER = 'ext-source-control-provider';
-
-const freePort = () => new Promise<number>((resolve, reject) => {
-  const server = net.createServer();
-  server.once('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const { port } = Object(server.address());
-    server.close(() => resolve(Number(port)));
-  });
-});
 
 let forge: FakeForge;
 let repository: string;
@@ -76,23 +67,13 @@ beforeAll(async () => {
     },
   });
 
-  servicePort = await freePort();
-  service = spawn('node', [serviceEntry], {
+  ({ service, port: servicePort } = await startExampleService({
+    entry: serviceEntry,
+    token: serviceToken,
     env: {
-      PATH: process.env.PATH,
-      OPENCHAMBER_SERVICE_PORT: String(servicePort),
-      OPENCHAMBER_SERVICE_TOKEN: serviceToken,
       [OPENCHAMBER_HOST_CALLBACK_URL]: `http://127.0.0.1:${callback.port}`,
     },
-    stdio: 'ignore',
-  });
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const ready = await fetch(`http://127.0.0.1:${servicePort}/health`, { headers: { authorization: `Bearer ${serviceToken}` } })
-      .then((response) => response.ok, () => false);
-    if (ready) return;
-    await Bun.sleep(50);
-  }
-  throw new Error('The example service never became ready');
+  }));
 });
 
 afterAll(async () => {
@@ -262,6 +243,51 @@ describe('source-control provider example', () => {
       context: mutationContext({ number: 3, headSha: 'c'.repeat(40) }), kind: 'change-request-merge', input: { method: 'merge' },
     });
     expect(stale).toMatchObject({ ok: false, error: { status: 409, code: 'SOURCE_CONTROL_MUTATION_TARGET_MISMATCH' } });
+  });
+
+  test('a comment is edited or deleted only on the item it belongs to', async () => {
+    const commentsOn = async (number: number): Promise<Array<{ id: number; body: string }>> => (
+      await fetch(`${forge.origin}/api/v1/repos/mona/teapot/issues/${number}/comments`, { headers: { authorization: 'token good' } })
+    ).json();
+    const post = async (number: number, kind: 'issue-comment' | 'change-request-comment', body: string) => {
+      const resolved = await data('mutation.resolveTarget', { context: mutationContext({ number }), kind, input: { body } });
+      await data('mutation.perform', {
+        route: kind === 'issue-comment' ? '/issues/comment' : '/pr/comment', kind, input: { body },
+        resolved: { providerTarget: field(resolved, 'providerTarget'), target: field(resolved, 'target') },
+      });
+      const comment = (await commentsOn(number)).find((entry) => entry.body === body);
+      if (!comment) throw new Error(`${body} was not posted`);
+      return String(comment.id);
+    };
+    const step = async (number: number, kind: string, input: SourceControlJsonObject) => {
+      const resolved = await data('mutation.resolveTarget', { context: mutationContext({ number }), kind, input });
+      return {
+        route: kind.startsWith('issue-') ? '/issues/comment' : '/pr/comment', kind, input,
+        resolved: { providerTarget: field(resolved, 'providerTarget'), target: field(resolved, 'target') },
+      };
+    };
+    const onIssue = await post(1, 'issue-comment', 'Kept on the issue');
+    // Gitea leaves `issue_url` empty on a pull request comment and names the pull request instead.
+    const onPull = await post(2, 'change-request-comment', 'Kept on the pull request');
+    const before = forge.writes.length;
+
+    // Another item's comment id is refused before anything is written.
+    for (const wrong of [
+      await step(1, 'issue-comment-update', { commentId: onPull, body: 'Hijacked' }),
+      await step(1, 'issue-comment-delete', { commentId: onPull }),
+      await step(2, 'change-request-comment-update', { commentId: onIssue, body: 'Hijacked' }),
+      await step(2, 'change-request-comment-delete', { commentId: onIssue }),
+    ]) {
+      expect(await call('mutation.perform', wrong), wrong.kind).toMatchObject({ ok: false, error: { status: 409, code: 'SOURCE_CONTROL_MUTATION_TARGET_INVALID' } });
+    }
+    expect(forge.writes.length).toBe(before);
+
+    // Each on its own item lands.
+    expect(await data('mutation.perform', await step(1, 'issue-comment-update', { commentId: onIssue, body: 'Edited on the issue' }))).toEqual({});
+    expect(await data('issueComments', { ...read(), number: 1 })).toMatchObject(expect.arrayContaining([expect.objectContaining({ body: 'Edited on the issue' })]));
+    expect(await data('mutation.perform', await step(2, 'change-request-comment-delete', { commentId: onPull }))).toEqual({});
+    expect((await commentsOn(2)).map((entry) => String(entry.id))).not.toContain(onPull);
+    expect(forge.writes.length).toBe(before + 2);
   });
 
   test('a merged branch shows its pull request, not an offer to open one', async () => {

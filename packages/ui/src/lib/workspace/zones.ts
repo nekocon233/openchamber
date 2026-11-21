@@ -15,7 +15,6 @@ export type DefaultContextZone = 'left' | 'right';
 
 export const CONTEXT_ZONES: readonly ContextZone[] = ['left', 'right', 'bottom'];
 
-/** A side zone's width until the user resizes it, px, whatever it shows. */
 export const CONTEXT_ZONE_DEFAULT_WIDTH = 640;
 
 /** Explicit surface placements, per device. Missing modes follow the layout. */
@@ -23,7 +22,6 @@ export type ContextZonePlacement = Partial<Record<ContextPanelMode, ContextZone>
 
 export const getDefaultContextZone = (layout: WorkspaceLayout): DefaultContextZone => layout === 'editor' ? 'left' : 'right';
 
-/** What one zone shows: open or not, expanded beside the chat, and its tab. */
 export type ContextZoneView = {
   isOpen: boolean;
   expanded: boolean;
@@ -32,16 +30,10 @@ export type ContextZoneView = {
 
 export const CLOSED_ZONE_VIEW: ContextZoneView = { isOpen: false, expanded: false, activeTabId: null };
 
-/** The left and bottom zones of one project's panel. */
 export type MovedZoneViews = { left: ContextZoneView; bottom: ContextZoneView };
 
 type ZonedTab = { id: string; mode: ContextPanelMode; touchedAt: number };
 
-/**
- * The right zone keeps the panel's original top-level fields, so state an
- * older build wrote, and every reader that predates zones, stays the right
- * panel. The left and bottom zones live under `zones`.
- */
 export type ZonedPanel<T extends ZonedTab = ZonedTab> = ContextZoneView & {
   tabs: readonly T[];
   zones: MovedZoneViews;
@@ -65,11 +57,6 @@ export const withZoneView = <P extends ZonedPanel>(panel: P, zone: ContextZone, 
 const tabsInZone = <T extends ZonedTab>(tabs: readonly T[], placement: ContextZonePlacement, zone: ContextZone, defaultZone: DefaultContextZone = 'right'): T[] =>
   tabs.filter((tab) => !(defaultZone === 'left' && tab.mode === DESKTOP_PANEL_MODE) && zoneOfMode(placement, tab.mode, defaultZone) === zone);
 
-/**
- * The zone's tab: the one it names when that tab is still open and placed in
- * this zone, else the zone's last tab. A tab id that points at a surface since
- * moved elsewhere never shows here.
- */
 export const resolveZoneActiveTabId = (
   tabs: readonly ZonedTab[],
   placement: ContextZonePlacement,
@@ -97,10 +84,6 @@ export const isZoneShown = (panel: ZonedPanel | undefined, placement: ContextZon
   Boolean(panel && getZoneView(panel, zone).isOpen && resolveZoneActiveTab(panel, placement, zone, defaultZone))
 );
 
-/**
- * A shown zone that can expand, as ContextPanel draws it: a side zone showing
- * only the file tree does not, and keeps any expanded flag suspended.
- */
 export const canZoneExpand = (
   panel: ZonedPanel<ZonedTab & { targetPath?: string | null }> | undefined,
   view: { contextSurfaceZones: ContextZonePlacement; contextEditorVisible: boolean; contextEditorTreeVisible: boolean },
@@ -115,7 +98,6 @@ export const canZoneExpand = (
     && (view.contextEditorVisible || !view.contextEditorTreeVisible);
 };
 
-/** The store fields that size a side zone, under the store's own names. */
 type SideZoneSizing = {
   contextZoneSizes: Partial<Record<ContextZone, number>>;
   contextEditorVisible: boolean;
@@ -125,11 +107,6 @@ type SideZoneSizing = {
 
 type SizedTab = ZonedTab & { targetPath?: string | null };
 
-/**
- * A side zone showing `tab` shrinks to the Files tree: a Files tab with no
- * editor column shown (no file open, or the editor hidden). Such a zone never
- * expands.
- */
 export const showsFileTreeOnly = (panel: ZonedPanel<SizedTab>, tab: SizedTab, sizing: SideZoneSizing): boolean => {
   if (tab.mode !== 'file') return false;
   const editorShown = panel.tabs.some((entry) => entry.mode === 'file' && entry.targetPath)
@@ -137,11 +114,6 @@ export const showsFileTreeOnly = (panel: ZonedPanel<SizedTab>, tab: SizedTab, si
   return !editorShown;
 };
 
-/**
- * The width a side zone takes beside the chat while it shows `tab`, as
- * `ContextPanel` draws it: the tree's width for Files showing only its tree,
- * else the zone's own size.
- */
 export const sideZoneWidth = (
   panel: ZonedPanel<SizedTab>,
   tab: SizedTab,
@@ -183,12 +155,6 @@ export const settleZones = <P extends ZonedPanel>(panel: P, placement: ContextZo
   return next;
 };
 
-/**
- * Moves a surface's on-screen state with it. When the surface is what `from`
- * shows, `to` opens on it (giving up whatever `to` showed) and `from` closes,
- * rather than jumping to another surface the user did not ask for. The
- * placement passed in is the one after the move.
- */
 export const carrySurfaceToZone = <P extends ZonedPanel>(
   panel: P,
   mode: ContextPanelMode,
@@ -264,13 +230,11 @@ const zoneViewSchema = z.object({
   activeTabId: z.string().nullable().catch(null),
 }).catch(CLOSED_ZONE_VIEW);
 
-/** Stored left/bottom views; anything missing or malformed loads closed. */
 export const zoneViewsSchema = z.object({
   left: zoneViewSchema.default(CLOSED_ZONE_VIEW),
   bottom: zoneViewSchema.default(CLOSED_ZONE_VIEW),
 }).catch({ left: CLOSED_ZONE_VIEW, bottom: CLOSED_ZONE_VIEW });
 
-/** A view only stays open on a tab that still exists. */
 export const keepZoneViewsOnTabs = (views: MovedZoneViews, tabIds: ReadonlySet<string>): MovedZoneViews => {
   const keep = (view: ContextZoneView): ContextZoneView => {
     const activeTabId = view.activeTabId && tabIds.has(view.activeTabId) ? view.activeTabId : null;

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createNativeEventPublisher } from '../publisher.js';
@@ -60,6 +61,53 @@ const setup = async ({ decorateSession = async (session) => session, onInteracti
 };
 
 describe('Antigravity CLI adapter', () => {
+  it('acknowledges a reclaimed accepted message without starting another turn', async () => {
+    const { backend, directory, events, prompt } = await setup();
+    const session = await backend.createSession({ directory });
+    const messageID = await prompt(session, 'queue replay');
+    const replay = { directory, messageID, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, parts: [{ type: 'text', text: 'queue replay' }] };
+    const count = events.length;
+    await backend.prompt(session.id, replay);
+    await backend.whenIdle(session.id);
+    expect(events.length).toBe(count);
+    await expect(backend.prompt(session.id, { ...replay, parts: [{ type: 'text', text: 'Unrelated prompt' }] }))
+      .rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+  });
+
+  it.each(['live-child-index-only', 'live-child-thinking'])('reconciles activity without a child result for %s', async (text) => {
+    const { backend, directory, home, events } = await setup();
+    const session = await backend.createSession({ directory });
+    await backend.prompt(session.id, { directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, parts: [{ type: 'text', text }] });
+    const child = await vi.waitFor(() => {
+      const child = events.find(({ payload }) => payload.type === 'session.created' && payload.properties.info.parentID === session.id);
+      expect(child).toBeDefined();
+      return child.payload.properties.info;
+    });
+    const statusEvents = () => events.filter(({ payload }) => payload.type === 'session.status' && payload.properties.sessionID === child.id)
+      .map(({ payload }) => payload.properties.status.type);
+    await vi.waitFor(() => expect(backend.busySessionIds(directory)).toEqual([session.id, child.id]), { timeout: 3000 });
+    expect((await backend.loadHistory(session.id, directory)).childSessions[0].metadata.openchamber.native.activityKnown).toBe(true);
+    expect(backend.busySessionIds('/another-project')).toEqual([]);
+
+    const writeStatus = (active) => {
+      const db = new DatabaseSync(path.join(home, 'conversation_summaries.db'));
+      try {
+        db.prepare('update conversation_summaries set status = ?, not_fully_idle = ?, last_modified_time = ? where conversation_id = ?')
+          .run('CASCADE_RUN_STATUS_IDLE', Number(active), new Date().toISOString(), child.id.slice(4));
+      } finally { db.close(); }
+    };
+    writeStatus(false);
+    await vi.waitFor(() => expect(backend.busySessionIds(directory)).toEqual([session.id]), { timeout: 3000 });
+    writeStatus(true);
+    await vi.waitFor(() => expect(backend.busySessionIds(directory)).toEqual([session.id, child.id]), { timeout: 3000 });
+    expect(statusEvents()).toEqual(['busy', 'idle', 'busy']);
+    await backend.abort(session.id);
+    expect(backend.busySessionIds(directory)).toEqual([]);
+    expect((await backend.loadHistory(session.id, directory)).childSessions[0].metadata.openchamber.native.activityKnown).toBe(false);
+  });
+
   it('lists skills in the requested directory without using the prompt wrapper or starting a conversation', async () => {
     const { backend, directory, home, resolveCommand } = await setup();
     expect(await backend.commands(directory)).toEqual({ commands: [{ name: 'fixture-skill', description: 'Fixture skill', argumentHint: '' }] });
@@ -331,7 +379,7 @@ describe('Antigravity CLI adapter', () => {
     await backend.prompt(session.id, request);
     await expect(backend.closeSession(session.id)).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
     await backend.abort(session.id);
-    await expect(backend.prompt(session.id, { ...request, model: { ...request.model, modelID: 'invalid-model' } }))
+    await expect(backend.prompt(session.id, { ...request, messageID: `nag_u_${randomUUID()}`, model: { ...request.model, modelID: 'invalid-model' } }))
       .rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_ERROR' });
   });
 

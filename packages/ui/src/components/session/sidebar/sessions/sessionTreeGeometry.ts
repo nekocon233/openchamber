@@ -1,10 +1,32 @@
 import { fileTreeRowPaddingLeft } from '@/components/views/files/fileTreeRow';
 
-// The session tree uses the file tree geometry with a 6px base instead of 8px:
-// root session titles then start where the project header's label starts.
-const SESSION_TREE_BASE_PADDING_PX = 6;
+export const SESSION_TREE_BASE_PADDING_PX = 6;
 
 export const sessionTreeRowPaddingLeft = (depth: number): string => fileTreeRowPaddingLeft(depth, SESSION_TREE_BASE_PADDING_PX);
 
-/** Where the text of a tree row starts: past the level's chevron slot (14px) and gap (6px). */
+export const sessionDetailedRowPaddingLeft = (depth: number): string => `calc(${sessionTreeRowPaddingLeft(depth)} + 4px)`;
+
 export const sessionTreeTextInset = (depth: number): string => `calc(${sessionTreeRowPaddingLeft(depth)} + 20px)`;
+
+export type SessionTreeGuide = { level: number; end: boolean };
+
+export const computeSessionTreeGuides = (levels: readonly (number | null)[]): (readonly SessionTreeGuide[] | null)[] => {
+  const result: (readonly SessionTreeGuide[] | null)[] = new Array(levels.length).fill(null);
+  let siblingBelow: boolean[] = [];
+  for (let index = levels.length - 1; index >= 0; index -= 1) {
+    const level = levels[index];
+    if (level === null || level === undefined) {
+      siblingBelow = [];
+      continue;
+    }
+    const guides: SessionTreeGuide[] = [];
+    for (let line = 1; line < level; line += 1) {
+      if (siblingBelow[line]) guides.push({ level: line, end: false });
+    }
+    if (level > 0) guides.push({ level, end: !siblingBelow[level] });
+    if (guides.length > 0) result[index] = Object.freeze(guides);
+    siblingBelow = siblingBelow.slice(0, level);
+    siblingBelow[level] = true;
+  }
+  return result;
+};

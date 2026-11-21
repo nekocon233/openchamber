@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { rewriteGitLabUploads } from './gitlabUploads';
+import { rewriteProjectUploads } from './projectUploads';
 
 const secret = '66dbcd21ec5d24ed6ea225176098d52b';
 const urls = {
@@ -8,7 +8,7 @@ const urls = {
   link: (path: string) => `https://gitlab.test/team/repo${path}`,
 };
 
-describe('rewriteGitLabUploads', () => {
+describe('rewriteProjectUploads', () => {
   test('reads pictures and clips through the server and opens other files on GitLab', () => {
     const markdown = [
       `![demo](/uploads/${secret}/demo.mp4)`,
@@ -17,7 +17,7 @@ describe('rewriteGitLabUploads', () => {
       'See /uploads/ in the docs and ![remote](https://gitlab.com/a.png).',
     ].join('\n\n');
 
-    expect(rewriteGitLabUploads(markdown, urls)).toBe([
+    expect(rewriteProjectUploads(markdown, urls)).toBe([
       `![demo](https://app.test/api/source-control/gitlab/uploads/${secret}/demo.mp4?owner=team)`,
       `[log.txt](https://gitlab.test/team/repo/uploads/${secret}/log.txt) and <a href="https://gitlab.test/team/repo/uploads/${secret}/a.pdf">a.pdf</a>`,
       `<img src="https://app.test/api/source-control/gitlab/uploads/${secret}/shot.png?owner=team" width="300">`,
@@ -34,7 +34,7 @@ describe('rewriteGitLabUploads', () => {
       `![real](/uploads/${secret}/z.png)`,
     ].join('\n');
 
-    const result = rewriteGitLabUploads(markdown, urls);
+    const result = rewriteProjectUploads(markdown, urls);
     expect(result.split(`(/uploads/${secret}/y.png)`)).toHaveLength(3);
     expect(result).toContain(`![real](https://app.test/api/source-control/gitlab/uploads/${secret}/z.png?owner=team)`);
   });

@@ -1,4 +1,4 @@
-import React, { useRef, memo } from 'react';
+import React, { memo } from 'react';
 import { useDraftAttachedFiles, useInputStore } from '@/sync/input-store';
 import { deleteWorkspaceUpload } from '@/sync/zip-attachments';
 import type { ChatDraftIdentity } from '@/lib/chatDraftPersistence';
@@ -7,130 +7,27 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { toast } from '@/components/ui';
 import { cn } from '@/lib/utils';
-import { openExternalUrl } from '@/lib/url';
 import { formatFileSize } from '@/lib/fileSize';
-import { getLanguageFromExtension, isDrawioFile, isExcalidrawFile } from '@/lib/toolHelpers';
+import { isDrawioFile, isExcalidrawFile } from '@/lib/toolHelpers';
+import { trackerPresentation } from '@/lib/trackers/presentation';
+import { getIssueLinkKind, getRepositoryIssueLinkProvider, getTrackerItemLinkProvider, resolveAttachmentOpenTarget, type IssueLinkKind } from '@/lib/messages/attachmentPreview';
+import { ProviderIcon } from '@/components/sourceControl/ProviderIcon';
+import { useSourceControlProvider } from '@/lib/source-control/providers/registry';
+import { useOpenAttachment } from './message/useOpenAttachment';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { StatusImage } from '@/components/ui/status-image';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
+import { openExternalUrl } from '@/lib/url';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import { useOpenChatLink } from './useOpenChatLink';
 import { useChatSessionSelection } from './chatColumnSession';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 import type { ToolPopupContent } from './message/types';
-
-const FileAttachmentButton = memo(() => {
-  const { t } = useI18n();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const addAttachedFile = useInputStore((state) => state.addAttachedFile);
-  const isMobile = useUIStore((state) => state.isMobile);
-  const runtimeApis = useRuntimeAPIs();
-  const isVSCodeRuntime = runtimeApis.runtime.isVSCode;
-  const buttonSizeClass = isMobile ? 'h-9 w-9' : 'h-7 w-7';
-  const iconSizeClass = isMobile ? 'h-5 w-5' : 'h-[18px] w-[18px]';
-
-  const attachFiles = async (files: FileList | File[]) => {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        await addAttachedFile(file);
-      } catch (error) {
-        console.error('File attach failed', error);
-        toast.error(error instanceof Error ? error.message : t('chat.fileAttachment.toast.attachFailed'));
-      }
-    }
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    await attachFiles(files);
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const handleVSCodePick = async () => {
-    try {
-      const data = (await runtimeApis.vscode?.pickFiles?.()) as {
-        files?: Array<{ name: string; mimeType?: string; dataUrl?: string }>;
-        skipped?: Array<{ name?: string; reason?: string }>;
-      } | undefined;
-      const picked = Array.isArray(data?.files) ? data.files : [];
-      const skipped = Array.isArray(data?.skipped) ? data.skipped : [];
-
-      if (skipped.length > 0) {
-        const summary = skipped.map((s: { name?: string; reason?: string }) => `${s?.name || t('chat.fileAttachment.fileFallback')}: ${s?.reason || t('chat.fileAttachment.skippedFallback')}`).join('\n');
-        toast.error(t('chat.fileAttachment.toast.someFilesSkipped', { summary }));
-      }
-
-      const asFiles = picked
-        .map((file: { name: string; mimeType?: string; dataUrl?: string }) => {
-          if (!file?.dataUrl) return null;
-          try {
-            const [meta, base64] = file.dataUrl.split(',');
-            const mime = file.mimeType || (meta?.match(/data:(.*);base64/)?.[1] || 'application/octet-stream');
-            if (!base64) return null;
-            const binary = atob(base64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: mime });
-            return new File([blob], file.name || t('chat.fileAttachment.fileFallback'), { type: mime });
-          } catch (err) {
-            console.error('Failed to decode VS Code picked file', err);
-            return null;
-          }
-        })
-        .filter(Boolean) as File[];
-
-      if (asFiles.length > 0) {
-        await attachFiles(asFiles);
-      }
-    } catch (error) {
-      console.error('VS Code file pick failed', error);
-      toast.error(error instanceof Error ? error.message : t('chat.fileAttachment.toast.vscodePickFailed'));
-    }
-  };
-
-  return (
-    <>
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={handleFileSelect}
-      />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={isVSCodeRuntime ? handleVSCodePick : () => fileInputRef.current?.click()}
-            className={cn(
-              'flex items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-              'hover:bg-muted text-muted-foreground',
-              buttonSizeClass
-            )}
-            aria-label={t('chat.fileAttachment.actions.attachAria')}
-          >
-            <Icon name="attachment-2" className={iconSizeClass} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p>{t('chat.fileAttachment.actions.attach')}</p>
-        </TooltipContent>
-      </Tooltip>
-    </>
-  );
-});
-
-FileAttachmentButton.displayName = 'FileAttachmentButton';
 
 interface ImagePreviewProps {
   file: AttachedFile;
@@ -188,7 +85,6 @@ const ImagePreview = memo(({ file, onRemove, onShowPopup, gallery, index = 0 }: 
   }, [displayName, file.mimeType, file.size, gallery, imageUrl, index, onShowPopup]);
 
   if (!imageUrl) {
-    // Fallback to text-only for server images without preview
     return (
       <button
         type="button"
@@ -239,8 +135,6 @@ const ImagePreview = memo(({ file, onRemove, onShowPopup, gallery, index = 0 }: 
           onRemove();
         }}
         className="absolute top-1 inset-e-1 h-5 w-5 rounded-md bg-background/80 text-foreground hover:bg-background flex items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        // Inline: the mobile stylesheet floors every button at 36px, which
-        // would swallow a 64px thumbnail; the thumbnail itself is the target.
         style={{ width: 20, height: 20, minWidth: 0, minHeight: 0 }}
         title={t('chat.fileAttachment.actions.removeImage')}
         aria-label={t('chat.fileAttachment.actions.removeNamed', { name: displayName })}
@@ -298,7 +192,6 @@ const FileChip = memo(({ file, onRemove }: FileChipProps) => {
     <button
       type="button"
       onClick={(e) => {
-        // Prevent click from bubbling if clicking the remove button
         if ((e.target as HTMLElement).closest('[data-remove-button]')) {
           return;
         }
@@ -342,14 +235,12 @@ const VSCodeFileChip = memo(({ file, onRemove }: FileChipProps) => {
   const { t } = useI18n();
   const { displayName, extension } = useFileDetails(file);
 
-  // Detect selection-style attachments: ends with ":N" or ":N-M"
   const isSelectionAttachment = /:\d+(?:-\d+)?$/.test(displayName);
 
   return (
     <button
       type="button"
       onClick={(e) => {
-        // Prevent click from bubbling if clicking the remove button
         if ((e.target as HTMLElement).closest('[data-remove-button]')) {
           return;
         }
@@ -370,10 +261,10 @@ const VSCodeFileChip = memo(({ file, onRemove }: FileChipProps) => {
       >
         <Icon name="close" className="h-4 w-4 text-muted-foreground" />
       </span>
-        <FileTypeIcon filePath={file.filename} extension={extension} className="h-4 w-4" />
-        <span className={cn('text-foreground', isSelectionAttachment ? 'whitespace-nowrap' : 'truncate max-w-[200px]')}>
-          {displayName}
-        </span>
+      <FileTypeIcon filePath={file.filename} extension={extension} className="h-4 w-4" />
+      <span className={cn('text-foreground', isSelectionAttachment ? 'whitespace-nowrap' : 'truncate max-w-[200px]')}>
+        {displayName}
+      </span>
     </button>
   );
 });
@@ -387,7 +278,7 @@ interface AttachedFilesListProps {
   draftIdentity?: ChatDraftIdentity | null;
 }
 
-export const AttachedVSCodeFileChips = memo(({ onShowPopup, draftIdentity }: AttachedFilesListProps) => {
+const AttachedVSCodeFileChips = memo(({ onShowPopup, draftIdentity }: AttachedFilesListProps) => {
   const attachedFiles = useDraftAttachedFiles(draftIdentity);
   const removeAttachedFile = useInputStore((state) => state.removeAttachedFile);
 
@@ -418,7 +309,7 @@ export const AttachedVSCodeFileChips = memo(({ onShowPopup, draftIdentity }: Att
 
 AttachedVSCodeFileChips.displayName = 'AttachedVSCodeFileChips';
 
-export const AttachedFilesList = memo(({ onShowPopup, className, draftIdentity }: AttachedFilesListProps) => {
+const AttachedFilesList = memo(({ onShowPopup, className, draftIdentity }: AttachedFilesListProps) => {
   const attachedFiles = useDraftAttachedFiles(draftIdentity);
   const removeAttachedFile = useInputStore((state) => state.removeAttachedFile);
 
@@ -446,7 +337,6 @@ export const AttachedFilesList = memo(({ onShowPopup, className, draftIdentity }
 
   return (
     <div className={cn('w-full space-y-2', className)}>
-      {/* Images row - inline with previews */}
       {images.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           {images.map((file, index) => (
@@ -462,7 +352,6 @@ export const AttachedFilesList = memo(({ onShowPopup, className, draftIdentity }
         </div>
       )}
 
-      {/* Other files row - inline text-only */}
       {otherFiles.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           {otherFiles.map((file) => (
@@ -483,41 +372,41 @@ AttachedFilesList.displayName = 'AttachedFilesList';
 export const ActiveEditorFileSuggestion = memo(() => {
   const { t } = useI18n();
   const activeEditorFile = useInputStore((s) => s.activeEditorFile);
-  const attachedFiles = useInputStore((s) => s.attachedFiles)
-  const addVSCodeFileAttachment = useInputStore((s) => s.addVSCodeFileAttachment)
-  const addVSCodeSelectionAttachment = useInputStore((s) => s.addVSCodeSelectionAttachment)
+  const attachedFiles = useInputStore((s) => s.attachedFiles);
+  const addVSCodeFileAttachment = useInputStore((s) => s.addVSCodeFileAttachment);
+  const addVSCodeSelectionAttachment = useInputStore((s) => s.addVSCodeSelectionAttachment);
   const isVSCodeRuntime = useRuntimeAPIs().runtime.isVSCode;
 
   if (!isVSCodeRuntime || !activeEditorFile) return null;
 
   const { filePath, fileName, relativePath, selection, fileSize } = activeEditorFile;
 
-  // Normalize to forward slashes for comparison
   const isFileAttached = attachedFiles.some(
     (f) => f.source === 'vscode' && f.vscodeSource === 'file' && (f.vscodePath || '') === filePath
-  )
+  );
 
-  // Compute selection label using a compact range (single line shown as "N" not "N-N")
-  let selectionRange = ''
+  let selectionRange = '';
   if (selection) {
     selectionRange = selection.startLine === selection.endLine
       ? `${selection.startLine}`
-      : `${selection.startLine}-${selection.endLine}`
+      : `${selection.startLine}-${selection.endLine}`;
   }
-  const selectionLabel = selection ? `${relativePath}:${selectionRange}` : ''
+  const selectionLabel = selection ? `${relativePath}:${selectionRange}` : '';
   const isSelectionAttached = !!selectionLabel && attachedFiles.some(
     (f) => f.source === 'vscode' && f.vscodeSource === 'selection' && f.filename === selectionLabel && f.vscodePath === filePath
-  )
+  );
 
-  // Nothing to show — file is already attached and there's no (or already-attached) selection
   if (isFileAttached && (!selection || isSelectionAttached)) return null;
 
   const ext = fileName.split('.').pop() || '';
-  // Always show only the filename in the suggestion UI
   const displayName = fileName;
 
   const handleAddFile = () => {
-    addVSCodeFileAttachment(filePath, fileName, fileSize);
+    try {
+      addVSCodeFileAttachment(filePath, fileName, fileSize);
+    } catch (error) {
+      if (error instanceof Error) toast.error(error.message);
+    }
   };
 
   const handlePinSelection = async () => {
@@ -527,7 +416,6 @@ export const ActiveEditorFileSuggestion = memo(() => {
     await addVSCodeSelectionAttachment(filePath, file);
   };
 
-  // If there is a selection, prefer showing the pin-selection UI only.
   const showSelectionPin = !!selection && !isSelectionAttached;
   const showFileAdd = !showSelectionPin && !isFileAttached;
 
@@ -539,38 +427,44 @@ export const ActiveEditorFileSuggestion = memo(() => {
         <div
           className="inline-flex items-center gap-1 text-xs pe-1 rounded-sm italic text-muted-foreground border border-dashed bg-transparent"
           style={{ borderColor: 'var(--interactive-border)' }}
-          title={relativePath}
         >
-          <button
-            type="button"
-            title={t('chat.fileAttachment.activeEditor.pinSelection')}
-            aria-label={t('chat.fileAttachment.activeEditor.pinSelection')}
-            onClick={() => { void handlePinSelection(); }}
-            className="flex items-center justify-center h-5 w-5 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors cursor-pointer"
-          >
-            <Icon name="pushpin-2" className="h-4 w-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('chat.fileAttachment.activeEditor.pinSelection')}
+                onClick={() => { void handlePinSelection(); }}
+                className="flex items-center justify-center h-5 w-5 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors cursor-pointer"
+              >
+                <Icon name="pushpin-2" className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>{t('chat.fileAttachment.activeEditor.pinSelection')}</TooltipContent>
+          </Tooltip>
           <FileTypeIcon filePath={fileName} extension={ext} className="h-4 w-4 flex-shrink-0" />
-          <span className="text-xs whitespace-nowrap">{`${displayName}:${selectionRange}`}</span>
+          <span className="text-xs whitespace-nowrap" title={relativePath}>{`${displayName}:${selectionRange}`}</span>
         </div>
       )}
       {showFileAdd && (
         <div
           className="inline-flex items-center gap-1 text-xs pe-1 rounded-sm italic text-muted-foreground border border-dashed bg-transparent"
           style={{ borderColor: 'var(--interactive-border)' }}
-          title={relativePath}
         >
-          <button
-            type="button"
-            title={t('chat.fileAttachment.activeEditor.addFile', { name: displayName })}
-            aria-label={t('chat.fileAttachment.activeEditor.addFile', { name: displayName })}
-            onClick={handleAddFile}
-            className="flex items-center justify-center h-5 w-5 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors cursor-pointer"
-          >
-            <Icon name="add" className="h-4 w-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('chat.fileAttachment.activeEditor.addFile', { name: displayName })}
+                onClick={handleAddFile}
+                className="flex items-center justify-center h-5 w-5 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors cursor-pointer"
+              >
+                <Icon name="add" className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>{t('chat.fileAttachment.activeEditor.addFile', { name: displayName })}</TooltipContent>
+          </Tooltip>
           <FileTypeIcon filePath={fileName} extension={ext} className="h-4 w-4 flex-shrink-0" />
-          <span className="text-xs truncate max-w-[220px]">{displayName}</span>
+          <span className="text-xs truncate max-w-[220px]" title={relativePath}>{displayName}</span>
         </div>
       )}
     </div>
@@ -588,81 +482,31 @@ interface FilePart {
   source?: Record<string, unknown>;
 }
 
-const GITHUB_ISSUE_LINK_MIME = 'application/vnd.github.issue-link';
-const GITLAB_ISSUE_LINK_MIME = 'application/vnd.openchamber.gitlab-issue-link';
-const GITHUB_PR_LINK_MIME = 'application/vnd.github.pull-request-link';
-const LINEAR_ISSUE_LINK_MIME = 'application/vnd.openchamber.linear-issue-link';
-const GUEST_ISSUE_LINK_MIME = 'application/vnd.openchamber.guest-issue-link';
-const GUEST_PR_LINK_MIME = 'application/vnd.openchamber.guest-pr-link';
+const issueLinkIcon = (kind: Exclude<IssueLinkKind, 'repository-issue' | 'tracker-item'>): 'git-pull-request' | 'attachment-2' => (
+  kind === 'guest-issue' ? 'attachment-2' : 'git-pull-request'
+);
 
-type IssueLinkKind = 'github-issue' | 'gitlab-issue' | 'github-pr' | 'linear-issue' | 'guest-issue' | 'guest-pr';
-
-const getIssueLinkKind = (file: FilePart): IssueLinkKind | null => {
-  if (file.mime === GITHUB_ISSUE_LINK_MIME) {
-    return 'github-issue';
-  }
-  if (file.mime === GITLAB_ISSUE_LINK_MIME) {
-    return 'gitlab-issue';
-  }
-  if (file.mime === GITHUB_PR_LINK_MIME) {
-    return 'github-pr';
-  }
-  if (file.mime === LINEAR_ISSUE_LINK_MIME) {
-    return 'linear-issue';
-  }
-  if (file.mime === GUEST_ISSUE_LINK_MIME) {
-    return 'guest-issue';
-  }
-  if (file.mime === GUEST_PR_LINK_MIME) {
-    return 'guest-pr';
-  }
-  return null;
-};
-
-const issueLinkIcon = (kind: IssueLinkKind): 'github' | 'gitlab' | 'git-pull-request' | 'linear' | 'attachment-2' => {
-  if (kind === 'github-pr' || kind === 'guest-pr') return 'git-pull-request';
-  if (kind === 'gitlab-issue') return 'gitlab';
-  if (kind === 'linear-issue') return 'linear';
-  if (kind === 'guest-issue') return 'attachment-2';
-  return 'github';
-};
-
-const TEXT_LIKE_MIME_PREFIXES = ['text/', 'application/json'];
-
-const isTextLikeFile = (file: FilePart): boolean => {
-  const mime = file.mime;
-  return mime !== undefined && TEXT_LIKE_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix));
-};
-
-/**
- * Decodes the base64 data URL the message pipeline stores for pasted files
- * (`data:<mime>;base64,<data>`) into UTF-8 text. Returns null for any other
- * URL shape, which keeps remote-URI attachments on the image-dialog path.
- */
-const decodeDataUrlText = (url: string): string | null => {
-  const match = /^data:[^,]*;base64,(.+)$/.exec(url);
-  if (!match) return null;
-  try {
-    const bytes = Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch {
-    return null;
-  }
+const IssueLinkIcon: React.FC<{ file: { mime?: string }; kind: IssueLinkKind; className?: string }> = ({ file, kind, className }) => {
+  const provider = useSourceControlProvider(getRepositoryIssueLinkProvider(file));
+  if (kind === 'repository-issue') return <ProviderIcon descriptor={provider} className={className} />;
+  if (kind === 'tracker-item') return <Icon name={trackerPresentation(getTrackerItemLinkProvider(file)).icon} className={className} />;
+  return <Icon name={issueLinkIcon(kind)} className={className} />;
 };
 
 interface MessageFilesDisplayProps {
   files: FilePart[];
   onShowPopup?: (content: ToolPopupContent) => void;
   compact?: boolean;
-  /** Compact only: replaces the default top margin, for placement above content. */
   className?: string;
 }
 
 export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, className }: MessageFilesDisplayProps) => {
   const { t } = useI18n();
   const mobile = useMobileAppActions();
-  const isMobile = useUIStore(state => state.isMobile);
+  const isMobile = useUIStore((state) => state.isMobile);
   const openChatLink = useOpenChatLink(useChatSessionSelection().directory ?? '');
+  const openAttachment = useOpenAttachment(onShowPopup);
+
   const openReference = (url: string, event: React.MouseEvent) => {
     if (!mobile && !isMobile && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
       && parseChangeRequestReference(url)?.identity?.provider === 'github') {
@@ -685,78 +529,27 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
   };
 
   const resolveDisplayName = React.useCallback((file: FilePart): string => {
-    const isGitHubLink = getIssueLinkKind(file) !== null;
-    if (isGitHubLink && typeof file.filename === 'string' && file.filename.trim().length > 0) {
+    const isIssueLink = getIssueLinkKind(file) !== null;
+    if (isIssueLink && typeof file.filename === 'string' && file.filename.trim().length > 0) {
       return file.filename.trim();
     }
     return extractFilename(file.filename || file.url);
   }, []);
 
-  const imageFiles = fileItems.filter(f => f.mime?.startsWith('image/') && f.url);
-  const otherFiles = fileItems.filter(f => !f.mime?.startsWith('image/'));
-
-  const imageGallery = React.useMemo(
-    () =>
-      imageFiles.flatMap((file) => {
-        if (!file.url) return [];
-        const filename = resolveDisplayName(file) || 'Image';
-        return [{
-          url: file.url,
-          mimeType: file.mime,
-          filename,
-          size: file.size,
-        }];
-      }),
-    [imageFiles, resolveDisplayName]
-  );
-
-  const handleImageClick = React.useCallback((index: number) => {
-    if (!onShowPopup) {
-      return;
-    }
-
-    const file = imageGallery[index];
-    if (!file?.url) return;
-
-    const filename = file.filename || 'Image';
-
-    onShowPopup({
-      open: true,
-      title: filename,
-      content: '',
-      metadata: {
-        tool: 'image-preview',
-        filename,
-        mime: file.mimeType,
-        size: file.size,
-      },
-      image: {
-        url: file.url,
-        mimeType: file.mimeType,
-        filename,
-        size: file.size,
-        gallery: imageGallery,
-        index,
-      },
-    });
-  }, [imageGallery, onShowPopup]);
+  const resolveOpenTarget = (file: FilePart) => {
+    const target = resolveAttachmentOpenTarget(file, fileItems);
+    return target?.kind === 'popup' && !onShowPopup ? null : target;
+  };
 
   const showFilePopup = React.useCallback((file: FilePart, fileName: string) => {
     if (!onShowPopup || !file.url) {
       return;
     }
 
-    if (isTextLikeFile(file)) {
-      const text = decodeDataUrlText(file.url);
-      if (text !== null) {
-        onShowPopup({
-          open: true,
-          title: fileName,
-          content: text,
-          language: getLanguageFromExtension(fileName) || undefined,
-        });
-        return;
-      }
+    const target = resolveAttachmentOpenTarget(file, [file]);
+    if (target?.kind === 'popup' && !target.popup.image) {
+      onShowPopup({ ...target.popup, title: fileName });
+      return;
     }
 
     onShowPopup({
@@ -774,106 +567,71 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
   if (fileItems.length === 0) return null;
 
   if (compact) {
+    const tileClass = 'relative flex-none snap-start h-16 rounded-lg overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring';
     return (
-      <div className={cn('space-y-1.5', className ?? 'mt-1.5')}>
-        {otherFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {otherFiles.map((file, index) => {
-              const fileName = resolveDisplayName(file);
-              const ext = fileName.split('.').pop() || '';
-              const sizeText = formatFileSize(file.size);
-              const issueLinkKind = getIssueLinkKind(file);
-              return (
-                <Tooltip key={`file-${file.url || file.filename || index}`}>
-                  <TooltipTrigger asChild>
-                    {issueLinkKind && file.url ? (
-                      <button
-                        type="button"
-                        onClick={(event) => openReference(file.url || '', event)}
-                        className="inline-flex items-center bg-muted/30 border border-border/30 typography-meta gap-1 px-2 py-0.5 rounded-lg text-foreground hover:text-primary transition-colors"
-                      >
-                        <Icon name={issueLinkIcon(issueLinkKind)} className="text-muted-foreground h-3.5 w-3.5" />
-                        <div className="overflow-hidden max-w-[220px]">
-                          <span className="truncate block" title={fileName}>{fileName}</span>
-                        </div>
-                      </button>
-                    ) : onShowPopup && file.url && isTextLikeFile(file) ? (
-                      <button
-                        type="button"
-                        onClick={() => showFilePopup(file, fileName)}
-                        className="inline-flex items-center bg-muted/30 border border-border/30 typography-meta gap-1 px-2 py-0.5 rounded-lg text-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring"
-                      >
-                        <FileTypeIcon filePath={fileName} extension={ext} className="text-muted-foreground h-3.5 w-3.5" />
-                        <div className="overflow-hidden max-w-[140px]">
-                          <span className="truncate block" title={fileName}>{fileName}</span>
-                        </div>
-                      </button>
+      <ScrollableOverlay outerClassName={cn('overlay-scrollbar-wrapper--no-gutter -mx-1 w-auto', className ?? 'mt-1.5')} className="px-1 py-0.5" fillContainer={false}>
+        <div className="flex snap-x snap-mandatory gap-1.5">
+          {fileItems.map((file, index) => {
+            const fileName = resolveDisplayName(file) || 'File';
+            const openTarget = resolveOpenTarget(file);
+            const issueLinkKind = getIssueLinkKind(file);
+            const isImage = Boolean(file.mime?.startsWith('image/') && file.url) && !issueLinkKind;
+            const sizeText = formatFileSize(file.size);
+            const ext = fileName.includes('.') ? fileName.split('.').pop() ?? '' : '';
+            const kindText = [issueLinkKind ? null : ext.toUpperCase() || null, sizeText || null].filter(Boolean).join(' · ');
+            const open = openTarget
+              ? (event: React.MouseEvent) => {
+                  if (openTarget.kind === 'external' && parseChangeRequestReference(openTarget.url)?.identity?.provider === 'github') {
+                    openReference(openTarget.url, event);
+                    return;
+                  }
+                  openAttachment(openTarget, issueLinkKind ? event : undefined);
+                }
+              : undefined;
+            return (
+              <Tooltip key={`attachment-${file.url || file.filename || index}`}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={open}
+                    disabled={!open}
+                    aria-label={fileName}
+                    className={cn(tileClass, isImage
+                      ? 'w-16 bg-muted/10 cursor-zoom-in'
+                      : 'oc-tile flex w-36 flex-col justify-between px-2 py-1 text-start enabled:hover:text-foreground disabled:cursor-default')}
+                  >
+                    {isImage && file.url ? (
+                      <StatusImage
+                        src={file.url}
+                        alt={fileName}
+                        variant="thumbnail"
+                        className="absolute inset-0 h-full w-full"
+                        imgClassName="h-full w-full object-cover"
+                        lazy
+                      />
                     ) : (
-                      <div className="inline-flex items-center bg-muted/30 border border-border/30 typography-meta gap-1 px-2 py-0.5 rounded-lg">
-                        {file.mime?.includes('pdf') ? (
-                          <Icon name="file-pdf" className="text-muted-foreground h-3.5 w-3.5" />
-                        ) : (
-                          <FileTypeIcon filePath={fileName} extension={ext} className="text-muted-foreground h-3.5 w-3.5" />
-                        )}
-                        <div className="overflow-hidden max-w-[140px]">
-                          <span className="truncate block" title={fileName}>{fileName}</span>
-                        </div>
-                      </div>
+                      <>
+                        <span dir="auto" className="line-clamp-2 [overflow-wrap:anywhere] typography-meta leading-tight text-foreground">{fileName}</span>
+                        <span className="flex min-w-0 items-center gap-1">
+                          {issueLinkKind ? (
+                            <IssueLinkIcon file={file} kind={issueLinkKind} className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <FileTypeIcon filePath={fileName} extension={ext} className="h-3 w-3 shrink-0" />
+                          )}
+                          {kindText ? <span className="min-w-0 truncate typography-micro text-muted-foreground">{kindText}</span> : null}
+                        </span>
+                      </>
                     )}
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{fileName}{sizeText ? ` (${sizeText})` : ''}</p>
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })}
-          </div>
-        )}
-
-        {imageFiles.length > 0 && (
-          <div className="overflow-x-auto -mx-1 px-1 py-0.5 scrollbar-thin">
-            <div className="flex snap-x snap-mandatory gap-2">
-              {imageFiles.map((file, index) => {
-                const filename = resolveDisplayName(file) || 'Image';
-
-                return (
-                  <Tooltip key={`img-${file.url || file.filename || index}`}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => handleImageClick(index)}
-                        className="relative flex-none border border-border/40 bg-muted/10 overflow-hidden snap-start h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring"
-                        aria-label={filename}
-                      >
-                        {file.url ? (
-                          <img
-                            src={file.url}
-                            alt={filename}
-                            className="h-full w-full object-cover"
-                            loading="lazy"
-                            onError={(e) => {
-                              const target = e.target as HTMLImageElement;
-                              target.style.visibility = 'hidden';
-                            }}
-                          />
-                        ) : (
-                          <div className="h-full w-full flex items-center justify-center bg-muted/30 text-muted-foreground">
-                            <Icon name="file-image" className="h-6 w-6" />
-                          </div>
-                        )}
-                        <span className="sr-only">{filename}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={6} className="typography-meta px-2 py-1">
-                      {filename}
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={6} className="typography-meta px-2 py-1">
+                  {fileName}{sizeText ? ` (${sizeText})` : ''}
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+      </ScrollableOverlay>
     );
   }
 
@@ -892,13 +650,15 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
           return (
             <div
               key={file.url || `${fileName}-${index}`}
-              className="relative aspect-video rounded-lg border border-border/40 bg-muted/10 overflow-hidden group"
+              className="relative aspect-video rounded-lg border border-edge-muted bg-muted/10 overflow-hidden group"
             >
-              <img
+              <StatusImage
                 src={file.url}
                 alt={fileName}
-                className="h-full w-full object-cover"
-                loading="lazy"
+                variant="thumbnail"
+                className="h-full w-full"
+                imgClassName="h-full w-full object-cover"
+                lazy
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="absolute bottom-0 inset-s-0 inset-e-0 p-2 text-white opacity-0 group-hover:opacity-100 transition-opacity">
@@ -910,19 +670,26 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
         }
 
         if (issueLinkKind && file.url) {
+          const issueUrl = file.url;
           return (
             <Tooltip key={file.url || `${fileName}-${index}`}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={(event) => openReference(file.url || '', event)}
+                  onClick={(event) => {
+                    if (parseChangeRequestReference(issueUrl)?.identity?.provider === 'github') {
+                      openReference(issueUrl, event);
+                      return;
+                    }
+                    openAttachment({ kind: 'external', url: issueUrl }, event);
+                  }}
                   className={cn(
-                    "flex items-center gap-2 p-2 rounded-lg border border-border/40 bg-muted/10 hover:bg-muted/20 transition-colors text-start",
+                    "flex items-center gap-2 p-2 rounded-lg oc-tile oc-tile-hover text-start",
                     compact ? "text-xs" : "text-sm"
                   )}
                 >
                   <div className="flex-shrink-0">
-                    <Icon name={issueLinkIcon(issueLinkKind)} className={cn("text-muted-foreground", compact ? "h-3.5 w-3.5" : "h-4 w-4")} />
+                    <IssueLinkIcon file={file} kind={issueLinkKind} className={cn("text-muted-foreground", compact ? "h-3.5 w-3.5" : "h-4 w-4")} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{fileName}</p>
@@ -956,7 +723,7 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
                     }
                   }}
                   className={cn(
-                    "flex items-center gap-2 p-2 rounded-lg border border-border/40 bg-muted/10 hover:bg-muted/20 transition-colors text-start cursor-pointer",
+                    "flex items-center gap-2 p-2 rounded-lg oc-tile oc-tile-hover text-start cursor-pointer",
                     compact ? "text-xs" : "text-sm"
                   )}
                 >
@@ -984,7 +751,7 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
                   showFilePopup(file, fileName);
                 }}
                 className={cn(
-                  "flex items-center gap-2 p-2 rounded-lg border border-border/40 bg-muted/10 hover:bg-muted/20 transition-colors text-start",
+                  "flex items-center gap-2 p-2 rounded-lg oc-tile oc-tile-hover text-start",
                   compact ? "text-xs" : "text-sm"
                 )}
               >
@@ -1014,57 +781,3 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
 });
 
 MessageFilesDisplay.displayName = 'MessageFilesDisplay';
-
-interface ImageGalleryProps {
-  urls: string[];
-  caption?: string;
-  onShowPopup?: (content: ToolPopupContent) => void;
-}
-
-const ImageGallery = memo(({ urls, caption, onShowPopup }: ImageGalleryProps) => {
-  if (urls.length === 0) return null;
-
-  const getGridCols = () => {
-    if (urls.length === 1) return 'grid-cols-1';
-    if (urls.length === 2) return 'grid-cols-2';
-    if (urls.length <= 4) return 'grid-cols-2';
-    return 'grid-cols-3';
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className={cn("grid gap-2", getGridCols())}>
-        {urls.map((url, index) => (
-          <button
-            key={url}
-            type="button"
-            onClick={() => onShowPopup?.({
-              open: true,
-              title: caption || `Image ${index + 1} of ${urls.length}`,
-              content: '',
-              image: {
-                url,
-                gallery: urls.map(u => ({ url: u })),
-                index,
-              },
-            })}
-            className="relative aspect-square rounded-lg border border-border/40 bg-muted/10 overflow-hidden group"
-          >
-            <img
-              src={url}
-              alt={caption || `Image ${index + 1}`}
-              className="h-full w-full object-cover transition-transform group-hover:scale-105"
-              loading="lazy"
-            />
-            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-          </button>
-        ))}
-      </div>
-      {caption && (
-        <p className="text-sm text-muted-foreground italic">{caption}</p>
-      )}
-    </div>
-  );
-});
-
-ImageGallery.displayName = 'ImageGallery';

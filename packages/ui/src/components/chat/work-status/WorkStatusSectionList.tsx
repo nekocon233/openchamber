@@ -1,14 +1,13 @@
 import React from 'react';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+
 import { WorkStatusGoalRow } from './WorkStatusGoalRow';
 import { WorkStatusPrimaryGroup } from './WorkStatusPrimaryGroup';
 import { WorkStatusUsageSection } from './WorkStatusUsageSection';
 import { WorkStatusTelemetrySection } from './WorkStatusTelemetrySection';
 import { WorkStatusSubagentsSection } from './WorkStatusSubagentsSection';
-import { WorkStatusTodosSection } from './WorkStatusTodosSection';
-import { WorkStatusChecklistSection } from './WorkStatusChecklistSection';
-import { WorkStatusBackgroundTasksSection } from './WorkStatusBackgroundTasksSection';
-import { WorkStatusPlanSection } from './WorkStatusPlanSection';
+import { WorkStatusWorkflowsSection } from './WorkStatusWorkflowsSection';
+import { WorkStatusTasksSection } from './WorkStatusTasksSection';
+import { useLoadSessionTodos } from './useLoadSessionTodos';
 import { WorkStatusMcpSection } from './WorkStatusMcpSection';
 import { WorkStatusPinnedSection } from './WorkStatusPinnedSection';
 import { WorkStatusContextSection } from './WorkStatusContextSection';
@@ -16,29 +15,44 @@ import { WorkStatusExtensionSection } from './WorkStatusExtensionSection';
 import { isExtensionSectionId, isWorkStatusSectionVisible, type WorkStatusSectionId } from './sections';
 import type { WorkStatusSectionLayout } from './useWorkStatusSectionLayout';
 
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
+import { WorkStatusTodosSection } from './WorkStatusTodosSection';
+import { WorkStatusChecklistSection } from './WorkStatusChecklistSection';
+import { WorkStatusBackgroundTasksSection } from './WorkStatusBackgroundTasksSection';
+import { WorkStatusPlanSection } from './WorkStatusPlanSection';
+
+const openCodeSections = new Set<WorkStatusSectionId>(['tasks', 'workflows', 'mcp', 'pinned', 'contextSources']);
+
 export const WorkStatusSectionList: React.FC<{
   sessionId: string | null;
   directory: string | null;
   repositoryEnabled: boolean;
   layout: WorkStatusSectionLayout;
   visible?: boolean;
-}> = ({ sessionId, directory, repositoryEnabled, layout, visible = true }) => {
+  showContextTokens?: boolean;
+  prewarmPrStatus?: boolean;
+}> = ({ sessionId, directory, repositoryEnabled, layout, visible = true, showContextTokens = false, prewarmPrStatus = false }) => {
   const { extensionSections, sectionOrder, hiddenSections } = layout;
   const sectionVisible = (id: Parameters<typeof isWorkStatusSectionVisible>[1]) => isWorkStatusSectionVisible(hiddenSections, id);
-  const nativeBackend = nativeBackendOfSessionId(sessionId ?? '');
+  const isNative = sessionId !== null && isNativeSessionId(sessionId);
+  const backend = useNativeSessionBackend(sessionId, directory);
+  useLoadSessionTodos(isNative ? null : sessionId, directory);
 
   const secondarySections = {
     usage: <WorkStatusUsageSection visible={visible} />,
     telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
     subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
-    taskChecklist: nativeBackend === 'codex'
+    tasks: <WorkStatusTasksSection sessionId={sessionId} />,
+    taskChecklist: backend === 'codex'
       ? <WorkStatusTodosSection sessionId={sessionId} directory={directory} />
       : <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
     taskBackground: <WorkStatusBackgroundTasksSection sessionId={sessionId} directory={directory} />,
+    taskPlan: <WorkStatusPlanSection sessionId={sessionId} directory={directory} />,
+    workflows: <WorkStatusWorkflowsSection sessionId={sessionId} directory={directory} />,
     mcp: <WorkStatusMcpSection sessionId={sessionId} directory={directory} />,
     pinned: <WorkStatusPinnedSection sessionId={sessionId} directory={directory} />,
     contextSources: <WorkStatusContextSection sessionId={sessionId} directory={directory} />,
-    taskPlan: <WorkStatusPlanSection sessionId={sessionId} directory={directory} />,
   } satisfies Record<Exclude<WorkStatusSectionId, 'session' | 'repository'>, React.ReactNode>;
 
   return (
@@ -47,6 +61,8 @@ export const WorkStatusSectionList: React.FC<{
       directory={directory}
       showSession={sectionVisible('session')}
       showRepository={repositoryEnabled && sectionVisible('repository')}
+      showContextTokens={showContextTokens}
+      prewarmPrStatus={prewarmPrStatus}
       goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
     >
       {(primary) => sectionOrder.map((id) => {
@@ -55,6 +71,7 @@ export const WorkStatusSectionList: React.FC<{
           const guest = extensionSections.byId.get(id);
           return guest ? <WorkStatusExtensionSection key={id} guest={guest} directory={directory} /> : null;
         }
+        if (isNative && openCodeSections.has(id)) return null;
         return <React.Fragment key={id}>{id === 'session' || id === 'repository' ? primary[id] : secondarySections[id]}</React.Fragment>;
       })}
     </WorkStatusPrimaryGroup>

@@ -4,6 +4,10 @@ import type { Message, Part } from "@/lib/opencode/model"
 import { opencodeClient } from "@/lib/opencode/client"
 import { Binary } from "./binary"
 import { upsertSessionRecord } from "./session-records"
+import { adoptSessionMove } from "./session-actions"
+import { resolveSessionReadDirectory, type SessionReadDirectorySources } from "./session-read-directory"
+import { withAdmittedLineage } from "./session-admission"
+import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { retry } from "./retry"
 import {
   useChildStoreManager,
@@ -17,10 +21,19 @@ import {
 } from "./sync-context"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { getSessionMaterializationStatus } from "./materialization"
-import { getRuntimeKey } from "@/lib/runtime-switch"
+import { captureRuntimeInstance, getRuntimeKey } from "@/lib/runtime-switch"
 import { isNativeSessionId } from "@/lib/native-agents/ids"
 import { readNativeSession } from "./native-directory-snapshots"
 import type { SessionMessageLoader } from "./session-message-loader"
+
+const sessionReadDirectorySources: SessionReadDirectorySources = {
+  knownDirectory: (sessionID) => {
+    const record = useGlobalSessionsStore.getState().entityById.get(sessionID)
+    return record ? withAdmittedLineage(sessionID, resolveGlobalSessionDirectory(record)) : null
+  },
+  readUnscoped: (sessionID) => (isNativeSessionId(sessionID) ? Promise.resolve(null) : opencodeClient.getSessionUnscoped(sessionID)),
+  adopt: adoptSessionMove,
+}
 
 // Shared across useSync() hook instances. Chat, model controls, and sidebar can
 // all request the same session during startup; coalesce them into one HTTP load.
@@ -107,8 +120,10 @@ export function useSync() {
 
   const recoverPendingQuestions = useCallback(
     async (sessionID: string, directoryOverride?: string): Promise<boolean> => {
-      const targetDirectory = directoryOverride || directory
-      if (!sessionID || !targetDirectory || getRuntimeKey() !== runtimeKey) return false
+      const selectedDirectory = directoryOverride || directory
+      if (!sessionID || !selectedDirectory || getRuntimeKey() !== runtimeKey) return false
+      const targetDirectory = await resolveSessionReadDirectory(sessionID, selectedDirectory, captureRuntimeInstance(), sessionReadDirectorySources)
+      if (!targetDirectory) return false
       const targetStore = childStores.ensureChild(targetDirectory, {
         priority: "selected",
         reason: "selected-session",
@@ -135,7 +150,10 @@ export function useSync() {
       directoryOverride?: string,
     ): Promise<void> {
       if (getRuntimeKey() !== runtimeKey) return
-      const targetDirectory = directoryOverride || directory
+      const selectedDirectory = directoryOverride || directory
+      if (!selectedDirectory) return
+      const targetDirectory = await resolveSessionReadDirectory(sessionID, selectedDirectory, captureRuntimeInstance(), sessionReadDirectorySources)
+      if (!targetDirectory) return
       touch(sessionID, targetDirectory)
       const key = keyFor(sessionID, targetDirectory)
       const authorityEpoch = messageLoader.getAuthorityEpoch()
@@ -166,11 +184,10 @@ export function useSync() {
         || childStores.children.get(targetDirectory) !== targetStore
       const current = targetStore.getState()
       const baselineSessionRevision = current.sessionRevision ?? 0
-      const materialization = getSessionMaterializationStatus(current, sessionID)
-      // Reconnect recovery can materialize a renderable recent tail without
-      // establishing the user-message boundary needed for visible history.
-      const historyResolved = messageLoader.getSnapshot({ directory: targetDirectory, sessionID }).resolved
-      const cachedReady = materialization.hasMessages && materialization.renderable && historyResolved
+      const materialization = getSessionMaterializationStatus(current, sessionID, {
+        historyCovered: messageLoader.coversHistory({ directory: targetDirectory, sessionID }),
+      })
+      const cachedReady = materialization.hasMessages && materialization.renderable
       const hasSession = Binary.search(current.session, sessionID, (s) => s.id).found
       if (cachedReady && hasSession && !force) {
         if (!isStale()) markRecordedInterruptedTurn(targetStore, sessionID)
@@ -351,6 +368,16 @@ export function usePrefetchSessionMessages() {
     if (getRuntimeKey() !== runtimeKey) return
     await messageLoader.prefetch({ directory, sessionID })
   }, [messageLoader, runtimeKey])
+}
+
+export function useLoadedSessionMessageRecords() {
+  const { childStores, runtimeKey } = useSyncRuntime()
+
+  return useCallback(({ directory, sessionID }: { directory: string; sessionID: string }) => {
+    if (getRuntimeKey() !== runtimeKey) return null
+    const store = childStores.getChild(directory)
+    return store ? buildSessionMessageRecordsSnapshot(store.getState(), sessionID).list : null
+  }, [childStores, runtimeKey])
 }
 
 export function useSessionMessageRecordsForExport() {

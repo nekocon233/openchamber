@@ -8,11 +8,11 @@ import { SyncProvider } from '@/sync/sync-context';
 import { ThemeSystemProvider } from '@/contexts/ThemeSystemContext';
 import { I18nProvider } from '@/lib/i18n';
 import { useConfigStore } from '@/stores/useConfigStore';
+import type { FollowUpBehavior } from '@/stores/messageQueueStore';
 
 import { MobilePillComposer } from './MobilePillComposer';
-import { PromptSuggestion } from './PromptSuggestion';
 
-const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; followUpDelivery?: 'steer' | 'queue'; dictationEnabled?: boolean; suggestion?: string }) => {
+const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; dictationEnabled?: boolean; followUpBehavior?: FollowUpBehavior }) => {
     const win = new Window({ url: 'http://localhost' });
     Object.defineProperty(win.navigator, 'mediaDevices', {
         value: { getUserMedia: () => Promise.resolve() },
@@ -21,19 +21,12 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
     // @ts-expect-error test mock
     win.AudioContext = class {} as unknown as typeof AudioContext;
     useConfigStore.setState({ dictationEnabled: options.dictationEnabled ?? true });
-    const values = {
-        window: win, document: win.document, navigator: win.navigator, localStorage: win.localStorage,
-        Element: win.Element, HTMLElement: win.HTMLElement, Node: win.Node,
-        getComputedStyle: win.getComputedStyle.bind(win), IS_REACT_ACT_ENVIRONMENT: true,
-    };
+    const values = { window: win, document: win.document, navigator: win.navigator, Element: win.Element, HTMLElement: win.HTMLElement, Node: win.Node, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true };
     const previous = new Map(Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, value });
     const container = document.createElement('div');
     const root = createRoot(container);
     let primaryActions = 0;
-    let queued = 0;
-    let acceptedSuggestions = 0;
-    let expanded = 0;
     try {
         await act(async () => root.render(
         <SyncProvider directory="/fixture" sdk={OpenCode.make({ baseUrl: "http://opencode.test", fetch: async () => new Response("[]", { headers: { "content-type": "application/json" } }) })}>
@@ -46,20 +39,13 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
                 hasContent={options.hasContent}
                 isVSCode={false}
                 canAbort={options.canAbort ?? false}
-                followUpDelivery={options.followUpDelivery ?? 'queue'}
+                followUpDelivery={options.followUpBehavior ?? 'queue'}
                 footerIconButtonClass="icon-button"
                 iconSizeClass="icon-size"
                 sendIconSizeClass="send-icon-size"
                 stopIconSizeClass="stop-icon-size"
-                topRow={options.suggestion && !options.hasContent ? (
-                    <PromptSuggestion
-                        text={options.suggestion}
-                        onAccept={() => { acceptedSuggestions += 1; }}
-                    />
-                ) : null}
-                onExpand={() => { expanded += 1; }}
+                onExpand={() => {}}
                 onPrimaryAction={() => { primaryActions += 1; }}
-                onQueueMessage={() => { queued += 1; }}
                 onPickLocalFiles={() => {}}
                 onOpenGitHubPicker={() => {}}
                 onOpenAttachSheet={() => {}}
@@ -69,34 +55,14 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
         </I18nProvider>
         </ThemeSystemProvider>
         </SyncProvider>));
-        if (options.hasContent && options.canAbort && options.followUpDelivery !== 'steer') {
-            const queue = container.querySelector<HTMLButtonElement>('[aria-label="Stage message"]');
-            expect(queue).not.toBeNull();
-            await act(async () => { queue?.click(); });
-            expect(queued).toBe(1);
-            expect(primaryActions).toBe(0);
-        } else if (options.hasContent) {
-            const send = container.querySelector<HTMLButtonElement>('[aria-label="Send message"]');
-            expect(send).not.toBeNull();
-            await act(async () => { send?.click(); });
+        if (options.hasContent) {
+            // While a turn runs the follow-up action takes the same path as an
+            // idle send; the composer decides there whether to queue or steer.
+            const label = options.canAbort && (options.followUpBehavior ?? 'queue') === 'queue' ? 'Stage message' : 'Send message';
+            const action = container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+            expect(action).not.toBeNull();
+            await act(async () => { action?.click(); });
             expect(primaryActions).toBe(1);
-            expect(queued).toBe(0);
-            expect(acceptedSuggestions).toBe(0);
-        } else if (options.suggestion) {
-            const prompt = container.querySelector<HTMLButtonElement>('[data-composer-morph-prompt]');
-            expect(prompt?.textContent).not.toContain(options.suggestion);
-            await act(async () => { prompt?.click(); });
-            expect(expanded).toBe(1);
-            expect(acceptedSuggestions).toBe(0);
-
-            expect(container.querySelector('[aria-label="Dismiss suggestion"]')).toBeNull();
-
-            const suggestion = container.querySelector<HTMLButtonElement>('[aria-label="Use suggested message"]');
-            expect(suggestion).not.toBeNull();
-            await act(async () => { suggestion?.click(); });
-            expect(acceptedSuggestions).toBe(1);
-            expect(primaryActions).toBe(0);
-            expect(queued).toBe(0);
         }
         return container.innerHTML;
     } finally {
@@ -110,67 +76,60 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
 };
 
 describe('MobilePillComposer', () => {
-    test('sends a native follow-up immediately while keeping the stop action available', async () => {
-        const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true, followUpDelivery: 'steer' });
-        expect(markup).toContain('aria-label="Send message"');
-        expect(markup).toContain('aria-label="Stop generating"');
-        expect(markup).not.toContain('aria-label="Stage message"');
-    });
-
-    test('keeps suggestion actions in the top row and tapping the empty prompt only expands', async () => {
-        const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, suggestion: 'Run the tests' });
-        expect(markup).toContain('Run the tests');
-        expect(markup.indexOf('Run the tests')).toBeLessThan(markup.indexOf('data-composer-morph-prompt'));
-        expect(markup).not.toContain('aria-label="Send message"');
-    });
-
-    test('keeps existing draft text ahead of a proposal', async () => {
-        const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, suggestion: 'Run the tests' });
-        expect(markup).toContain('Draft message');
-        expect(markup).not.toContain('Run the tests');
-    });
-
     test('uses the inline action to send content while the session is idle', async () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false });
 
         expect(markup).toContain('aria-label="Send message"');
-        expect(markup).not.toContain('aria-label="Queue message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
     });
 
-    test('queues content from inside the pill, between mic and stop, while the session is running', async () => {
-        // The expanded composer shows a rotated send icon labelled "Stage
-        // message" in this state; the collapsed pill must read the same.
+    test('a draft typed during a run makes the disc Send, which queues, with a bare Stop before it: a phone has no Escape', async () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true });
 
-        expect(markup).toContain('aria-label="Stop generating"');
         expect(markup).toContain('aria-label="Stage message"');
-        expect(markup).toContain('-rotate-90');
         expect(markup).not.toContain('aria-label="Send message"');
         const mic = markup.indexOf('aria-label="Start dictation"');
-        const queue = markup.indexOf('aria-label="Stage message"');
         const stop = markup.indexOf('aria-label="Stop generating"');
-        expect(mic).toBeLessThan(queue);
-        expect(queue).toBeLessThan(stop);
+        const queue = markup.indexOf('aria-label="Stage message"');
+        expect(mic).toBeLessThan(stop);
+        expect(stop).toBeLessThan(queue);
+        // One disc: Send's. Stop beside it is a bare icon.
+        expect(markup.match(/oc-action-disc/g)).toHaveLength(1);
+    });
+
+    test('the same disc sends when follow-ups steer', async () => {
+        const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true, followUpBehavior: 'steer' });
+
+        expect(markup).toContain('aria-label="Send message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
+        expect(markup).toContain('aria-label="Stop generating"');
+    });
+
+    test('a run with an empty input shows Stop in the disc', async () => {
+        const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, canAbort: true });
+
+        expect(markup).toContain('aria-label="Stop generating"');
+        expect(markup.match(/oc-action-disc/g)).toHaveLength(1);
     });
 
     test('uses the inline send action for content in a new-session draft', async () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: true });
 
         expect(markup).toContain('aria-label="Send message"');
-        expect(markup).not.toContain('aria-label="Queue message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
     });
 
     test('shows neither send nor queue for an empty existing session', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false });
 
-        expect(markup).not.toContain('aria-label="Queue message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
         expect(markup).not.toContain('aria-label="Send message"');
     });
 
     test('shows neither send nor queue for an empty new-session draft', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: true });
 
-        expect(markup).not.toContain('aria-label="Queue message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
         expect(markup).not.toContain('aria-label="Send message"');
     });
 
@@ -178,7 +137,7 @@ describe('MobilePillComposer', () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, canAbort: true });
 
         expect(markup).toContain('aria-label="Stop generating"');
-        expect(markup).not.toContain('aria-label="Queue message"');
+        expect(markup).not.toContain('aria-label="Stage message"');
         expect(markup).not.toContain('aria-label="Send message"');
     });
 

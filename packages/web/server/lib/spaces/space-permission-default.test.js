@@ -40,6 +40,7 @@ const runtimeInside = (filePath) => {
     persistSettings: async (changes) => { settings = { ...settings, ...changes }; },
     fetchImpl: vi.fn(async () => new Response('[]')),
     retryDelaysMs: [0],
+    fallbackMode: 'ask',
     readDefaultMode: async () => {
       const mode = await readSpacePermissionDefault(filePath);
       reads.push(mode);
@@ -105,7 +106,8 @@ describe('the default permission mode inside a space', () => {
     expect(await readSpacePermissionDefault(filePath)).toBeNull();
     const { runtime, created } = runtimeInside(filePath);
     await created('root');
-    expect((await runtime.load()).modes).toEqual({});
+    expect(await runtime.load()).toMatchObject({ modes: {}, defaultEnabled: false });
+    await expect(runtime.resolveSessionMode('root', '/spaces/0123456789ab/project')).resolves.toBe('ask');
   });
 
   it('does not wait on a file the agent made a FIFO, a folder or a link', async () => {

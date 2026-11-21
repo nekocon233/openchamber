@@ -9,18 +9,13 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useOpenChatLink } from '../useOpenChatLink';
 import type { ToolPopupContent } from './types';
 
-/**
- * Opens what an attachment of a sent message resolves to. A file attached by
- * path opens like any file path in the chat: in the editor in VS Code, in the
- * Files drawer in the mobile app, in a Files tab elsewhere.
- */
 export function useOpenAttachment(onShowPopup: ((content: ToolPopupContent) => void) | undefined) {
     const runtime = React.useContext(RuntimeAPIContext);
     const mobileActions = useMobileAppActions();
     const effectiveDirectory = useEffectiveDirectory();
     const openChatLink = useOpenChatLink(effectiveDirectory ?? '');
 
-    return React.useCallback((target: AttachmentOpenTarget) => {
+    return React.useCallback((target: AttachmentOpenTarget, _event?: { metaKey: boolean; ctrlKey: boolean }) => {
         if (target.kind === 'external') {
             openChatLink(target.url);
             return;

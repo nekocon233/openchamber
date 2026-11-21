@@ -243,6 +243,7 @@ export const parseFollowUpQueueItem = (
     'status',
     'sendConfig',
     'claim',
+    'goal',
   ], field);
   if (options.allowClaim === false && value.claim !== undefined) {
     throw new Error(`Invalid follow-up queue ${field}.claim`);
@@ -303,6 +304,19 @@ export const parseFollowUpQueueItem = (
     };
   }
 
+  let goal: FollowUpQueueItem['goal'];
+  if (value.goal !== undefined) {
+    const raw = value.goal;
+    if (!isRecord(raw)) throw new Error(`Invalid follow-up queue ${field}.goal`);
+    assertKeys(raw, ['objective', 'tokenBudget'], `${field}.goal`);
+    const tokenBudget = raw.tokenBudget === null ? null : parseInteger(raw.tokenBudget, `${field}.goal.tokenBudget`);
+    if (tokenBudget === 0) throw new Error(`Invalid follow-up queue ${field}.goal.tokenBudget`);
+    goal = { tokenBudget };
+    if (raw.objective !== undefined) {
+      goal.objective = parseString(raw.objective, `${field}.goal.objective`, MAX_CONTENT_BYTES, { nonEmpty: true });
+    }
+  }
+
   return {
     id: parseIdentifier(value.id, `${field}.id`),
     messageId: value.messageId === null ? null : parseIdentifier(value.messageId, `${field}.messageId`),
@@ -321,6 +335,7 @@ export const parseFollowUpQueueItem = (
     status: parseStatus(value.status, `${field}.status`),
     ...(value.sendConfig !== undefined ? { sendConfig: parseSendConfig(value.sendConfig, `${field}.sendConfig`) } : {}),
     ...(claim ? { claim } : {}),
+    ...(goal ? { goal } : {}),
   };
 };
 
@@ -503,6 +518,8 @@ export const followUpQueueItemsEqual = (left: FollowUpQueueItem, right: FollowUp
   && left.sendConfig?.agent === right.sendConfig?.agent
   && left.sendConfig?.variant === right.sendConfig?.variant
   && JSON.stringify(left.sendConfig?.subagentModel) === JSON.stringify(right.sendConfig?.subagentModel)
+  && left.goal?.tokenBudget === right.goal?.tokenBudget
+  && left.goal?.objective === right.goal?.objective
   && left.claim?.id === right.claim?.id
   && left.claim?.expiresAt === right.claim?.expiresAt
   && attachmentsEqual(left.attachments, right.attachments)

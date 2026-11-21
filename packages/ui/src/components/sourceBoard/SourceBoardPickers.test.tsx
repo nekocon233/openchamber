@@ -38,7 +38,7 @@ test('the team picker renders while the Linear status has no workspace list', as
   const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
   const { createWebAPIs } = await import('../../../../web/src/api/index');
   const { useLinearAuthStore } = await import('@/stores/useLinearAuthStore');
-  const { SourceBoardTeamPicker } = await import('./SourceBoardPickers');
+  const { SourceBoardContainerPicker } = await import('./SourceBoardPickers');
   const apis = createWebAPIs();
 
   for (const status of [null, { connected: false }]) {
@@ -47,7 +47,7 @@ test('the team picker renders while the Linear status has no workspace list', as
       root.render(
         <I18nProvider>
           <RuntimeAPIContext.Provider value={apis}>
-            <SourceBoardTeamPicker teams={[]} selectedTeamId={null} onSelectTeam={() => {}} onWorkspaceSwitched={() => {}} />
+            <SourceBoardContainerPicker provider="linear" containers={[]} selectedContainerId={null} onSelectContainer={() => {}} onAccountSwitched={() => {}} />
           </RuntimeAPIContext.Provider>
         </I18nProvider>,
       );

@@ -17,11 +17,6 @@ import {
 import { selectNextOccurrence } from '@codemirror/search';
 import { timerCaretBlink } from './caretBlink';
 
-/**
- * Editing help that needs no language server: the matching bracket lights up
- * and brackets and quotes close themselves. Word completion is deliberately
- * left out.
- */
 export const bracketAids = (): Extension => [
     bracketMatching(),
     closeBrackets(),

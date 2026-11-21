@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { gzipSync } from 'zlib';
-import AdmZip from 'adm-zip';
+import { zipFixture } from '../../../test/zip-fixture.js';
 
 import {
   createFrpcBinaryManager,
@@ -50,9 +50,7 @@ const createAssetFixture = ({ archive, archiveType, member, platform, arch, bina
 };
 
 const createZipFixture = (member, binary) => {
-  const zip = new AdmZip();
-  zip.addFile(member, binary);
-  return zip.toBuffer();
+  return zipFixture({ [member]: binary });
 };
 
 const writeTarOctal = (buffer, offset, length, value) => {
@@ -223,7 +221,7 @@ describe('FRPC archive extraction', () => {
       archivePath,
       member: 'fixture/frpc.exe',
       destinationPath,
-    })).rejects.toThrow(/does not contain fixture\/frpc.exe/);
+    })).rejects.toThrow(/Unsafe ZIP path/);
     expect(fs.existsSync(destinationPath)).toBe(false);
   });
 });

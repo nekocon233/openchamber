@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 
-// NOTE: keep the Workbox injection point so vite-plugin-pwa can build.
-// We intentionally do not use Workbox runtime helpers here: iOS Safari can be
-// fragile with more complex SW bundles. For push notifications we only need a
-// minimal SW.
+
+
+
+
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<string | { url: string; revision?: string }>;
@@ -15,11 +15,17 @@ type PushPayload = {
   title?: string;
   body?: string;
   tag?: string;
+
+
+
+  clear?: string[];
   data?: {
     url?: string;
     sessionId?: string;
     directory?: string;
     type?: string;
+
+    nid?: string;
   };
   icon?: string;
   badge?: string;
@@ -140,6 +146,8 @@ self.addEventListener('push', (event) => {
       return;
     }
 
+    await closeHandledNotifications(payload.clear);
+
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const hasFocusedTopLevelClient = clients.some((client) => (
       (client.frameType === undefined || client.frameType === 'top-level') && client.focused
@@ -162,6 +170,23 @@ self.addEventListener('push', (event) => {
     });
   })());
 });
+
+async function closeHandledNotifications(entries: string[] | undefined): Promise<void> {
+  if (!entries?.length) return;
+  const covered = new Map<string, number | null>();
+  for (const entry of entries) {
+    const [tag, id] = entry.split('@');
+    if (tag) covered.set(tag, id ? Number(id) : null);
+  }
+  const shown = await self.registration.getNotifications();
+  for (const notification of shown) {
+    if (!notification.tag || !covered.has(notification.tag)) continue;
+    const upTo = covered.get(notification.tag) ?? null;
+
+    const shownId = Number(notification.data?.nid);
+    if (upTo === null || Number.isNaN(upTo) || Number.isNaN(shownId) || shownId <= upTo) notification.close();
+  }
+}
 
 // An older page may not understand the message, so only skip navigation after
 // the mounted app explicitly accepts it. Focus first to wake suspended pages.

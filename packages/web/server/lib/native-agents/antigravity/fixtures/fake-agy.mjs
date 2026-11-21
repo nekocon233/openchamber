@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 
 const home = process.env.AGY_FIXTURE_HOME;
@@ -94,6 +93,7 @@ const root = path.join(home, 'brain', conversationId, '.system_generated', 'logs
 fs.mkdirSync(root, { recursive: true });
 const transcript = path.join(root, 'transcript.jsonl');
 const fullTranscript = path.join(root, 'transcript_full.jsonl');
+const { DatabaseSync } = await import('node:sqlite');
 const databasePath = path.join(home, 'conversation_summaries.db');
 const writeSummary = () => {
   const db = new DatabaseSync(databasePath);
@@ -104,7 +104,9 @@ const writeSummary = () => {
     preview text,
     last_modified_time text,
     workspace_uris text,
-    parent_conversation_id text default ''
+    parent_conversation_id text default '',
+    status text default 'CASCADE_RUN_STATUS_IDLE',
+    not_fully_idle integer default 0
   )`);
   db.prepare(`insert into conversation_summaries
     (conversation_id, title, preview, last_modified_time, workspace_uris, parent_conversation_id)
@@ -193,7 +195,8 @@ const run = (text) => {
     finish('SUCCESS', 'Follow-up completed.\n');
     return;
   }
-  if (visible === 'retained-agent-content' || visible === 'retained-agent-no-child-frames' || visible === 'live-child-thinking') {
+  const indexOnly = visible === 'live-child-index-only';
+  if (visible === 'retained-agent-content' || visible === 'retained-agent-no-child-frames' || visible === 'live-child-thinking' || indexOnly) {
     const childId = randomUUID();
     retainedChildId = childId;
     const message = (sender, body) => '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender='
@@ -201,8 +204,11 @@ const run = (text) => {
     const task = 'Inspect fixture evidence.';
     const report = '# Fixture report\n\nThe evidence is complete.';
     const db = new DatabaseSync(databasePath);
-    db.prepare('insert into conversation_summaries values (?, ?, ?, ?, ?, ?)')
-      .run(childId, 'Fixture child', task, new Date().toISOString(), JSON.stringify([pathToFileURL(cwd).href]), conversationId);
+    db.prepare(`insert into conversation_summaries
+      (conversation_id, title, preview, last_modified_time, workspace_uris, parent_conversation_id, status, not_fully_idle)
+      values (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(childId, 'Fixture child', task, new Date().toISOString(), JSON.stringify([pathToFileURL(cwd).href]), conversationId,
+        indexOnly ? 'CASCADE_RUN_STATUS_RUNNING' : 'CASCADE_RUN_STATUS_IDLE', Number(indexOnly));
     db.close();
     const childRoot = path.join(home, 'brain', childId, '.system_generated', 'logs');
     fs.mkdirSync(childRoot, { recursive: true });
@@ -221,11 +227,11 @@ const run = (text) => {
     append({ step_index: index, type: 'GENERIC', content: 'Child created', subagent_info: subagentInfo });
     frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: index, state: 'DONE', step_type: 'subagent',
       tool_info: { name: 'invoke_subagent', parameters: { Task: task }, output: 'Child created', error: null }, subagent_info: subagentInfo } });
-    if (visible !== 'retained-agent-no-child-frames') {
+    if (visible !== 'retained-agent-no-child-frames' && !indexOnly) {
       frame({ event: 'step_update', step_update: { conversation_id: childId, step_index: 1, state: 'DONE',
         step_type: 'agent_response', text_delta: 'Evidence checked.' } });
     }
-    if (visible === 'live-child-thinking') return;
+    if (visible === 'live-child-thinking' || indexOnly) return;
     frame({ event: 'result', result: { conversation_id: childId, status: 'SUCCESS', response: 'Evidence checked.' } });
     for (const name of ['find_by_name', 'grep_search']) {
       append({ step_index: stepIndex++, type: 'GENERIC', status: 'INVALID', error: 'unknown tool: ' + name, content: 'Invalid call' });

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerCommonRequestMiddleware } from '../../opencode/core-routes.js';
+import { registerCommonRequestMiddleware } from '../../server-frame/core-routes.js';
 import { newNativeClientUserMessageId } from '../ids.js';
 import { registerNativeAgentRoutes } from '../routes.js';
 import { createNativeAgentsRuntime } from '../runtime.js';

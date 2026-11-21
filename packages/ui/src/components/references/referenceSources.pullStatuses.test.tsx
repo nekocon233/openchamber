@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
-import type { GitHubPullReference } from '@/lib/api/types';
+import type { RepositoryChangeRequestReference } from '@/lib/api/types';
 import type { SourceControlAuthStatus, SourceControlUser } from '@/lib/source-control/types';
 
 const ACCOUNT_ID = 'github.com#7';
@@ -15,7 +15,8 @@ const CONNECTED: SourceControlAuthStatus = {
   }],
 };
 
-const pull = (number: number): GitHubPullReference => ({
+const pull = (number: number): RepositoryChangeRequestReference => ({
+  provider: 'github',
   kind: 'pull', number, title: `PR ${number}`, url: `https://github.com/acme/app/pull/${number}`,
   body: '', bodyTruncated: false, createdAt: null, updatedAt: null, author: null, labels: [], commentCount: 0,
   sourceRepo: { owner: 'acme', repo: 'app', source: 'origin' },
@@ -26,11 +27,11 @@ test('a list that mounts while its statuses are already on the way shows them wh
   const dom = new Window({ url: 'http://localhost' });
   const globals = {
     window: dom, document: dom.document, navigator: dom.navigator, location: dom.location, localStorage: dom.localStorage,
-    Element: dom.Element, HTMLElement: dom.HTMLElement, Node: dom.Node, Event: dom.Event, CustomEvent: dom.CustomEvent,
-    MutationObserver: dom.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true,
+    HTMLElement: dom.HTMLElement, Element: dom.Element, Node: dom.Node, Event: dom.Event, CustomEvent: dom.CustomEvent,
+    IS_REACT_ACT_ENVIRONMENT: true,
   };
-  for (const [name, value] of Object.entries(globals)) {
-    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  for (const [key, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
 
   const answers: Array<() => void> = [];
@@ -40,13 +41,16 @@ test('a list that mounts while its statuses are already on the way shows them wh
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
     switch (url.pathname) {
+      case '/api/fs/home': return Response.json({ home: '/fixture-home' });
+      case '/api/session': return Response.json({ data: [] });
+      case '/api/location': return Response.json({ directory: '/repo', project: { directory: '/repo' } });
       case '/api/source-control/binding': return Response.json({
         status: 'bound', revision: 1,
-        repository: { supported: true, repositoryId: 'repo', configRevision: 'rev', bare: false,
+        repository: { repositoryId: 'repo-1', configRevision: 'rev', bare: false,
           remotes: [{ name: 'origin', fetch: ENDPOINT, push: ENDPOINT }] },
-        binding: { repositoryId: 'repo', configRevision: 'rev', revision: 1, state: 'bound',
-          providers: [{ provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID, primaryRemote: 'origin', readiness: 'ready', endpoint: ENDPOINT }],
-          remotes: [], auxiliary: [] },
+        binding: { repositoryId: 'repo-1', configRevision: 'rev', revision: 1, state: 'bound',
+          providers: [{ provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID, primaryRemote: 'origin',
+            readiness: 'ready', endpoint: ENDPOINT }], remotes: [], auxiliary: [] },
       });
       case '/api/source-control/github/references/status': {
         asked.push(url.searchParams.get('pulls') ?? '');
@@ -69,8 +73,18 @@ test('a list that mounts while its statuses are already on the way shows them wh
     const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
     const { createWebAPIs } = await import('../../../../web/src/api/index');
     const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
-    const { forgetGitHubPullStatuses, useGitHubPullStatuses } = await import('./referenceSources');
+    const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
+    const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
+    const { forgetRepositoryPullStatuses, useRepositoryPullStatuses } = await import('./referenceSources');
     const { revalidateReferences } = await import('./referenceCache');
+    const baseDescriptor = githubLikeDescriptor();
+    const descriptor = { ...baseDescriptor, features: { ...baseDescriptor.features, listStatuses: true } };
+    useSourceControlProviderRegistry.setState({
+      ordered: [descriptor],
+      byId: new Map([[descriptor.id, descriptor]]),
+      status: 'ready',
+      holdsList: true,
+    });
     useSourceControlAuthStore.setState({
       entries: { [getSourceControlAuthKey({ provider: 'github', instance: 'github.com' })]: { status: CONNECTED, isLoading: false, hasChecked: true } },
     });
@@ -79,7 +93,7 @@ test('a list that mounts while its statuses are already on the way shows them wh
     pulls[0].state = 'merged';
     pulls[1].state = 'closed';
     const Probe: React.FC = () => {
-      const statusOf = useGitHubPullStatuses('/repo', pulls, true);
+      const statusOf = useRepositoryPullStatuses('/repo', pulls, true);
       const status = statusOf(pulls[0]);
       return <><span id="status">{status.status === 'ready' ? `ready:${status.value?.checks?.total}` : status.status}</span>
         <span id="last-status">{statusOf(pulls[22]).status}</span></>;
@@ -115,7 +129,7 @@ test('a list that mounts while its statuses are already on the way shows them wh
     expect(container.querySelector('#last-status')?.textContent).toBe('ready');
 
     failLastBatch = true;
-    forgetGitHubPullStatuses();
+    forgetRepositoryPullStatuses();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(asked).toHaveLength(6);
     for (const answer of answers.splice(0)) answer();

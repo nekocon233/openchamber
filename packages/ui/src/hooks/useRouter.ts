@@ -2,16 +2,14 @@ import React from 'react';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useUIStore, type ContextPanelMode } from '@/stores/useUIStore';
 import { parseRoute, updateBrowserURL, hasRouteParams } from '@/lib/router';
-import { listenForNotificationNavigation } from '@/lib/router/notificationNavigation';
+import { pushRouteEntry } from '@/lib/router/backGuard';
 import { isSessionOpenRedirect, openSessionFromRoute, openSessionLink } from '@/lib/router/openSessionFromRoute';
+import { listenForNotificationNavigation } from '@/lib/router/notificationNavigation';
 import type { RouteState, AppRouteState } from '@/lib/router';
 import { resolveSettingsSlug } from '@/lib/settings/metadata';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { usePwaSessionRestore } from './usePwaSessionRestore';
 
-/**
- * Check if running in VS Code webview context.
- */
 function isVSCodeContext(): boolean {
   if (typeof window === 'undefined') {
     return false;
@@ -32,36 +30,23 @@ export function getCurrentAppRouteState(): AppRouteState {
   };
 }
 
-/**
- * Hook that provides bidirectional URL routing for OpenChamber.
- *
- * On mount:
- * - Parses URL parameters and applies them to app state
- * - Sets up subscriptions to sync state changes back to URL
- * - Listens for browser back/forward navigation
- *
- * Works in:
- * - Web: Full bidirectional sync
- * - Desktop: Full bidirectional sync
- * - VS Code: State-only (no URL updates, reads initial params)
- */
 export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestoreReady?: boolean } = {}): void {
   const isVSCode = React.useMemo(() => isVSCodeContext(), []);
 
-  // Track initialization to avoid duplicate applies
   const initializedRef = React.useRef(false);
   const isApplyingRouteRef = React.useRef(false);
   const pendingRouteRef = React.useRef<{ route: RouteState; initial: boolean; normalize: boolean } | null>(null);
 
-  // Get store actions (stable references)
   const setSettingsDialogOpen = useUIStore((state) => state.setSettingsDialogOpen);
   const setSettingsPage = useUIStore((state) => state.setSettingsPage);
   const navigateToDiff = useUIStore((state) => state.navigateToDiff);
 
   const applyRouteState = React.useCallback(
     async (route: RouteState, initial: boolean) => {
-      // 1. Apply session first (may trigger async operations); a message
-      // link also asks the session's timeline to show that message.
+      if (!route.settingsPath && useUIStore.getState().isSettingsDialogOpen) {
+        setSettingsDialogOpen(false);
+      }
+
       if (route.sessionId) {
         if (route.messageId) {
           await openSessionLink(route.sessionId, route.messageId);
@@ -72,23 +57,12 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
         }
       }
 
-      // 2. Handle settings first because it is a full-screen overlay.
       if (route.settingsPath) {
         setSettingsPage(resolveSettingsSlug(route.settingsPath));
         setSettingsDialogOpen(true);
-        // Do not process a route view while settings is open.
         return;
       }
 
-      // Close settings if URL has no settings section
-      if (useUIStore.getState().isSettingsDialogOpen) {
-        setSettingsDialogOpen(false);
-      }
-
-      // 3. Apply the view selected by the legacy URL parameter. Desktop
-      // surfaces live in the context panel, so a non-chat tab deep link
-      // opens the matching panel surface; activeSurface itself stays 'chat'
-      // (nothing renders non-chat surfaces in the main area).
       if (route.tab && route.tab !== 'chat') {
         const directory = useDirectoryStore.getState().currentDirectory;
         if (directory) {
@@ -97,7 +71,6 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
         }
       }
 
-      // 4. Apply diff file (only if going to diff tab)
       if (route.diffFile && (route.tab === 'diff' || !route.tab)) {
         navigateToDiff(route.diffFile);
       }
@@ -105,49 +78,36 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     [setSettingsDialogOpen, setSettingsPage, navigateToDiff]
   );
 
-  /**
-   * Apply a parsed route state to the application stores.
-   */
-  const applyRoute = React.useCallback(
-    async (route: RouteState, initial = false, normalize = true) => {
-      pendingRouteRef.current = { route, initial, normalize };
-      if (isApplyingRouteRef.current) {
-        return;
-      }
-
-      isApplyingRouteRef.current = true;
-
-      try {
-        while (pendingRouteRef.current) {
-          const request = pendingRouteRef.current;
-          pendingRouteRef.current = null;
-          await applyRouteState(request.route, request.initial);
-          if (!isVSCode && request.normalize && !request.route.messageId && !pendingRouteRef.current) {
-            const state = getCurrentAppRouteState();
-            const currentSessionState = useSessionUIStore.getState();
-            const sessionId = state.sessionId ?? request.route.sessionId;
-            const sessionDirectory = request.route.sessionDirectory
-              ?? (currentSessionState.currentSessionId === sessionId
-                ? currentSessionState.currentSessionDirectory
-                : null);
-            updateBrowserURL(request.initial ? {
-              ...state,
-              sessionId,
-              sessionDirectory,
-              settingsPath: request.route.settingsPath ?? state.settingsPath,
-            } : state, { replace: true, force: request.initial });
-          }
+  const applyRoute = React.useCallback(async (route: RouteState, initial = false) => {
+    pendingRouteRef.current = { route, initial, normalize: hasRouteParams() };
+    if (isApplyingRouteRef.current) return;
+    isApplyingRouteRef.current = true;
+    try {
+      while (pendingRouteRef.current) {
+        const request = pendingRouteRef.current;
+        pendingRouteRef.current = null;
+        await applyRouteState(request.route, request.initial);
+        if (!isVSCode && request.normalize && !request.route.messageId && !pendingRouteRef.current) {
+          const state = getCurrentAppRouteState();
+          const currentSessionState = useSessionUIStore.getState();
+          const sessionId = state.sessionId ?? request.route.sessionId;
+          const sessionDirectory = request.route.sessionDirectory
+            ?? (currentSessionState.currentSessionId === sessionId
+              ? currentSessionState.currentSessionDirectory
+              : null);
+          updateBrowserURL(request.initial ? {
+            ...state,
+            sessionId,
+            sessionDirectory,
+            settingsPath: request.route.settingsPath ?? state.settingsPath,
+          } : state, { replace: true, force: request.initial });
         }
-      } finally {
-        isApplyingRouteRef.current = false;
       }
-    },
-    [applyRouteState, isVSCode]
-  );
+    } finally {
+      isApplyingRouteRef.current = false;
+    }
+  }, [applyRouteState, isVSCode]);
 
-  /**
-   * Sync current app state to URL.
-   */
   const syncURLFromState = React.useCallback(
     (options: { replace?: boolean } = {}) => {
       if (isVSCode || isApplyingRouteRef.current) {
@@ -174,19 +134,13 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     syncURLFromState({ replace: true });
   }, [syncURLFromState]);
 
-  // Initialize: parse URL and apply route on mount
   React.useEffect(() => {
     if (initializedRef.current) {
       return;
     }
     initializedRef.current = true;
 
-    // Only process if URL has route params
     if (!hasRouteParams()) {
-      // No route params. The launch may already have reopened the last
-      // session (App selects it before this effect runs, so the session
-      // subscription below never sees that change): name it in the URL
-      // without adding a history entry.
       syncURLFromState({ replace: true });
       return;
     }
@@ -202,25 +156,29 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     return listenForNotificationNavigation((target) => {
       if (isApplyingRouteRef.current) return false;
       const route = parseRoute(target.searchParams);
-      window.history.pushState({}, '', target.href);
-      void applyRoute(route, false, false).catch((error) => {
+      pushRouteEntry({}, target.href);
+      void applyRoute(route).catch((error) => {
         console.error('[PWA] notification navigation failed:', error);
       });
       return true;
     });
   }, [applyRoute, isVSCode]);
 
-  // Subscribe to session changes
   React.useEffect(() => {
     if (isVSCode) {
       return;
     }
 
-    const unsubscribe = useSessionUIStore.subscribe((state, previousState) => {
-      const sessionChanged = state.currentSessionId !== previousState.currentSessionId;
-      const directoryChanged = state.currentSessionDirectory !== previousState.currentSessionDirectory;
+    let prevSessionId: string | null = useSessionUIStore.getState().currentSessionId;
+    let prevSessionDirectory: string | null = useSessionUIStore.getState().currentSessionDirectory;
 
-      // Skip if no change or if we're currently applying a route
+    const unsubscribe = useSessionUIStore.subscribe((state) => {
+      const sessionChanged = state.currentSessionId !== prevSessionId;
+      const directoryChanged = state.currentSessionDirectory !== prevSessionDirectory;
+
+      prevSessionId = state.currentSessionId;
+      prevSessionDirectory = state.currentSessionDirectory;
+
       if ((!sessionChanged && !directoryChanged) || isApplyingRouteRef.current) {
         return;
       }
@@ -231,7 +189,6 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     return unsubscribe;
   }, [isVSCode, syncURLFromState]);
 
-  // Subscribe to UI store changes (view, settings)
   React.useEffect(() => {
     if (isVSCode) {
       return;
@@ -241,16 +198,15 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     let prevSettingsPath: string = useUIStore.getState().settingsPage;
 
     const unsubscribe = useUIStore.subscribe((state) => {
-      // Skip if we're currently applying a route
-      if (isApplyingRouteRef.current) {
-        return;
-      }
-
       const settingsOpenChanged = state.isSettingsDialogOpen !== prevSettingsOpen;
       const settingsPathChanged = state.settingsPage !== prevSettingsPath;
 
       prevSettingsOpen = state.isSettingsDialogOpen;
       prevSettingsPath = state.settingsPage;
+
+      if (isApplyingRouteRef.current) {
+        return;
+      }
 
       if (settingsOpenChanged || settingsPathChanged) {
         syncURLFromState();
@@ -260,27 +216,15 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     return unsubscribe;
   }, [isVSCode, syncURLFromState]);
 
-  // Listen for browser back/forward navigation
   React.useEffect(() => {
     if (typeof window === 'undefined' || isVSCode) {
       return;
     }
 
     const handlePopState = () => {
-      // Parse the new URL and apply it
       const route = parseRoute();
 
-      // Check if this is a route with any params, or if we should restore defaults
-      if (hasRouteParams()) {
-        void applyRoute(route);
-      } else {
-        // URL has no route params - this might be a "back to home" navigation
-        // Close settings if open, keep current session
-        const uiState = useUIStore.getState();
-        if (uiState.isSettingsDialogOpen) {
-          setSettingsDialogOpen(false);
-        }
-      }
+      void applyRoute(route);
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -288,7 +232,7 @@ export function useRouter({ pwaSessionRestoreReady = false }: { pwaSessionRestor
     return () => {
       window.removeEventListener('popstate', handlePopState);
     };
-  }, [applyRoute, isVSCode, setSettingsDialogOpen]);
+  }, [applyRoute, isVSCode]);
 
   usePwaSessionRestore(pwaSessionRestoreReady, canRestorePwaSession, restorePwaSession);
 }

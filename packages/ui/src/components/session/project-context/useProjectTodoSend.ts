@@ -5,7 +5,7 @@ import { useSessionActivity } from '@/hooks/useSessionActivity';
 import { resolveSessionSendSelection } from '@/lib/defaultSendSelection';
 import { generateBranchName } from '@/lib/git/branchNameGenerator';
 import { useI18n } from '@/lib/i18n';
-import { renderMagicPrompt } from '@/lib/magicPrompts';
+import { loadMagicPrompts } from '@/lib/magicPrompts';
 import type { ProjectRef } from '@/lib/projectContextApi';
 import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
 import { createWorktreeSessionForNewBranch } from '@/lib/worktreeSessionCreator';
@@ -14,7 +14,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import * as sessionActions from '@/sync/session-actions';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import type { TodoSendExecution } from '../TodoSendDialog';
+import { resolveExecutionForDirectory, type TodoSendExecution } from '../todoSendExecution';
 import { useChatColumnActions, useChatSessionSelection } from '@/components/chat/chatColumnSession';
 
 type PendingSendTarget = {
@@ -23,13 +23,6 @@ type PendingSendTarget = {
   todoText: string;
 };
 
-/**
- * Sending a todo to an agent.
- *
- * Creating a session, picking its model/agent, and dispatching the prompt is
- * the heaviest thing this surface does and has nothing to do with how todos are
- * stored, so it lives apart from the list that triggers it.
- */
 export const useProjectTodoSend = (options: {
   projectRef: ProjectRef | null;
   canCreateWorktree: boolean;
@@ -114,7 +107,7 @@ export const useProjectTodoSend = (options: {
             sessionActions.dismissOpenPermissionsForSession(currentSessionId),
             sessionActions.dismissOpenFormsForSession(currentSessionId),
           ]);
-          if (currentSessionPhase !== 'idle' || dismissedPermissions || dismissedQuestions) sendOptions.delivery = 'steer';
+          if (currentSessionPhase !== 'idle' || dismissedPermissions || dismissedQuestions.dismissed) sendOptions.delivery = 'steer';
         }
         await sendMessage(
           todoText,
@@ -172,27 +165,29 @@ export const useProjectTodoSend = (options: {
   );
 
   const confirmSend = React.useCallback(
-    async (execution: TodoSendExecution) => {
+    async (dialogExecution: TodoSendExecution) => {
       if (!projectRef || !pendingSendTarget) {
         return;
       }
-
-      const visiblePrompt = await renderMagicPrompt('plan.todo.visible', {
-        todo_text: pendingSendTarget.todoText,
-      });
-      const instructionsText = await renderMagicPrompt('plan.todo.instructions', {
-        todo_text: pendingSendTarget.todoText,
-      });
-      const syntheticParts = [{ synthetic: true as const, text: instructionsText }];
 
       setIsSubmitting(true);
       setSendingTodoId(pendingSendTarget.todoId);
 
       try {
+        const prompts = await loadMagicPrompts(projectRef.path);
+        const visiblePrompt = prompts.render('plan.todo.visible', {
+          todo_text: pendingSendTarget.todoText,
+        });
+        const instructionsText = prompts.render('plan.todo.instructions', {
+          todo_text: pendingSendTarget.todoText,
+        });
+        const syntheticParts = [{ synthetic: true as const, text: instructionsText }];
+
         routeToChat();
 
         let sessionId: string | null = null;
         let directoryHint: string | null = projectRef.path;
+        let execution = dialogExecution;
 
         if (pendingSendTarget.kind === 'worktree') {
           if (!canCreateWorktree) {
@@ -204,7 +199,8 @@ export const useProjectTodoSend = (options: {
             return;
           }
           sessionId = created.id;
-          directoryHint = created.path;
+          directoryHint = created.directory;
+          execution = await resolveExecutionForDirectory(created.directory, dialogExecution);
         } else {
           const session = await createSession(undefined, projectRef.path, undefined, {
             model: { providerID: execution.providerID, id: execution.modelID, variant: execution.variant || undefined },

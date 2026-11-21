@@ -1,15 +1,12 @@
-import type { Session } from '@/lib/opencode/model';
-
 import { getSessionActivityTime } from '@/sync/session-ordering';
+import type { Session } from '@/lib/opencode/model';
+import { getChatsRoot, isChatDirectoryPath } from '@/lib/chatDirectories';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { memoizeSessionListProjection } from '@/stores/sessionListProjection';
+import type { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 
 import { normalizePath } from './mobilePaths';
 
-/** Field readers shared by the mobile sessions sheet and its timeline list.
-    Kept out of the sheet so the timeline list can read the same session
-    fields without importing the sheet (which imports the list). */
-
-export const getParentId = (session: Session): string | null =>
-  (session as Session & { parentID?: string | null }).parentID ?? null;
 
 export const getSessionDirectory = (session: Session): string => {
   const sessionWithDirectory = session as Session & {
@@ -19,7 +16,12 @@ export const getSessionDirectory = (session: Session): string => {
   return normalizePath(sessionWithDirectory.directory ?? sessionWithDirectory.project?.worktree ?? null);
 };
 
-/** The last conversation, the time the lists order by; a rename does not move it. */
+const hasChats = memoizeSessionListProjection((sessions: Session[], _root: string | null, _runtime: string) =>
+  sessions.some((session) => isChatDirectoryPath(getSessionDirectory(session))));
+
+export const selectHasChats = (state: ReturnType<typeof useGlobalSessionsStore.getState>): boolean =>
+  hasChats(state.activeSessions, getChatsRoot(), getRuntimeKey());
+
 export const getSessionTimestamp = (session: Session): number => getSessionActivityTime(session);
 
 export const formatRelativeShort = (timestamp: number): string => {

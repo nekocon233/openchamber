@@ -532,6 +532,8 @@ describe('Antigravity native store', () => {
     const store = createAntigravityStore({ registry, home });
     expect((await store.listRootSessions(directory)).map((record) => record.id)).toEqual([SESSION_ID]);
     expect(await store.getSession(SESSION_ID, NATIVE_ID, path.join(directory, 'other'))).toBeNull();
+    expect(await store.sessionExists(SESSION_ID, NATIVE_ID)).toBe(true);
+    expect(await store.sessionExists(SESSION_ID, NATIVE_ID, path.join(directory, 'other'))).toBe(false);
   });
 
   it('reads children and nested children in the root workspace without listing them as roots', async () => {

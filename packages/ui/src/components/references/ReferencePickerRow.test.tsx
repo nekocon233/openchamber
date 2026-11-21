@@ -16,7 +16,7 @@ const ready = (checks: GitHubChecksSummary | null): CachedValue<GitHubPullStatus
   status: 'ready', value: { owner: 'acme', repo: 'app', number: 7, checks, mergeable: null, mergeableState: null },
 });
 const render = (pullStatus: CachedValue<GitHubPullStatus | null>, showChecks = true) => renderToStaticMarkup(
-  <I18nProvider><ReferencePickerRow item={{ source: 'github', reference }} pullStatus={pullStatus} showChecks={showChecks}
+  <I18nProvider><ReferencePickerRow item={{ source: 'repository', reference }} pullStatus={pullStatus.status === 'ready' ? pullStatus.value : null} pullStatusRead={pullStatus} showChecks={showChecks}
     highlighted={false} checked={null} diffIncluded={false} now={0} onHighlight={() => {}} onToggle={() => {}} onActivate={() => {}} />
   </I18nProvider>,
 );

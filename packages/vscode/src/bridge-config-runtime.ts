@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
+import { readMachineSetting } from './machine-settings';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,7 +37,6 @@ import {
   writeSkillSupportingFile,
   deleteSkillSupportingFile,
   type SkillScope,
-  type DiscoveredSkill,
   SKILL_SCOPE,
   listMcpConfigs,
   listPluginDirFiles,
@@ -45,6 +45,8 @@ import {
   createPluginEntry,
   updatePluginEntry,
   deletePluginEntry,
+  setPluginEntryEnabled,
+  setPluginFileEnabled,
   readPluginDirFile,
   writePluginDirFile,
   deletePluginDirFile,
@@ -71,29 +73,21 @@ import {
   getSkillsCatalogSourceItems,
   scanSkillsRepository as scanSkillsRepositoryFromGit,
   installSkillsFromRepository as installSkillsFromGit,
-  type SkillsCatalogSourceConfig,
 } from './skillsCatalog';
 import { buildAppliedResponse } from './config-mutation-response';
-import { magicPromptRequestSchema, type MagicPromptHttpResponse, type MagicPromptRequest } from './magic-prompts';
+import { magicPromptRequestSchema, type MagicPromptHttpResponse } from './magic-prompts';
 import type { BridgeContext, BridgeResponse } from './bridge';
+import { normalizeWindowsDriveLetter } from './pathUtils';
 import { appendInstalledSources, readInstalledSources, removeInstalledSources } from '../../web/server/lib/skills-catalog/installed-sources.js';
 import { planInstalledSkillUpdates, updateInstalledSkills } from '../../web/server/lib/skills-catalog/update-installed.js';
 import { syncUserSkills } from '../../web/server/lib/skills-catalog/user-sync.js';
+import type { ConfigRuntimeDeps } from './bridge-skill-sources';
+import { parseSkillsCatalogSources, resolveDiscoveredSkills } from './bridge-skill-sources';
 
 type BridgeMessageInput = {
   id: string;
   type: string;
   payload?: unknown;
-};
-
-type ConfigRuntimeDeps = {
-  readSettings: (ctx?: BridgeContext) => Record<string, unknown>;
-  persistSettings: (changes: Record<string, unknown>, ctx?: BridgeContext) => Promise<Record<string, unknown>>;
-  /** One `/api/magic-prompts` request; the webview answers with the returned status and body. */
-  handleMagicPromptRequest: (request: MagicPromptRequest) => Promise<MagicPromptHttpResponse>;
-  fetchOpenCodeSkillsFromApi: (ctx: BridgeContext | undefined, workingDirectory?: string) => Promise<DiscoveredSkill[] | null>;
-  homedir: () => string;
-  clientReloadDelayMs: number;
 };
 
 const AGENTS_MD_PATH = path.join(OPENCODE_CONFIG_DIR, 'AGENTS.md');
@@ -109,40 +103,8 @@ const pluginMutationPayload = (label: string) => buildAppliedResponse(
   `${label}.`,
 );
 
-const parseSkillsCatalogSources = (settings: Record<string, unknown>): SkillsCatalogSourceConfig[] => {
-  const rawCatalogs = (settings as { skillCatalogs?: unknown }).skillCatalogs;
-  if (!Array.isArray(rawCatalogs)) {
-    return [];
-  }
-
-  return rawCatalogs
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') return null;
-      const candidate = entry as Record<string, unknown>;
-      const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
-      const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
-      const source = typeof candidate.source === 'string' ? candidate.source.trim() : '';
-      const subpath = typeof candidate.subpath === 'string' ? candidate.subpath.trim() : '';
-      if (!id || !label || !source) return null;
-      const normalized: SkillsCatalogSourceConfig = {
-        id,
-        label,
-        description: source,
-        source,
-        ...(subpath ? { defaultSubpath: subpath } : {}),
-      };
-      return normalized;
-    })
-    .filter((value): value is SkillsCatalogSourceConfig => value !== null);
-};
-
-const resolveDiscoveredSkills = async (
-  deps: ConfigRuntimeDeps,
-  ctx: BridgeContext | undefined,
-  workingDirectory?: string,
-): Promise<DiscoveredSkill[]> => mergeDiscoveredSkills(
-  (await deps.fetchOpenCodeSkillsFromApi(ctx, workingDirectory)) || [],
-  discoverSkills(workingDirectory),
+const codedBridgeError = (message: string, code: string): Error & { code: string } => (
+  Object.assign(new Error(message), { code })
 );
 
 export async function handleConfigBridgeMessage(
@@ -155,10 +117,7 @@ export async function handleConfigBridgeMessage(
   switch (type) {
     case 'api:config/opencode-resolution:get': {
       const debugInfo = ctx?.manager?.getDebugInfo();
-      const configuredFromWorkspace = vscode.workspace.getConfiguration('openchamber').get<string>('opencodeBinary');
-      const configured = typeof configuredFromWorkspace === 'string' && configuredFromWorkspace.trim().length > 0
-        ? configuredFromWorkspace.trim()
-        : null;
+      const configured = readMachineSetting('opencodeBinary').trim() || null;
       const resolved = debugInfo?.cliPath ?? null;
       const source = (() => {
         if (!resolved) return null;
@@ -253,7 +212,6 @@ export async function handleConfigBridgeMessage(
         name?: string;
         body?: Record<string, unknown>;
         directory?: string;
-        /** `config` or `permissions`, mirroring the web sub-routes. */
         resource?: string;
       };
       const agentName = typeof name === 'string' ? name.trim() : '';
@@ -265,8 +223,6 @@ export async function handleConfigBridgeMessage(
       const normalizedMethod = typeof method === 'string' && method.trim() ? method.trim().toUpperCase() : 'GET';
 
       if (normalizedMethod === 'GET') {
-        // Mirrors the web routes: `/config` answers the canonical v2 entity and
-        // `/permissions` the effective rule list.
         if (resource === 'config') {
           return { id, type, success: true, data: getAgentConfig(agentName, workingDirectory) };
         }
@@ -328,7 +284,6 @@ export async function handleConfigBridgeMessage(
         name?: string;
         body?: Record<string, unknown>;
         directory?: string;
-        /** `config`, mirroring the web sub-route. */
         resource?: string;
       };
       const commandName = typeof name === 'string' ? name.trim() : '';
@@ -390,8 +345,6 @@ export async function handleConfigBridgeMessage(
       return { id, type, success: false, error: `Unsupported method: ${normalizedMethod}` };
     }
 
-    // GET/PUT /api/config/websearch — see the web routes in
-    // packages/web/server/lib/opencode/routes.js.
     case 'api:config/websearch': {
       // SAFETY: every field is checked before use: `method` against a literal,
       // `directory` by resolveWorkingDirectory, `selection` by parseWebSearchSelection.
@@ -407,8 +360,6 @@ export async function handleConfigBridgeMessage(
       return { id, type, success: true, data: { success: true, changed: result.changed } };
     }
 
-    // PUT /api/config/warming — see the web route in
-    // packages/web/server/lib/opencode/routes.js.
     case 'api:config/warming': {
       const enabled = (payload as { enabled?: unknown } | undefined)?.enabled;
       if (typeof enabled !== 'boolean') {
@@ -418,8 +369,6 @@ export async function handleConfigBridgeMessage(
       return { id, type, success: true, data: { success: true, changed: result.changed } };
     }
 
-    // PUT /api/config/compaction — see the web route in
-    // packages/web/server/lib/opencode/routes.js.
     case 'api:config/compaction': {
       const parsed = compactionUpdateSchema.safeParse(payload ?? {});
       if (!parsed.success) {
@@ -429,8 +378,6 @@ export async function handleConfigBridgeMessage(
       return { id, type, success: true, data: { success: true, changed: result.changed } };
     }
 
-    // PUT /api/config/skill-switch — see the web route in
-    // packages/web/server/lib/opencode/skill-routes.js.
     case 'api:config/skill-switch': {
       const parsed = skillSwitchRequestSchema.extend({ directory: z.string().optional() }).safeParse(payload);
       if (!parsed.success) {
@@ -506,9 +453,10 @@ export async function handleConfigBridgeMessage(
     }
 
     case 'api:config/plugins': {
-      const { method, target, pluginId, body, directory, specs, refresh } = (payload || {}) as {
+      const { method, target, action, pluginId, body, directory, specs, refresh } = (payload || {}) as {
         method?: string;
         target?: 'list' | 'registry' | 'entry' | 'file';
+        action?: 'enabled';
         pluginId?: string;
         body?: Record<string, unknown>;
         directory?: string;
@@ -517,15 +465,58 @@ export async function handleConfigBridgeMessage(
       };
       const normalizedMethod = typeof method === 'string' && method.trim() ? method.trim().toUpperCase() : 'GET';
       const workingDirectory = resolveWorkingDirectory(ctx, directory);
+      const manager = ctx?.manager;
+      const switchDirectory = ctx?.context ? normalizeWindowsDriveLetter(ctx.context.globalStorageUri.fsPath) : null;
+      const switchAvailable = manager ? manager.getDebugInfo().mode !== 'external' : false;
 
       if ((target === 'list' || !target) && normalizedMethod === 'GET') {
+        const listSwitchDirectory = switchAvailable && switchDirectory ? switchDirectory : undefined;
         return {
           id,
           type,
           success: true,
           data: {
-            entries: listPluginEntries(workingDirectory),
-            files: listPluginDirFiles(workingDirectory),
+            entries: listPluginEntries(workingDirectory, listSwitchDirectory).map((entry) => (
+              switchAvailable ? entry : { ...entry, switchState: 'unavailable' as const }
+            )),
+            files: listPluginDirFiles(workingDirectory, listSwitchDirectory).map((file) => (
+              switchAvailable ? file : { ...file, switchState: 'unavailable' as const }
+            )),
+          },
+        };
+      }
+
+      if (action === 'enabled') {
+        const enabled = body?.enabled;
+        if (enabled !== true && enabled !== false) {
+          throw codedBridgeError('enabled must be a boolean', 'INVALID_STATE');
+        }
+        if (!switchAvailable || !switchDirectory || !manager) {
+          throw codedBridgeError('Plugin switches apply only to the OpenCode OpenChamber starts', 'SWITCH_UNAVAILABLE');
+        }
+        if (target !== 'entry' && target !== 'file') {
+          throw codedBridgeError('Unsupported plugin switch target', 'INVALID_SPEC');
+        }
+        if (!pluginId) {
+          throw codedBridgeError(`Plugin ${target} id is required`, 'INVALID_SPEC');
+        }
+        const result = target === 'entry'
+          ? setPluginEntryEnabled(pluginId, enabled, workingDirectory, switchDirectory)
+          : setPluginFileEnabled(pluginId, enabled, workingDirectory, switchDirectory);
+        let requiresManualRestart = true;
+        try {
+          ({ requiresManualRestart } = await manager.refreshPluginSwitches());
+        } catch (error) {
+          console.warn('[plugins] Failed to apply a plugin switch to the managed OpenCode config:', error);
+        }
+        return {
+          id,
+          type,
+          success: true,
+          data: {
+            ...buildAppliedResponse(`Plugin ${enabled ? 'enabled' : 'disabled'}.`, result),
+            requiresReload: false,
+            requiresManualRestart,
           },
         };
       }
@@ -611,7 +602,6 @@ export async function handleConfigBridgeMessage(
       }
 
       if (normalizedMethod === 'POST' && !snippetName) {
-        // `content` asks for a snippet body's preview, `text` for a prompt's expansion.
         const text = body?.content !== undefined
           ? previewSnippet(String(body.content), workingDirectory)
           : expandSnippets(typeof body?.text === 'string' ? body.text : '', workingDirectory);
@@ -653,8 +643,6 @@ export async function handleConfigBridgeMessage(
       const normalizedMethod = typeof method === 'string' && method.trim() ? method.trim().toUpperCase() : 'GET';
 
       if (!name && normalizedMethod === 'GET') {
-        // A failed OpenCode list is flagged so the store treats the disk scan as
-        // partial instead of caching it as the complete list (#3921).
         const openCodeSkills = await deps.fetchOpenCodeSkillsFromApi(ctx, workingDirectory);
         const skills = mergeDiscoveredSkills(openCodeSkills || [], discoverSkills(workingDirectory));
         return {
@@ -739,7 +727,6 @@ export async function handleConfigBridgeMessage(
         try {
           removeInstalledSources(skillName);
         } catch (error) {
-          // Provenance only refines the Installed badge; the skill is gone either way.
           console.error('Failed to forget skill install provenance:', error);
         }
         return {
@@ -759,13 +746,15 @@ export async function handleConfigBridgeMessage(
     }
 
     case 'api:config/skills:catalog/source': {
-      const { sourceId, refresh } = (payload || {}) as { sourceId?: string; refresh?: boolean };
-      const workingDirectory = ctx?.manager?.getWorkingDirectory() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const { sourceId, refresh, directory } = (payload || {}) as { sourceId?: string; refresh?: boolean; directory?: string };
+      const workingDirectory = resolveWorkingDirectory(ctx, directory);
+      const projectDirectory = workingDirectory ? fs.realpathSync(workingDirectory) : undefined;
       const data = await getSkillsCatalogSourceItems({
         sourceId: String(sourceId || ''),
         refresh: refresh === true,
         additionalSources: parseSkillsCatalogSources(deps.readSettings(ctx)),
-        installedSkills: await resolveDiscoveredSkills(deps, ctx, workingDirectory),
+        installedSkills: await resolveDiscoveredSkills(deps, ctx, projectDirectory),
+        projectDirectory,
       });
       return { id, type, success: true, data };
     }
@@ -789,16 +778,18 @@ export async function handleConfigBridgeMessage(
         selections?: Array<{ skillDir: string }>;
         conflictPolicy?: 'prompt' | 'skipAll' | 'overwriteAll';
         conflictDecisions?: Record<string, 'skip' | 'overwrite'>;
+        directory?: string;
       };
 
-      const workingDirectory = ctx?.manager?.getWorkingDirectory() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workingDirectory = resolveWorkingDirectory(ctx, body.directory);
+      const projectDirectory = body.scope === 'project' && workingDirectory ? fs.realpathSync(workingDirectory) : undefined;
 
       const data = await installSkillsFromGit({
         source: String(body.source || ''),
         subpath: body.subpath,
         scope: body.scope === 'project' ? 'project' : 'user',
         targetSource: body.targetSource === 'agents' ? 'agents' : 'opencode',
-        workingDirectory: body.scope === 'project' ? workingDirectory : undefined,
+        workingDirectory: projectDirectory,
         selections: Array.isArray(body.selections) ? body.selections : [],
         conflictPolicy: body.conflictPolicy,
         conflictDecisions: body.conflictDecisions,
@@ -811,9 +802,11 @@ export async function handleConfigBridgeMessage(
         const sourceId = z.string().trim().min(1).safeParse(body.sourceId).data;
         if (installedAny && sourceId) {
           try {
-            appendInstalledSources(installed.map((entry) => ({ ...entry, sourceId, sourceRef: String(body.source || '') })));
+            appendInstalledSources(installed.map((entry) => {
+              const record = { ...entry, sourceId, sourceRef: String(body.source || '') };
+              return entry.scope === 'project' && projectDirectory ? { ...record, projectDirectory } : record;
+            }));
           } catch (error) {
-            // Provenance only refines the Installed badge; the install already succeeded.
             console.error('Failed to record skill install provenance:', error);
           }
         }
@@ -842,10 +835,12 @@ export async function handleConfigBridgeMessage(
     case 'api:config/skills:update': {
       // SAFETY: the webview forwards a JSON body; only `dryRun` is read, and
       // anything but a literal `true` runs the replacement.
-      const body = (payload || {}) as { dryRun?: boolean };
-      const workingDirectory = ctx?.manager?.getWorkingDirectory() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const body = (payload || {}) as { dryRun?: boolean; directory?: string };
+      const directory = resolveWorkingDirectory(ctx, body.directory);
+      const workingDirectory = directory ? fs.realpathSync(directory) : undefined;
       const plan = planInstalledSkillUpdates({
         provenanceByName: readInstalledSources(),
+        projectDirectory: workingDirectory ?? null,
         targetDirFor: ({ scope, source, skillName }) => {
           if (scope !== 'user' && scope !== 'project') return null;
           if (scope === 'project' && !workingDirectory) return null;

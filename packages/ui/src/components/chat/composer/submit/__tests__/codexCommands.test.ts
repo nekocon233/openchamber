@@ -12,6 +12,8 @@ const native = buildNativeProvider('codex', models);
 
 beforeEach(() => {
   useConfigStore.setState({
+    activeDirectoryKey: '/work/main',
+    directoryScoped: {},
     providers: [{ ...native, models: Object.values(native.models) }],
     currentProviderId: native.id,
     currentModelId: 'test-model',
@@ -43,6 +45,31 @@ describe('Codex command execution', () => {
     expect(await executeCodexComposerCommand({ name: 'plan', argument: 'Check auth\nThen propose a plan' }, context())).toEqual({ kind: 'prompt', text: 'Check auth\nThen propose a plan', agent: 'plan' });
     expect(useSelectionStore.getState().getSessionAgentSelection(sessionId)).toBe('plan');
     expect(await executeCodexComposerCommand({ name: 'plan', argument: '' }, context())).toEqual({ kind: 'done' });
+  });
+
+  test('a pinned column changes its saved selection without changing the main composer', async () => {
+    useConfigStore.setState({
+      providers: [],
+      directoryScoped: {
+        '/work/project': {
+          providers: [{ ...native, models: Object.values(native.models) }],
+          agents: [],
+          currentProviderId: native.id,
+          currentModelId: 'test-model',
+          currentAgentName: 'build',
+          selectedProviderId: native.id,
+          agentModelSelections: {},
+          defaultProviders: {},
+        },
+      },
+    });
+    const pinned = { ...context(), pinned: true };
+    await executeCodexComposerCommand({ name: 'reasoning', argument: 'low' }, pinned);
+    expect(useSelectionStore.getState().getAgentModelVariantForSession(sessionId, 'build', native.id, 'test-model')).toBe('low');
+    expect(useConfigStore.getState().currentVariant).toBe('high');
+    await executeCodexComposerCommand({ name: 'plan', argument: 'Inspect the draft' }, pinned);
+    expect(useSelectionStore.getState().getSessionAgentSelection(sessionId)).toBe('plan');
+    expect(useConfigStore.getState().currentAgentName).toBe('build');
   });
 
   test('Fast resolves the native default effort and discards a completion after navigation', async () => {

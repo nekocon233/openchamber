@@ -5,6 +5,7 @@ import stripJsonComments from 'strip-json-comments';
 import { z } from 'zod';
 import { isMacOS } from '@/lib/utils';
 
+
 type ImportLink = { from: number; to: number; specifier: string };
 
 export type TsconfigPathMapping = {
@@ -46,7 +47,7 @@ export const relativeImportAt = (state: EditorState, pos: number): ImportLink | 
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts', '.json', '.vue', '.svelte'];
 const INDEX_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs'];
-// TypeScript's ESM style imports the compiled name of a source file.
+// external: https://www.typescriptlang.org/docs/handbook/modules/reference.html#file-extension-substitution TypeScript ESM imports can name compiled files while the source uses a TypeScript extension.
 const COMPILED_TO_SOURCE = new Map([
   ['.js', ['.ts', '.tsx']],
   ['.jsx', ['.tsx']],
@@ -56,7 +57,6 @@ const COMPILED_TO_SOURCE = new Map([
 
 const dirname = (path: string) => path.slice(0, Math.max(path.lastIndexOf('/'), 0)) || '/';
 
-/** Joins a relative specifier onto a directory, folding `.` and `..`. */
 export const joinPath = (directory: string, relative: string): string => {
   const parts = directory.split('/');
   for (const segment of relative.split('/')) {
@@ -341,7 +341,6 @@ const linkAtEvent = (view: EditorView, event: MouseEvent): ImportLink | null => 
   return found && isResolvableSpecifier(found.specifier) ? found : null;
 };
 
-/** `openImport` gets the specifier of the clicked path. */
 export const importLinks = (openImport: (specifier: string) => void): Extension => [
   hoveredLinkField,
   EditorView.domEventHandlers({

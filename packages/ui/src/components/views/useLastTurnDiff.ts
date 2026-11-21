@@ -7,9 +7,6 @@ import type { TurnSnapshotDiff } from './turnSnapshotDiff';
 
 const EMPTY_DIFFS: TurnSnapshotDiff[] = [];
 
-// The answer of `GET /api/session/:id/diff` moves when a step is added and
-// when the newest step finishes (its end snapshot is recorded then), so both
-// the newest message and its completion stamp key the refetch.
 const selectTranscriptKey = (messages: Message[]): string => {
     const last = messages[messages.length - 1];
     if (!last) return '';
@@ -19,19 +16,13 @@ const selectTranscriptKey = (messages: Message[]): string => {
 
 type LastTurnDiff = {
     diffs: TurnSnapshotDiff[];
-    /** Files the last turn changed; null while unknown. */
     count: number | null;
     loaded: boolean;
+    settled: boolean;
     error: string | null;
     retry: () => void;
 };
 
-/**
- * The last turn's per-file diff, computed by OpenCode from the turn's
- * snapshots. `live` follows a running turn step by step; without it a
- * running turn is not read (each read of a running step captures a fresh
- * working-copy snapshot) and the count is unknown until the turn ends.
- */
 export function useLastTurnDiff(
     sessionId: string | null,
     directory: string | undefined,
@@ -41,9 +32,7 @@ export function useLastTurnDiff(
     const transcriptKey = useSessionMessagesSelector(enabled ? sessionId ?? '' : '', directory, selectTranscriptKey);
     const statusType = useSessionStatus(enabled ? sessionId ?? '' : '', directory)?.type;
     const running = statusType !== undefined && statusType !== 'idle';
-    const [result, setResult] = React.useState<{ sessionId: string; diffs: TurnSnapshotDiff[] } | null>(null);
-    // A failed read is not "this turn changed nothing": it keeps its own state
-    // and a retry, and the last good list stays until a read replaces it.
+    const [result, setResult] = React.useState<{ sessionId: string; readKey: string; diffs: TurnSnapshotDiff[] } | null>(null);
     const [failure, setFailure] = React.useState<{ sessionId: string; message: string } | null>(null);
     const [attempt, nextAttempt] = React.useReducer((value: number) => value + 1, 0);
     const retry = React.useCallback(() => {
@@ -51,6 +40,7 @@ export function useLastTurnDiff(
         nextAttempt();
     }, []);
     const waiting = running && !live;
+    const readKey = JSON.stringify([attempt, running, transcriptKey]);
 
     React.useEffect(() => {
         if (!enabled || !sessionId || waiting) return;
@@ -60,6 +50,7 @@ export function useLastTurnDiff(
                 if (cancelled) return;
                 setResult({
                     sessionId,
+                    readKey,
                     diffs: files.map((entry) => ({
                         file: entry.file,
                         patch: entry.patch,
@@ -78,11 +69,8 @@ export function useLastTurnDiff(
         return () => {
             cancelled = true;
         };
-        // `transcriptKey` and `running` are the triggers: a new step, a step
-        // finishing, or the turn going idle changes the answer.
-    }, [attempt, directory, enabled, running, sessionId, t, transcriptKey, waiting]);
+    }, [directory, enabled, readKey, sessionId, t, waiting]);
 
-    // Another session's turn is never shown while this one's loads.
     const own = result && result.sessionId === sessionId ? result : null;
     const diffs = own?.diffs ?? EMPTY_DIFFS;
     const error = failure && failure.sessionId === sessionId ? failure.message : null;
@@ -90,6 +78,7 @@ export function useLastTurnDiff(
         diffs,
         count: own && !waiting ? diffs.length : null,
         loaded: own !== null,
+        settled: own !== null && own.readKey === readKey,
         error,
         retry,
     };

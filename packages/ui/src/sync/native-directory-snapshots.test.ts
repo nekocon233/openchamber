@@ -139,6 +139,7 @@ describe("readDirectoryStatuses", () => {
     const snapshot = await readDirectoryStatuses(DIRECTORY)
 
     expect(snapshot?.statuses).toEqual({ [OPENCODE]: BUSY, [NATIVE]: BUSY })
+    expect(snapshot?.coversNativeSessions).toBe(true)
     expect(snapshot?.covers(NATIVE)).toBe(true)
     expect(snapshot?.covers(OPENCODE)).toBe(true)
   })
@@ -150,6 +151,7 @@ describe("readDirectoryStatuses", () => {
     const snapshot = await readDirectoryStatuses(DIRECTORY)
 
     expect(snapshot?.statuses).toEqual({ [OPENCODE]: BUSY })
+    expect(snapshot?.coversNativeSessions).toBe(false)
     expect(snapshot?.covers(NATIVE)).toBe(false)
     expect(snapshot?.covers(OPENCODE)).toBe(true)
     expect(warnings).toBe(1)
@@ -194,6 +196,7 @@ describe("directory bootstrap with native sessions", () => {
 
     const store = await bootstrapWith({ session: [sessionRecord(NATIVE)] })
 
+    expect(store.getState().nativeSessionStatusReady).toBe(true)
     expect(store.getState().session_status[NATIVE]).toEqual(BUSY)
     expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
     expect(useGlobalSessionStatusStore.getState().statusById.get(NATIVE)?.status).toEqual(BUSY)
@@ -215,6 +218,8 @@ describe("directory bootstrap with native sessions", () => {
 
     expect(store.getState().session_status[NATIVE]).toEqual(BUSY)
     expect(store.getState().session_status[OPENCODE]).toBeUndefined()
+    expect(store.getState().sessionStatusReady).toBe(true)
+    expect(store.getState().nativeSessionStatusReady).toBe(false)
     expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
     const global = useGlobalSessionStatusStore.getState().statusById
     expect(global.get(NATIVE)?.status).toEqual(BUSY)

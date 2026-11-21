@@ -3,6 +3,7 @@ import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Icon } from '@/components/icon/Icon';
 import { useI18n } from '@/lib/i18n';
 import { isWholeFileComment } from './wholeFileComment';
@@ -13,17 +14,11 @@ interface InlineCommentCardProps {
   onDelete: () => void;
   className?: string;
   maxWidth?: number;
-  /** Beside review comments, the card says it goes to the agent and leaves the file to its place under the lines. */
   forAgent?: boolean;
 }
 
 const HEADER_ACTION_CLASS = 'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-interactive-hover hover:text-foreground';
 
-/**
- * A saved inline comment shown under its lines in the diff/editor: a header
- * naming the file and range with direct edit/remove actions, and the comment
- * text below, on one tone so the card stands apart from the lines around it.
- */
 export function InlineCommentCard({
   draft,
   onEdit,
@@ -36,13 +31,12 @@ export function InlineCommentCard({
   const [isOpen, setIsOpen] = useState(false);
   const draftText = draft.text;
 
-  // Check if content is long enough to warrant collapsing (rough estimate)
   const isLongContent = draftText.length > 150 || draftText.split('\n').length > 3;
 
   return (
     <div
       className={cn(
-        'w-full max-w-[min(100%,calc(var(--oc-context-panel-width,100vw)-var(--oc-editor-gutter-width,0px)))] overflow-hidden rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)] shadow-none',
+        'w-full max-w-[min(100%,calc(var(--oc-editor-width,var(--oc-context-panel-width,100vw))-var(--oc-editor-gutter-width,0px)))] overflow-hidden rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)] font-sans shadow-none',
         className
       )}
       style={{
@@ -56,33 +50,47 @@ export function InlineCommentCard({
           {forAgent ? t('review.card.forAgent') : draft.fileLabel}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground">•</span>
-        {/* "Whole file" is short and never shrinks, so a narrow panel truncates the path instead. */}
         <span className={cn('me-auto text-xs text-muted-foreground', isWholeFileComment(draft) ? 'shrink-0' : 'min-w-0 truncate')}>
           {isWholeFileComment(draft)
             ? t('inlineComment.range.wholeFile')
             : <>{t('inlineComment.range.lines', { start: draft.startLine, end: draft.endLine })}{draft.side ? ` (${draft.side})` : ''}</>}
         </span>
-        <button
-          type="button"
-          className={HEADER_ACTION_CLASS}
-          style={{ minHeight: 0, minWidth: 0 }}
-          onClick={onEdit}
-          aria-label={t('inlineComment.actions.editComment')}
-          title={t('inlineComment.actions.editComment')}
-        >
-          <Icon name="pencil" className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          className={HEADER_ACTION_CLASS}
-          style={{ minHeight: 0, minWidth: 0 }}
-          onClick={onDelete}
-          aria-label={t('inlineComment.actions.deleteComment')}
-          title={t('inlineComment.actions.deleteComment')}
-        >
-          <Icon name="close" className="h-3 w-3" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className={HEADER_ACTION_CLASS}
+              style={{ minHeight: 0, minWidth: 0 }}
+              onClick={onEdit}
+              aria-label={t('inlineComment.actions.editComment')}
+            >
+              <Icon name="pencil" className="h-3 w-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={6}>{t('inlineComment.actions.editComment')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className={HEADER_ACTION_CLASS}
+              style={{ minHeight: 0, minWidth: 0 }}
+              onClick={onDelete}
+              aria-label={t('inlineComment.actions.deleteComment')}
+            >
+              <Icon name="close" className="h-3 w-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={6}>{t('inlineComment.actions.deleteComment')}</TooltipContent>
+        </Tooltip>
       </div>
+
+      {draft.changedCode !== undefined ? (
+        <div className="flex items-center gap-1.5 px-3 pt-1 text-xs text-[var(--status-warning)]">
+          <Icon name="error-warning" className="size-3.5 shrink-0" />
+          <span className="min-w-0">{t('inlineComment.card.codeChanged')}</span>
+        </div>
+      ) : null}
 
       <div className="px-3 pb-2 pt-1">
         <Collapsible open={isOpen || !isLongContent} onOpenChange={setIsOpen}>
@@ -113,7 +121,6 @@ export function InlineCommentCard({
           )}
 
           <CollapsibleContent>
-            {/* Used for animation purposes if we want to animate height */}
           </CollapsibleContent>
         </Collapsible>
       </div>

@@ -31,7 +31,7 @@ never throws for an unsupported target.
   streaming; the sha256 is verified as the bytes arrive and again afterwards.
 - Every pinned asset carries its size and digest in the product's asset table.
   A mismatch deletes the staged file and fails.
-- Extraction walks the archive itself (tar.gz) or AdmZip (zip), rejects
+- Extraction walks the archive itself (tar.gz) or the shared bounded ZIP reader (zip), rejects
   non-regular members, refuses traversal names by matching the exact member, and
   enforces the expansion and member-size caps from the descriptor.
 - The lock is a `mkdir` mutex with an owner file, a heartbeat and stale

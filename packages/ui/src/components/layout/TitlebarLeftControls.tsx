@@ -9,8 +9,6 @@ import { useDesktopWindowControlsLayout } from '@/hooks/useDesktopWindowControls
 import { publishTitlebarControlsWidth } from './titlebarControlsWidth';
 import { useTitlebarControlsOverSidebar } from './workspaceLayout';
 
-// Like the icon rail: muted at rest, full strength on hover or while what it
-// controls is on, and no hover fill.
 const ICON_BUTTON_CLASS =
   'app-region-no-drag inline-flex h-6 w-6 items-center justify-center gap-2 rounded-md typography-ui-label font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors';
 
@@ -54,8 +52,6 @@ export const TitlebarLeftControls: React.FC = () => {
     }
 
     const publishWidth = () => {
-      // Prefer scrollWidth so negative child margins / overflow cannot under-report
-      // the space the overlay actually occupies over the header.
       const width = Math.max(node.getBoundingClientRect().width, node.scrollWidth);
       publishTitlebarControlsWidth(width);
     };
@@ -73,10 +69,6 @@ export const TitlebarLeftControls: React.FC = () => {
   }, []);
 
   return (
-    // The overlay is a CSS no-drag zone so its buttons stay clickable. The
-    // header / sidebar strip beneath carve a matching no-drag region under it
-    // and remain drag regions everywhere else, so window dragging still works
-    // in the empty parts of the strip.
     <div
       className={cn(
         'app-region-no-drag absolute inset-s-0 top-0 z-30 flex select-none items-center pe-2',

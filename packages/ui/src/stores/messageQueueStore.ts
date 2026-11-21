@@ -2,35 +2,39 @@ import { create } from 'zustand';
 import type { SyncEvent } from '@/lib/opencode/events';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { FollowUpQueueAPI, FollowUpQueueAdditionalPart, FollowUpQueueAttachment, FollowUpQueueItem, FollowUpQueueMutationResult, FollowUpQueueOperation, FollowUpQueueSnapshot, FollowUpQueueStatus } from '@/lib/api/types';
-import { FOLLOW_UP_QUEUE_CLAIM_TTL_MS, FollowUpQueueConflictError, FollowUpQueueRequestError, FollowUpQueueUnsupportedError, applyFollowUpQueueOperation, followUpQueueItemsEqual, parseFollowUpQueueItem, parseFollowUpQueueOperation, parseFollowUpQueueSnapshot } from '@/lib/followUpQueue';
+import {
+  FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
+  FollowUpQueueConflictError,
+  FollowUpQueueRequestError,
+  FollowUpQueueUnsupportedError,
+  applyFollowUpQueueOperation,
+  followUpQueueItemsEqual,
+  parseFollowUpQueueItem,
+} from '@/lib/followUpQueue';
 import { createOpenCodeIdentifier } from '@/lib/opencode/identifier';
 import { normalizePath } from '@/lib/pathNormalization';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { AttachedFile } from './types/sessionTypes';
 import { getSafeStorage } from './utils/safeStorage';
-import { z } from 'zod';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { createMessageQueueServer, messageQueueUpdatedEventSchema, readLegacyServerQueueItem } from './messageQueueServer';
+import type { MessageQueueUpdatedEvent } from './messageQueueServer';
+
+export { messageQueueUpdatedEventSchema };
+export type { MessageQueueUpdatedEvent };
 import { isVSCodeRuntime } from '@/lib/desktop';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
+import type { MessageQueueState, PendingOperation, StoredQueueLane } from './storedMessageQueue';
+import {
+  DEFAULT_FOLLOW_UP_BEHAVIOR,
+  normalizeFollowUpBehavior,
+  isRecord,
+  parseStoredLane,
+  parseStoredOutboxEntry,
+} from './storedMessageQueue';
 
 export type FollowUpBehavior = 'steer' | 'queue';
-
-const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
-
-const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
-    value === 'steer' || value === 'queue'
-);
-
-const normalizeFollowUpBehavior = (
-    value: unknown,
-    legacyQueueModeEnabled?: boolean | null,
-): FollowUpBehavior => {
-    if (value === 'immediate') return 'steer';
-    if (isFollowUpBehavior(value)) return value;
-    if (legacyQueueModeEnabled === false) return 'steer';
-    if (legacyQueueModeEnabled === true) return 'queue';
-    return DEFAULT_FOLLOW_UP_BEHAVIOR;
-};
 
 type QueuedMessageStatus = FollowUpQueueStatus;
 
@@ -38,7 +42,10 @@ type QueuedAdditionalPart = Omit<FollowUpQueueAdditionalPart, 'attachments'> & {
     attachments?: AttachedFile[];
 };
 
-export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | 'additionalParts'> {
+export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | 'additionalParts' | 'goal'> {
+    deliveryOwner?: 'server';
+    text?: string;
+    agentMention?: string;
     goal?: QueuedMessageGoal | null;
     attachments?: AttachedFile[];
     additionalParts?: QueuedAdditionalPart[];
@@ -60,7 +67,12 @@ export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | '
  * server that owns the queue; VS Code has no server of its own, so the
  * extension UI keeps the local fallback queue.
  */
-export const isServerOwnedMessageQueue = (): boolean => !isVSCodeRuntime();
+export const isServerOwnedMessageQueue = (target?: Pick<MessageQueueTarget, 'sessionId'> | null): boolean => (
+    !isVSCodeRuntime() && (!target || !isNativeSessionId(target.sessionId))
+);
+
+export type NewQueuedMessage =
+    Omit<QueuedMessage, 'id' | 'messageId' | 'createdAt' | 'status' | 'claim' | 'deliveryOwner'> & { status?: QueuedMessageStatus };
 
 /**
  * "Run as goal" captured with a queued message: the goal starts when this
@@ -147,28 +159,18 @@ export type MessageQueueRuntimeContext = {
     generation: number;
 };
 
-interface MessageQueueState {
-    queuedMessages: Record<string, QueuedMessage[]>;
-    sendingIds?: Record<string, boolean>;
-    quarantinedLegacyMessages: Record<string, QueuedMessage[]>;
-    followUpBehavior: FollowUpBehavior;
-    runtimeKey: string;
-    generation: number;
-    supported: boolean | null;
-}
-
 interface MessageQueueActions {
     initialize: () => Promise<void>;
     watchSession: (identity: MessageQueueIdentity) => () => void;
     refreshSession: (identity: MessageQueueIdentity) => Promise<void>;
     addToQueue: (
         identity: MessageQueueIdentity,
-        message: Omit<QueuedMessage, 'id' | 'messageId' | 'createdAt' | 'status' | 'claim'> & { status?: QueuedMessageStatus },
+        message: NewQueuedMessage,
     ) => Promise<QueuedMessage>;
     removeFromQueue: (identity: MessageQueueIdentity, messageId: string) => void;
     setQueuedStatus: (identity: MessageQueueIdentity, messageId: string, status: QueuedMessageStatus) => void;
     reorderQueue: (identity: MessageQueueIdentity, fromId: string, toId: string) => void;
-    popToInput: (identity: MessageQueueIdentity, messageId: string) => QueuedMessage | null;
+    popToInput: (identity: MessageQueueIdentity, messageId: string) => QueuedMessage | null | Promise<QueuedMessage | null>;
     clearQueue: (identity: MessageQueueIdentity) => void;
     clearAllQueues: () => void;
     setFollowUpBehavior: (behavior: FollowUpBehavior) => void;
@@ -199,25 +201,15 @@ interface MessageQueueActions {
     hydrate: () => Promise<void>;
     /** Re-read after an event-stream gap. */
     resync: () => Promise<void>;
-    /** The follow-up queue only ever delivers through UI claims, so there is nothing to hold. */
-    setServerHold: (sessionId: string, held: boolean) => Promise<void>;
     refreshSpaceQueue: (spaceId: string) => Promise<void>;
-    takeForSend: (identity: MessageQueueIdentity) => Promise<QueuedMessage[]>;
+    takeForSend: (identity: MessageQueueIdentity, messageId?: string) => Promise<QueuedMessage[]>;
+    sendServerItem: ReturnType<typeof createMessageQueueServer>['sendNow'];
+    applyServerSession: ReturnType<typeof createMessageQueueServer>['applySession'];
+    followSessionMove: (target: MessageQueueTarget, previousDirectory?: string) => void;
     resetForRuntimeSwitch: (previousRuntimeKey: string | null | undefined) => void;
 }
 
 type MessageQueueStore = MessageQueueState & MessageQueueActions;
-
-type PendingOperation = {
-    clientMutationId: string;
-    operation: FollowUpQueueOperation;
-    projectionNow: number;
-    outboxOrder: number;
-    claimExpiresAt?: number;
-    orphaned: boolean;
-    resolve?: (result: FollowUpQueueMutationResult) => void;
-    reject?: (error: Error) => void;
-};
 
 type QueueLane = {
     key: string;
@@ -245,21 +237,8 @@ type QueueLane = {
     visibleMessages: QueuedMessage[];
 };
 
-type StoredQueueLane = {
-    version: 1;
-    baseSnapshot: FollowUpQueueSnapshot | null;
-    localItems: FollowUpQueueItem[];
-    localRevision: number;
-    legacyItemIds: string[];
-    pending: Array<{
-        clientMutationId: string;
-        operation: FollowUpQueueOperation;
-        projectionNow: number;
-        claimExpiresAt?: number;
-    }>;
-};
-
 type MessageQueueStoreDependencies = {
+    serverOwnsQueue: typeof isServerOwnedMessageQueue;
     getAPI: () => FollowUpQueueAPI | null;
     getRuntimeKey: () => string;
     storage: Storage;
@@ -285,29 +264,6 @@ const TARGET_OWNER_PREFIX = 'oc.followUpQueue.targetOwner.v1';
 const LOCAL_SCOPE_TOKEN = '0'.repeat(64);
 const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;
-
-type PersistedMessageQueueState = {
-    queuedMessages?: Record<string, QueuedMessage[]>;
-    quarantinedLegacyMessages?: Record<string, QueuedMessage[]>;
-    followUpBehavior?: FollowUpBehavior;
-    queueModeEnabled?: boolean;
-};
-
-export const migrateMessageQueueState = (
-    persistedState: unknown,
-    version: number,
-): Pick<MessageQueueState, 'queuedMessages' | 'quarantinedLegacyMessages' | 'followUpBehavior'> => {
-    const state = (persistedState ?? {}) as PersistedMessageQueueState;
-    const legacyQueues = version < 2 ? (state.queuedMessages ?? {}) : {};
-    return {
-        queuedMessages: version < 2 ? {} : (state.queuedMessages ?? {}),
-        quarantinedLegacyMessages: {
-            ...(state.quarantinedLegacyMessages ?? {}),
-            ...legacyQueues,
-        },
-        followUpBehavior: normalizeFollowUpBehavior(state.followUpBehavior, state.queueModeEnabled ?? null),
-    };
-};
 
 const normalizeRuntimeKey = (value: string): string => value.trim() || 'default';
 const targetOwnerKey = (runtimeKey: string, sessionId: string): string => (
@@ -345,6 +301,7 @@ const getQueueStorage = (): Storage => {
 };
 
 const defaultDependencies: MessageQueueStoreDependencies = {
+    serverOwnsQueue: isServerOwnedMessageQueue,
     getAPI: () => getRegisteredRuntimeAPIs()?.followUpQueue ?? null,
     getRuntimeKey,
     storage: getQueueStorage(),
@@ -391,10 +348,6 @@ const defaultDependencies: MessageQueueStoreDependencies = {
         return () => clearTimeout(timer);
     },
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-    Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-);
 
 const isAbortError = (error: unknown): boolean => (
     error instanceof DOMException && error.name === 'AbortError'
@@ -468,94 +421,6 @@ const assignedMessageIdsMatch = (left: string | null, right: string | null): boo
     left !== null && right !== null && left === right
 );
 
-const parseStoredLane = (raw: string | null): StoredQueueLane | null => {
-    if (!raw) return null;
-    try {
-        const value = JSON.parse(raw) as unknown;
-        if (
-            !isRecord(value)
-            || value.version !== 1
-            || (value.baseSnapshot !== null && !isRecord(value.baseSnapshot))
-            || !Array.isArray(value.localItems)
-            || !Number.isSafeInteger(value.localRevision)
-            || Number(value.localRevision) < 0
-            || !Array.isArray(value.legacyItemIds)
-            || !value.legacyItemIds.every((entry) => typeof entry === 'string')
-            || !Array.isArray(value.pending)
-        ) return null;
-
-        const localItems = value.localItems.map((item, index) => parseFollowUpQueueItem(item, { field: `localItems[${index}]` }));
-        const pending = value.pending.map((entry, index) => {
-            if (
-                !isRecord(entry)
-                || typeof entry.clientMutationId !== 'string'
-                || !entry.clientMutationId
-                || !Number.isSafeInteger(entry.projectionNow)
-                || Number(entry.projectionNow) < 0
-            ) throw new Error(`Invalid pending operation ${index}`);
-            const operation = parseFollowUpQueueOperation(entry.operation);
-            const claimExpiresAt = entry.claimExpiresAt === undefined
-                ? undefined
-                : Number(entry.claimExpiresAt);
-            if (
-                (claimExpiresAt !== undefined && (!Number.isSafeInteger(claimExpiresAt) || claimExpiresAt < 0))
-                || (operation.type === 'claim' && claimExpiresAt === undefined)
-            ) throw new Error(`Invalid pending operation ${index}`);
-            return {
-                clientMutationId: entry.clientMutationId,
-                operation,
-                projectionNow: Number(entry.projectionNow),
-                ...(claimExpiresAt !== undefined ? { claimExpiresAt } : {}),
-            };
-        });
-        return {
-            version: 1,
-            baseSnapshot: value.baseSnapshot === null ? null : parseFollowUpQueueSnapshot(value.baseSnapshot),
-            localItems,
-            localRevision: Number(value.localRevision),
-            legacyItemIds: [...value.legacyItemIds] as string[],
-            pending,
-        };
-    } catch {
-        return null;
-    }
-};
-
-const parseStoredOutboxEntry = (raw: string | null): PendingOperation | null => {
-    if (!raw) return null;
-    try {
-        const value = JSON.parse(raw) as unknown;
-        if (
-            !isRecord(value)
-            || value.version !== 1
-            || typeof value.clientMutationId !== 'string'
-            || !value.clientMutationId
-            || !Number.isSafeInteger(value.projectionNow)
-            || Number(value.projectionNow) < 0
-            || !Number.isSafeInteger(value.outboxOrder)
-            || Number(value.outboxOrder) < 1
-        ) return null;
-        const operation = parseFollowUpQueueOperation(value.operation);
-        const claimExpiresAt = value.claimExpiresAt === undefined
-            ? undefined
-            : Number(value.claimExpiresAt);
-        if (
-            (claimExpiresAt !== undefined && (!Number.isSafeInteger(claimExpiresAt) || claimExpiresAt < 0))
-            || (operation.type === 'claim' && claimExpiresAt === undefined)
-        ) return null;
-        return {
-            clientMutationId: value.clientMutationId,
-            operation,
-            projectionNow: Number(value.projectionNow),
-            outboxOrder: Number(value.outboxOrder),
-            ...(claimExpiresAt !== undefined ? { claimExpiresAt } : {}),
-            orphaned: true,
-        };
-    } catch {
-        return null;
-    }
-};
-
 const readLegacyEnvelope = (storage: Storage): Record<string, unknown> | null => {
     try {
         const value = JSON.parse(storage.getItem(LEGACY_STORAGE_KEY) ?? 'null') as unknown;
@@ -624,6 +489,42 @@ export const createMessageQueueStore = (
     let handleStorageChange: (key: string, newValue: string | null) => void = () => {};
 
     const useStore = create<MessageQueueStore>((set, get) => {
+        const server = createMessageQueueServer({
+            read: get,
+            update: set,
+            runtimeKey: dependencies.getRuntimeKey,
+            generateId: dependencies.createItemId,
+            legacyItems: (runtimeKey) => {
+                const envelope = readLegacyEnvelope(dependencies.storage);
+                const state = envelope?.state;
+                if (!isRecord(state) || !isRecord(state.queuedMessages)) return [];
+                return Object.entries(state.queuedMessages).flatMap(([key, value]) => {
+                    const target = parseMessageQueueKey(key);
+                    if (target?.runtimeKey !== runtimeKey || !dependencies.serverOwnsQueue(target) || !Array.isArray(value)) return [];
+                    return value.flatMap((raw) => {
+                        const item = readLegacyServerQueueItem(raw);
+                        if (!item) return [];
+                        const retire = () => {
+                            const latest = readLegacyEnvelope(dependencies.storage);
+                            const latestState = latest?.state;
+                            if (!latest || !isRecord(latestState) || !isRecord(latestState.queuedMessages)) return;
+                            const queue = latestState.queuedMessages[key];
+                            if (!Array.isArray(queue)) return;
+                            const saved = JSON.stringify(raw);
+                            const queuedMessages = { ...latestState.queuedMessages, [key]: queue.filter((entry) => JSON.stringify(entry) !== saved) };
+                            dependencies.storage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({ ...latest, state: { ...latestState, queuedMessages } }));
+                        };
+                        return [{ target, item, retire }];
+                    });
+                });
+            },
+        });
+        const isServerTarget = (identity: MessageQueueIdentity): identity is MessageQueueTarget => (
+            typeof identity !== 'string' && dependencies.serverOwnsQueue(identity)
+        );
+        const isServerItem = (identity: MessageQueueIdentity, itemId: string): boolean => (
+            !!get().queuedMessages[getQueueKey(identity)]?.some((item) => item.id === itemId && item.deliveryOwner === 'server')
+        );
         const contextIsCurrent = (context: MessageQueueRuntimeContext): boolean => (
             get().runtimeKey === context.runtimeKey
             && get().generation === context.generation
@@ -743,7 +644,14 @@ export const createMessageQueueStore = (
         };
 
         const readLegacyItems = (lane: QueueLane): FollowUpQueueItem[] => {
-            if (lane.runtimeKey !== startupRuntimeKey) return [];
+            const envelope = readLegacyEnvelope(dependencies.storage);
+            const state = envelope?.state;
+            if (!isRecord(state) || !isRecord(state.queuedMessages)) return [];
+            const explicit = typeof lane.identity !== 'string' ? state.queuedMessages[lane.key] : undefined;
+            const scoped = Array.isArray(explicit) && !dependencies.serverOwnsQueue(
+                typeof lane.identity === 'string' ? null : lane.identity,
+            );
+            if (!scoped && lane.runtimeKey !== startupRuntimeKey) return [];
             let owner: string | null = null;
             try {
                 owner = dependencies.storage.getItem(LEGACY_OWNER_KEY);
@@ -754,11 +662,8 @@ export const createMessageQueueStore = (
             } catch {
                 return [];
             }
-            if (owner !== startupRuntimeKey) return [];
-            const envelope = readLegacyEnvelope(dependencies.storage);
-            const state = envelope?.state;
-            if (!isRecord(state) || !isRecord(state.queuedMessages)) return [];
-            const rawItems = state.queuedMessages[lane.sessionId];
+            if (!scoped && owner !== startupRuntimeKey) return [];
+            const rawItems = scoped ? explicit : state.queuedMessages[lane.sessionId];
             if (!Array.isArray(rawItems)) return [];
 
             const items: FollowUpQueueItem[] = [];
@@ -777,7 +682,7 @@ export const createMessageQueueStore = (
                 const candidate = {
                     id,
                     messageId,
-                    content: raw.content,
+                    content: typeof raw.text === 'string' ? raw.text : raw.content,
                     ...(attachments && attachments.length > 0 ? { attachments } : {}),
                     ...(Array.isArray(raw.additionalParts) ? { additionalParts: raw.additionalParts } : {}),
                     ...(raw.agentMentionName !== undefined ? { agentMentionName: raw.agentMentionName } : {}),
@@ -799,12 +704,13 @@ export const createMessageQueueStore = (
             return items;
         };
 
-        const removeLegacySession = (sessionId: string): void => {
+        const removeLegacySession = (sessionId: string, scopedKey?: string): void => {
             const envelope = readLegacyEnvelope(dependencies.storage);
             const state = envelope?.state;
             if (!envelope || !isRecord(state) || !isRecord(state.queuedMessages)) return;
             const queues = { ...state.queuedMessages };
             delete queues[sessionId];
+            if (scopedKey) delete queues[scopedKey];
             try {
                 dependencies.storage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({
                     ...envelope,
@@ -816,7 +722,7 @@ export const createMessageQueueStore = (
         };
 
         const removeConfirmedLegacySession = (lane: QueueLane): void => {
-            removeLegacySession(lane.sessionId);
+            removeLegacySession(lane.sessionId, typeof lane.identity !== 'string' ? lane.key : undefined);
         };
 
         const deriveSnapshot = (lane: QueueLane): FollowUpQueueSnapshot => {
@@ -853,12 +759,15 @@ export const createMessageQueueStore = (
             if (itemListsEqual(lane.visibleItems, nextItems)) return;
             lane.visibleItems = nextItems;
             lane.visibleMessages = nextItems.map(toQueuedMessage);
-            set((state) => ({
-                queuedMessages: {
-                    ...state.queuedMessages,
-                    [lane.key]: lane.visibleMessages,
-                },
-            }));
+            set((state) => {
+                const hosted = (state.queuedMessages[lane.key] ?? []).filter((item) => item.deliveryOwner === 'server');
+                return {
+                    queuedMessages: {
+                        ...state.queuedMessages,
+                        [lane.key]: hosted.length ? [...lane.visibleMessages, ...hosted] : lane.visibleMessages,
+                    },
+                };
+            });
         };
 
         const adoptLegacyItems = (lane: QueueLane): void => {
@@ -1476,6 +1385,7 @@ export const createMessageQueueStore = (
             const normalized = normalizeRuntimeKey(runtimeKey);
             activeController.abort();
             activeController = new AbortController();
+            server.reset();
             for (const lane of lanes.values()) {
                 cancelRetry(lane);
                 for (const pending of lane.pending) pending.reject?.(runtimeChangedError());
@@ -1488,6 +1398,7 @@ export const createMessageQueueStore = (
                 generation: state.generation + 1,
                 supported: runtimeSupported,
                 queuedMessages: {},
+                sendingIds: {},
             }));
             for (const [key, count] of watchCounts) {
                 if (count <= 0) continue;
@@ -1501,6 +1412,7 @@ export const createMessageQueueStore = (
 
         return {
             queuedMessages: {},
+            sendingIds: {},
             quarantinedLegacyMessages: {},
             followUpBehavior: readInitialFollowUpBehavior(dependencies.storage),
             runtimeKey: startupRuntimeKey,
@@ -1563,6 +1475,7 @@ export const createMessageQueueStore = (
             },
 
             addToQueue: (identity, message) => {
+                if (isServerTarget(identity)) return server.add(identity, message);
                 const item = parseFollowUpQueueItem({
                     id: dependencies.createItemId(),
                     messageId: null,
@@ -1578,6 +1491,7 @@ export const createMessageQueueStore = (
                     } : {}),
                     createdAt: dependencies.now(),
                     status: message.status ?? 'staged',
+                    ...(message.goal ? { goal: message.goal } : {}),
                     ...(message.sendConfig ? { sendConfig: { ...message.sendConfig } } : {}),
                 }, { allowClaim: false });
                 return enqueueOperation(identity, { type: 'add', item }).then((result) => {
@@ -1588,16 +1502,26 @@ export const createMessageQueueStore = (
             },
 
             removeFromQueue: (identity, messageId) => {
+                if (isServerTarget(identity) && isServerItem(identity, messageId)) {
+                    server.remove(identity, messageId);
+                    return;
+                }
                 fireAndPersist(identity, { type: 'remove', itemId: messageId });
             },
 
             setQueuedStatus: (identity, messageId, status) => {
+                if (isServerItem(identity, messageId)) return;
                 fireAndPersist(identity, { type: 'set-status', itemId: messageId, status });
             },
 
             reorderQueue: (identity, fromId, toId) => {
                 if (fromId === toId) return;
-                const items = get().queuedMessages[getQueueKey(identity)] ?? [];
+                if (isServerTarget(identity) && isServerItem(identity, fromId)) {
+                    server.reorder(identity, fromId, toId);
+                    return;
+                }
+                if (isServerItem(identity, toId)) return;
+                const items = (get().queuedMessages[getQueueKey(identity)] ?? []).filter((item) => item.deliveryOwner !== 'server');
                 const fromIndex = items.findIndex((item) => item.id === fromId);
                 const toIndex = items.findIndex((item) => item.id === toId);
                 if (fromIndex < 0 || toIndex < 0) return;
@@ -1613,14 +1537,19 @@ export const createMessageQueueStore = (
             },
 
             popToInput: (identity, messageId) => {
+                if (isServerTarget(identity) && isServerItem(identity, messageId)) {
+                    return server.take(identity, messageId).then(([message]) => message ?? null);
+                }
                 const message = (get().queuedMessages[getQueueKey(identity)] ?? []).find((item) => item.id === messageId) ?? null;
                 if (message) fireAndPersist(identity, { type: 'remove', itemId: messageId });
                 return message;
             },
 
             clearQueue: (identity) => {
-                for (const item of get().queuedMessages[getQueueKey(identity)] ?? []) {
-                    fireAndPersist(identity, { type: 'remove', itemId: item.id });
+                const items = get().queuedMessages[getQueueKey(identity)] ?? [];
+                if (isServerTarget(identity)) server.clear(identity);
+                for (const item of items) {
+                    if (item.deliveryOwner !== 'server') fireAndPersist(identity, { type: 'remove', itemId: item.id });
                 }
             },
 
@@ -1648,35 +1577,73 @@ export const createMessageQueueStore = (
             forgetQueue: (identity) => {
                 const key = getQueueKey(identity);
                 set((state) => {
-                    if (!(key in state.queuedMessages)) return {};
                     const queuedMessages = { ...state.queuedMessages };
+                    const sendingIds = { ...state.sendingIds };
                     delete queuedMessages[key];
+                    delete sendingIds[key];
+                    return { queuedMessages, sendingIds };
+                });
+            },
+
+            hydrate: async () => {
+                const work = [get().initialize()];
+                if (dependencies.serverOwnsQueue()) work.push(server.hydrate());
+                await Promise.all(work);
+            },
+
+            resync: async () => {
+                const work = [get().initialize()];
+                if (dependencies.serverOwnsQueue()) work.push(server.resync());
+                await Promise.all(work);
+            },
+
+            refreshSpaceQueue: async (spaceId) => {
+                if (dependencies.serverOwnsQueue()) await server.read(spaceId).catch(() => undefined);
+            },
+            sendServerItem: server.sendNow,
+            applyServerSession: (session, revision, key, owner) => {
+                if (key !== dependencies.getRuntimeKey()) return;
+                if (get().runtimeKey !== key) switchRuntime(key);
+                server.applySession(session, revision, key, owner);
+            },
+
+            takeForSend: async (identity, messageId) => {
+                if (isServerTarget(identity)) return server.take(identity, messageId);
+                return [];
+            },
+
+            followSessionMove: (target, previousDirectory) => {
+                if (dependencies.serverOwnsQueue(target) || !previousDirectory) return;
+                const source = createMessageQueueTarget(target.sessionId, previousDirectory, target.runtimeKey);
+                if (!source) return;
+                const oldKey = getMessageQueueKey(source);
+                const nextKey = getMessageQueueKey(target);
+                if (oldKey === nextKey) return;
+                const lane = lanes.get(oldKey);
+                if (!lane) return;
+                canonicalTargetOwners.set(`${target.runtimeKey}\n${target.sessionId}`, nextKey);
+                lanes.delete(oldKey);
+                lane.key = nextKey;
+                lane.identity = target;
+                lanes.set(nextKey, lane);
+                set((state) => {
+                    const queuedMessages = { ...state.queuedMessages, [nextKey]: lane.visibleMessages };
+                    delete queuedMessages[oldKey];
                     return { queuedMessages };
                 });
             },
 
-            hydrate: () => get().initialize(),
-
-            resync: () => get().initialize(),
-
-            setServerHold: () => Promise.resolve(),
-
-            refreshSpaceQueue: async () => {},
-        takeForSend: async () => [],
-        resetForRuntimeSwitch: (previousRuntimeKey) => {
-                const previous = typeof previousRuntimeKey === 'string' && previousRuntimeKey.trim().length > 0
-                    ? normalizeRuntimeKey(previousRuntimeKey)
-                    : null;
-                if (!previous || previous === get().runtimeKey) return;
-                set((state) => {
-                    const queuedMessages = Object.fromEntries(
-                        Object.entries(state.queuedMessages).filter(([key]) => {
-                            const parsed = parseMessageQueueKey(key);
-                            return parsed?.runtimeKey !== previous;
-                        }),
-                    );
-                    return { queuedMessages };
-                });
+            resetForRuntimeSwitch: (previousRuntimeKey) => {
+                server.reset();
+                if (!previousRuntimeKey) return;
+                set((state) => ({
+                    queuedMessages: Object.fromEntries(Object.entries(state.queuedMessages).filter(([key]) => (
+                        parseMessageQueueKey(key)?.runtimeKey !== previousRuntimeKey
+                    ))),
+                    sendingIds: Object.fromEntries(Object.entries(state.sendingIds).filter(([key]) => (
+                        parseMessageQueueKey(key)?.runtimeKey !== previousRuntimeKey
+                    ))),
+                }));
             },
 
             claim: async (identity, itemId, mode) => {
@@ -1869,28 +1836,12 @@ export const notifyFollowUpQueueTransportReady = (context?: MessageQueueRuntimeC
     useMessageQueueStore.getState().handleTransportReady(context);
 };
 
-/**
- * The `message-queue.updated` broadcast contract other OpenChamber servers may
- * emit. This build's queue authority is the follow-up queue (see
- * `lib/followUpQueue.ts`), whose updates flow through
- * `handleFollowUpQueueGlobalEvent`; these events are still parsed so the
- * control-event pipeline stays well-formed, but applying them is a no-op.
- */
-export const messageQueueUpdatedEventSchema = z.object({
-    type: z.literal('openchamber:message-queue.updated'),
-    properties: z.object({
-        revision: z.number(),
-        session: z.looseObject({
-            sessionId: z.string(),
-            directory: z.string().optional(),
-        }),
-    }),
-});
-
-export type MessageQueueUpdatedEvent = z.infer<typeof messageQueueUpdatedEventSchema>;
-
 export const applyMessageQueueUpdatedEvent = (payload: SyncEvent | MessageQueueUpdatedEvent, expectedRuntimeKey: string): void => {
-    if (expectedRuntimeKey !== getRuntimeKey()) return;
-    if (payload.type !== 'openchamber:message-queue.updated') return;
-    // Queue updates for this client arrive as follow-up-queue revision hints.
+    if (!isServerOwnedMessageQueue()) return;
+    const parsed = messageQueueUpdatedEventSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const { session, revision, spaceId } = parsed.data.properties;
+    useMessageQueueStore.getState().applyServerSession(session, revision, expectedRuntimeKey, spaceId ?? '');
 };
+
+export { migrateMessageQueueState } from './storedMessageQueue';

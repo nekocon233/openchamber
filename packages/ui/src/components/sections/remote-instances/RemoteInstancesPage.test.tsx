@@ -6,7 +6,7 @@ import type { DesktopHost, HostProbeResult } from '@/lib/desktopHosts';
 
 const dom = new Window({ url: 'http://localhost/' });
 Object.assign(globalThis, {
-  window: dom, document: dom.document, navigator: dom.navigator, localStorage: dom.localStorage,
+  window: dom, document: dom.document, CustomEvent: dom.CustomEvent, navigator: dom.navigator, localStorage: dom.localStorage,
   Node: dom.Node, Element: dom.Element, HTMLElement: dom.HTMLElement,
   Event: dom.Event, MouseEvent: dom.MouseEvent, MutationObserver: dom.MutationObserver,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
@@ -18,9 +18,17 @@ const sshState = {
   instances: [], statusesById: {}, importCandidates: [],
   load: async () => {}, loadImports: async () => {}, refreshStatuses: async () => {},
 };
-const uiStub = { settingsRemoteInstancesSelectedId: null };
-mock.module('@/stores/useDesktopSshStore', () => ({ useDesktopSshStore: <T,>(select: (state: typeof sshState) => T): T => select(sshState) }));
-mock.module('@/stores/useUIStore', () => ({ useUIStore: <T,>(select: (state: typeof uiStub) => T): T => select(uiStub) }));
+const uiState = { settingsRemoteInstancesSelectedId: null };
+mock.module('@/stores/useDesktopSshStore', () => ({
+  useDesktopSshStore: <T,>(select: (state: typeof sshState) => T): T => select(sshState),
+}));
+// useConfigStore subscribes to the UI store when it loads, through the Settings search index.
+mock.module('@/stores/useUIStore', () => ({
+  useUIStore: Object.assign(
+    <T,>(select: (state: typeof uiState) => T): T => select(uiState),
+    { getState: () => uiState, subscribe: () => () => {} },
+  ),
+}));
 mock.module('@/hooks/useRuntimeAPIs', () => ({ useRuntimeAPIs: () => ({}) }));
 mock.module('@/components/ui', () => ({ toast: { error() {} } }));
 

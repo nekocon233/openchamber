@@ -1,8 +1,6 @@
 import type { EditorState } from '@codemirror/state';
 import { ensureSyntaxTree, type syntaxTree } from '@codemirror/language';
 
-// The parser's node type, reached through the editor package this module
-// already depends on.
 type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
 
 export type DocumentSymbolKind = 'function' | 'method' | 'class' | 'type' | 'module' | 'heading';
@@ -10,11 +8,8 @@ export type DocumentSymbolKind = 'function' | 'method' | 'class' | 'type' | 'mod
 export type DocumentSymbol = {
     name: string;
     kind: DocumentSymbolKind;
-    /** 1-based line of the declaration. */
     line: number;
-    /** Offset of the name, where the cursor lands. */
     from: number;
-    /** Nesting for indentation: containing symbols, or a heading's level below 1. */
     depth: number;
     /** Start offset of the declaration or scope header. */
     scopeFrom?: number;
@@ -27,7 +22,6 @@ type SymbolDocumentation = {
     documentation: string | null;
 };
 
-// Node names across the bundled Lezer grammars (JS/TS, Python, Go, Rust, C++, Java).
 const DECLARATION_KINDS = new Map<string, DocumentSymbolKind>(Object.entries({
     FunctionDeclaration: 'function',
     FunctionDefinition: 'function',
@@ -49,7 +43,6 @@ const DECLARATION_KINDS = new Map<string, DocumentSymbolKind>(Object.entries({
     NamespaceDefinition: 'module',
 } satisfies Record<string, DocumentSymbolKind>));
 
-// `const foo = () => …` and `static bar = function () {…}` read as functions.
 const BINDING_DECLARATIONS = new Map<string, DocumentSymbolKind>([
     ['VariableDeclaration', 'function'],
     ['PropertyDeclaration', 'method'],
@@ -76,7 +69,6 @@ const childNamed = (node: SyntaxNode, names: ReadonlySet<string>): SyntaxNode | 
     return null;
 };
 
-/** What a syntax node declares, or null for a node that names nothing. */
 export const symbolKindOf = (node: SyntaxNode): DocumentSymbolKind | null => {
     if (HEADING_RE.test(node.name)) return 'heading';
     const declared = DECLARATION_KINDS.get(node.name);
@@ -259,11 +251,6 @@ const walkCSharpSymbols = (
     }
 };
 
-/**
- * Every nameable declaration in document order. Parses up to `timeoutMs` to
- * cover the whole file; a file too large to parse in time lists what was
- * reached.
- */
 export const readDocumentSymbols = (state: EditorState, timeoutMs = 200): DocumentSymbol[] => {
     const tree = ensureSyntaxTree(state, state.doc.length, timeoutMs);
     if (!tree) return [];

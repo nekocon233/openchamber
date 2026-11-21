@@ -38,6 +38,22 @@ describe('tunnel HTTPS port', () => {
 });
 
 describe('tunnel config path normalization', () => {
+  it('keeps an own undefined config path ahead of the default', () => {
+    expect(normalizeTunnelStartRequest(
+      { configPath: undefined },
+      { configPath: '~/.cloudflared/config.yml' },
+    ).configPath).toBeUndefined();
+  });
+
+  it('rejects malformed explicit routing and defaults unrelated non-string fields', () => {
+    expect(() => normalizeTunnelStartRequest({ provider: { name: 'tailscale' } })).toThrow(/provider/i);
+    expect(() => normalizeTunnelStartRequest({ mode: ['serve'] })).toThrow(/mode/i);
+    expect(normalizeTunnelStartRequest({ intent: 1, token: false, hostname: {}, configPath: 42 })).toMatchObject({
+      provider: 'cloudflare', mode: 'quick', intent: 'ephemeral-public',
+      token: '', hostname: '', configPath: undefined, httpsPort: undefined,
+    });
+  });
+
   it('allows Windows home paths with different drive casing', () => {
     expect(isPathWithinDirectory(
       'c:\\Users\\Bohdan\\.cloudflared\\config.yml',

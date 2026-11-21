@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { REFERENCE_META_TEXT, relativeTimeOf } from '@/components/references/referencePickerItems';
-import { useGitHubReadContext, useGitHubSourceStatus, useRepositoryHost } from '@/components/references/referenceSources';
+import { useRepositoryReadContext, useRepositorySourceStatus, useRepositoryHost } from '@/components/references/referenceSources';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { getDropdownNavigationKey, shouldDismissDropdown } from '@/components/ui/dropdown-navigation';
@@ -155,8 +155,8 @@ export const ProjectCiList: React.FC<{
   const { sourceControl } = useRuntimeAPIs();
   const openSettings = useOpenSourceControlSettings();
   const host = useRepositoryHost(directory || null);
-  const sourceStatus = useGitHubSourceStatus(directory);
-  const rawContext = useGitHubReadContext(directory);
+  const sourceStatus = useRepositorySourceStatus(directory);
+  const rawContext = useRepositoryReadContext(directory);
   const context = rawContext && rawContext !== 'missing' && rawContext.provider === 'github' ? rawContext : null;
   const contextLoading = sourceStatus === 'ready' && Boolean(directory) && rawContext === null;
   const gitStatus = useGitStatus(directory);

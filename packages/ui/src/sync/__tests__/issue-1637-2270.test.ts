@@ -52,6 +52,7 @@ mock.module("../session-ui-store", () => ({
 mock.module("../sync-refs", () => ({
   getDirectoryState: () => null,
   getAllSyncSessions: () => [],
+  getAllSyncSessionMap: () => new Map(),
   getSyncSessionDirectory: () => null,
   // The turn-timing watcher reads this on import; a test without sync stores
   // has none to hand it, which is the state it already handles.
@@ -80,6 +81,8 @@ mock.module("@/stores/useConfigStore", () => ({
       hasEverConnected: true,
     }),
   },
+  selectCatalogLoadedForDirectory: () => false,
+  selectConfigAgentsForDirectory: () => [],
 }))
 
 mock.module("../input-store", () => ({

@@ -83,7 +83,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const current = () => { if (!project) throw new Error('Project browser has not mounted'); return project; };
   const boardBrowser = () => { if (!board) throw new Error('Board has not mounted'); return board; };
   const Probe: React.FC<{ mode: 'references' | 'project-pulls'; active?: boolean; directory?: string }> = ({ mode, active = true, directory = '/repo' }) => {
-    const browser = useReferenceBrowser({ source: 'github', directory, isMobile: false, initialGitHubKind: 'pull', mode, active });
+    const browser = useReferenceBrowser({ source: 'repository', directory, isMobile: false, initialGitHubKind: 'pull', mode, active });
     if (mode === 'project-pulls') project = browser;
     else board = browser;
     return <div>{browser.items.map(referencePickerItemKey).join(',')}</div>;
@@ -100,18 +100,18 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(predicate()).toBe(true);
   };
   const listRequests = () => requests.filter((url) => url.pathname.endsWith('/references') && url.searchParams.get('scope') === 'repository');
-  const numbers = () => current().items.flatMap((item) => item.source === 'github' ? [item.reference.number] : []);
+  const numbers = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.number] : []);
 
   try {
     await render();
     await until(() => current().list.status === 'ready');
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
     expect(listRequests()).toHaveLength(1);
     expect(listRequests()[0]?.searchParams.get('kind')).toBe('pull');
     expect(listRequests()[0]?.searchParams.get('state')).toBe('open');
     expect(listRequests()[0]?.searchParams.get('people')).toBe('mine');
     const listed = current().items[0];
-    expect(listed?.source === 'github' ? listed.reference.sourceRepo.owner : null).toBe('acme');
+    expect(listed?.source === 'repository' ? listed.reference.sourceRepo.owner : null).toBe('acme');
     expect(current().previewItem).toBeNull();
     expect(requests.some((url) => url.pathname.endsWith('/references/detail') && url.searchParams.get('owner') === 'acme')).toBe(false);
     await until(() => current().pullStatusOf(pull(2)).status === 'ready');
@@ -125,8 +125,8 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     await until(() => listRequests().length === beforeReview + 1);
     expect(current().items).toHaveLength(2);
 
-    await act(async () => boardBrowser().selectGitHubFilter({ state: 'open', people: 'created' }));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
+    await act(async () => boardBrowser().selectRepositoryFilter({ state: 'open', people: 'created' }));
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
     failNextPage = true;
     await act(async () => current().list.loadMore());
     await until(() => Boolean(current().list.error));
@@ -154,31 +154,31 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     const first = current().items[0];
     if (!first) throw new Error('Expected a listed PR');
     await act(async () => current().showItem(referencePickerItemKey(first)));
-    await until(() => current().githubDetail.status === 'ready');
+    await until(() => current().repositoryDetail.status === 'ready');
     const detailRequest = requests.find((url) => url.pathname.endsWith('/references/detail') && url.searchParams.get('owner') === 'acme' && url.searchParams.get('number') === '1');
     expect(detailRequest?.searchParams.get('owner')).toBe('acme');
     expect(detailRequest?.searchParams.get('number')).toBe('1');
     await act(async () => current().closeMobilePreview());
     expect(current().previewItem).toBeNull();
 
-    const returned = { source: 'github' as const, reference: pull(500) };
+    const returned = { source: 'repository' as const, reference: pull(500) };
     await act(async () => current().openItem(returned));
     expect(current().previewItem).toEqual(returned);
     expect(numbers()).not.toContain(500);
     await act(async () => current().closeMobilePreview());
 
-    await act(async () => current().selectGitHubFilter({ state: 'closed', people: 'any' }));
+    await act(async () => current().selectRepositoryFilter({ state: 'closed', people: 'any' }));
     await until(() => listRequests().some(url => url.searchParams.get('people') === 'any'));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'any' });
-    await act(async () => current().selectGitHubFilter({ people: 'mine' }));
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any' });
+    await act(async () => current().selectRepositoryFilter({ people: 'mine' }));
     await until(() => listRequests().filter(url => url.searchParams.get('people') === 'mine').length >= 2);
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'mine' });
-    await act(async () => current().selectGitHubKind('issue'));
-    expect(current().githubKind).toBe('pull');
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
+    await act(async () => current().selectRepositoryKind('issue'));
+    expect(current().repositoryKind).toBe('pull');
     await render(false); await render(true);
-    expect(current().githubFilter.people).toBe('mine');
-    await act(async () => current().selectGitHubFilter({ people: 'any', state: 'merged' }));
-    expect(current().githubFilter).toEqual({ state: 'open', people: 'any' });
+    expect(current().repositoryFilter.people).toBe('mine');
+    await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any' });
     expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
 
     await act(async () => current().setQuery('terminal'));

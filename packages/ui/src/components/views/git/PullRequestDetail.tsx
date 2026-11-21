@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import type { CachedValue } from '@/components/references/referenceCache';
 import { ReferencePreview } from '@/components/references/ReferencePreview';
-import { invalidateGitHubPullStatuses, invalidateProjectPullLists, useGitHubPullStatuses } from '@/components/references/referenceSources';
+import { invalidateRepositoryPullStatuses, invalidateProjectPullLists, useRepositoryPullStatuses } from '@/components/references/referenceSources';
 import { SourceBoardActions } from '@/components/sourceBoard/SourceBoardActions';
 import { SourceBoardChecksDialog } from '@/components/sourceBoard/SourceBoardChecksDialog';
 import { SourceBoardLabels, SourceBoardReviewers } from '@/components/sourceBoard/SourceBoardMetaEditors';
@@ -40,7 +40,7 @@ export const PullRequestDetail: React.FC<{
   const runtimeGeneration = getRuntimeEndpointGeneration();
   const { excludedTypes } = useDiffFileFilter(runtime, context.directory, NO_FILES);
   const references = React.useMemo(() => context.provider === 'github' ? [reference] : [], [context.provider, reference]);
-  const pullStatusOf = useGitHubPullStatuses(context.directory, references);
+  const pullStatusOf = useRepositoryPullStatuses(context.directory, references);
   const activeOwner = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     activeOwner.current = owner;
@@ -57,7 +57,7 @@ export const PullRequestDetail: React.FC<{
   const refreshFromHost = async () => {
     await sourceControl.refreshProviderReads(context);
     if (getRuntimeKey() === runtime && getRuntimeEndpointGeneration() === runtimeGeneration) {
-      invalidateGitHubPullStatuses(context, runtime);
+      invalidateRepositoryPullStatuses(context, runtime);
       if (owner && activeOwner.current === owner) invalidateProjectPullFileStats(context, reference);
     }
     await refresh();
@@ -74,7 +74,7 @@ export const PullRequestDetail: React.FC<{
     }
   };
   const threadActions = useThreadActions(reference, context, refresh);
-  const item = { source: 'github' as const, reference };
+  const item = { source: 'repository' as const, reference };
 
   return (
     <WorkspaceViewScope.Provider value={owner}>
@@ -82,8 +82,8 @@ export const PullRequestDetail: React.FC<{
         item={item}
         directory={context.directory}
         pullStatus={pullStatusOf(reference)}
-        linearDetail={{ status: 'idle' }}
-        githubDetail={githubDetail}
+        trackerDetail={{ status: 'idle' }}
+        repositoryDetail={githubDetail}
         purpose="attach"
         pinned
         includeDiff={false}

@@ -13,6 +13,8 @@ import { createWorktreeSession } from '@/lib/worktreeSessionCreator';
 import { showOpenCodeStatus } from '@/lib/openCodeStatus';
 import { addSelectionToChat } from '@/lib/addSelectionToChat';
 import { navigateSessionHistory } from '@/lib/sessionNavigationHistory';
+import { canUseElectronDesktopIPC, invokeDesktop } from '@/lib/desktop';
+import { getNativeMenuShortcutCombos } from '@/lib/shortcuts';
 
 const getActiveElementSelectedText = (): string => {
   if (typeof document === 'undefined') {
@@ -109,6 +111,14 @@ export const useMenuActions = (
   const checkForUpdates = useUpdateStore((state) => state.checkForUpdates);
   const { setThemeMode } = useThemeSystem();
   const checkUpdatesInFlightRef = React.useRef(false);
+  const shortcutOverrides = useUIStore((s) => s.shortcutOverrides);
+
+  React.useEffect(() => {
+    if (!canUseElectronDesktopIPC()) return;
+    invokeDesktop('desktop_set_menu_shortcuts', { shortcuts: getNativeMenuShortcutCombos(shortcutOverrides) }).catch((error) => {
+      console.warn('[menu-actions] failed to update menu shortcuts', error);
+    });
+  }, [shortcutOverrides]);
 
   const handleCheckForUpdates = React.useCallback(() => {
     if (checkUpdatesInFlightRef.current) {
@@ -210,14 +220,11 @@ export const useMenuActions = (
           handleChangeWorkspace();
           break;
 
-        // Legacy right-sidebar menu items now target the context surfaces
-        // that replaced the sidebar's tabs.
         case 'toggle-right-sidebar': {
           const directory = useDirectoryStore.getState().currentDirectory;
           if (!directory) break;
           const uiState = useUIStore.getState();
           const directoryKey = normalizeContextPanelDirectoryKey(directory);
-          // The right zone only: it is the panel this menu item always meant.
           const panelState = uiState.contextPanelByDirectory[directoryKey];
           const rightTabId = panelState
             ? resolveZoneActiveTabId(panelState.tabs, uiState.contextSurfaceZones, 'right', getZoneView(panelState, 'right').activeTabId, getDefaultContextZone(uiState.workspaceLayout))
@@ -305,8 +312,6 @@ export const useMenuActions = (
           onToggleMemoryDebug?.();
           break;
 
-        // Same history as the Back/Forward shortcuts, which this menu's
-        // accelerators shadow on Windows and Linux.
         case 'go-back':
           navigateSessionHistory(-1);
           break;

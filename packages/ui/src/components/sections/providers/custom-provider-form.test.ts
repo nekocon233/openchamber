@@ -22,6 +22,7 @@ const baseForm = (overrides: Partial<CustomProviderFormState> = {}): CustomProvi
   providerID: 'custom-provider',
   name: 'Custom Provider',
   icon: 'server',
+  logo: null,
   protocol: 'openai-chat',
   baseURL: 'https://api.example.com/v1',
   apiKey: 'sk-test',
@@ -38,6 +39,7 @@ const baseForm = (overrides: Partial<CustomProviderFormState> = {}): CustomProvi
     variants: '',
   }],
   headers: [{ row: 'h0', key: '', value: '' }],
+  tls: null,
   ...overrides,
 });
 
@@ -65,27 +67,50 @@ const MODEL_ROW_DEFAULTS = {
   capabilitiesKnown: false,
 };
 
-/** Mirrors server upsert semantics for request-construction tests. */
-function mergeProviderConfig(
-  existing: Record<string, unknown>,
-  providerID: string,
-  config: CustomProviderConfig,
-): Record<string, unknown> {
-  const providerSection = (
-    typeof existing.provider === 'object' && existing.provider !== null && !Array.isArray(existing.provider)
-      ? { ...(existing.provider as Record<string, unknown>) }
-      : {}
-  );
-  providerSection[providerID] = config;
-  const next: Record<string, unknown> = {
-    ...existing,
-    provider: providerSection,
-  };
-  if (Array.isArray(existing.disabled_providers)) {
-    next.disabled_providers = existing.disabled_providers.filter((entry) => entry !== providerID);
-  }
-  return next;
-}
+describe('client certificate', () => {
+  const certificateForm = (tls: CustomProviderFormState['tls']) => validateCustomProvider({
+    form: baseForm({ tls }), t, existingProviderIDs: new Set(),
+  });
+
+  test('saves file paths as file references and keeps references, PEM text and a literal passphrase as written', () => {
+    expect(certificateForm({ cert: ' /etc/company/client.pem ', key: '~/keys/client.key', passphrase: '{env:KEY_PASS}' }).result?.config.settings)
+      .toEqual({
+        baseURL: 'https://api.example.com/v1',
+        tls: { cert: '{file:/etc/company/client.pem}', key: '{file:~/keys/client.key}', passphrase: '{env:KEY_PASS}' },
+      });
+    const pem = '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----';
+    expect(certificateForm({ cert: pem, key: 'C:\\certs\\client.key', passphrase: ' two words ' }).result?.config.settings.tls)
+      .toEqual({ cert: pem, key: '{file:C:\\certs\\client.key}', passphrase: ' two words ' });
+  });
+
+  test('cleared fields remove the certificate, and fields never loaded leave the stored one alone', () => {
+    expect(certificateForm({ cert: '', key: '', passphrase: '' }).result?.config.settings)
+      .toEqual({ baseURL: 'https://api.example.com/v1', tls: null });
+    expect(certificateForm(null).result?.config.settings).toEqual({ baseURL: 'https://api.example.com/v1' });
+  });
+
+  test('half a certificate or a relative path is refused on the field', () => {
+    const half = certificateForm({ cert: '/etc/client.pem', key: '', passphrase: '' });
+    expect(half.result).toBeUndefined();
+    expect(half.err.tlsKey).toBe('settings.providers.page.custom.error.tls.incomplete');
+    const passphraseOnly = certificateForm({ cert: '', key: '', passphrase: 'secret' });
+    expect(passphraseOnly.err.tlsCert).toBe('settings.providers.page.custom.error.tls.incomplete');
+    expect(passphraseOnly.err.tlsKey).toBe('settings.providers.page.custom.error.tls.incomplete');
+    const relative = certificateForm({ cert: 'certs/client.pem', key: '/etc/client.key', passphrase: '' });
+    expect(relative.result).toBeUndefined();
+    expect(relative.err.tlsCert).toBe('settings.providers.page.custom.error.tls.relativePath');
+    expect(relative.err.tlsKey).toBeUndefined();
+    expect(certificateForm({ cert: '{file:certs/client.pem}', key: '{env:CLIENT_KEY}', passphrase: '' }).err.tlsCert)
+      .toBe('settings.providers.page.custom.error.tls.relativePath');
+  });
+
+  test('editing shows the stored paths, never the certificate the live provider resolved', () => {
+    const live = { id: 'gw', name: 'Gateway', settings: { baseURL: 'https://gw.example/v1', tls: { cert: '-----BEGIN CERTIFICATE-----', key: '-----BEGIN KEY-----' } } };
+    expect(providerToEditFormState(live, null).tls).toBeNull();
+    const stored = { settings: { baseURL: 'https://gw.example/v1', tls: { cert: '{file:/etc/client.pem}', key: '{file:/etc/client.key}', passphrase: '{env:P}' } } };
+    expect(providerToEditFormState(live, stored).tls).toEqual({ cert: '/etc/client.pem', key: '/etc/client.key', passphrase: '{env:P}' });
+  });
+});
 
 describe('validateCustomProvider', () => {
   test('builds trimmed config and auth payloads', () => {
@@ -108,6 +133,7 @@ describe('validateCustomProvider', () => {
     expect(result.result).toEqual({
       providerID: 'custom-provider',
       icon: 'server',
+      logo: { kind: 'keep' },
       name: 'Custom Provider',
       apiKey: 'sk-secret',
       config: {
@@ -122,7 +148,7 @@ describe('validateCustomProvider', () => {
         models: {
           'model-a': { modelID: 'model-a', name: 'Model A' },
         },
-      },
+      } satisfies CustomProviderConfig,
     });
   });
 
@@ -163,6 +189,21 @@ describe('validateCustomProvider', () => {
 
   test('keeps no icon for a new provider so its own logo still shows', () => {
     expect(createEmptyCustomProviderForm().icon).toBeNull();
+    expect(createEmptyCustomProviderForm().logo).toBeNull();
+  });
+
+  test('changes the stored logo image only through what the user did in the field', () => {
+    const planFor = (logo: CustomProviderFormState['logo']) => validateCustomProvider({
+      form: baseForm({ logo }),
+      t,
+      existingProviderIDs: new Set(),
+    }).result?.logo;
+    const file = new File(['png'], 'logo.png', { type: 'image/png' });
+
+    // Untouched: a logo kept from before, or uploaded by another client meanwhile, stays.
+    expect(planFor(null)).toEqual({ kind: 'keep' });
+    expect(planFor(file)).toEqual({ kind: 'upload', file });
+    expect(planFor('removed')).toEqual({ kind: 'remove' });
   });
 
   test('turns a discovered model into a row, the provider winning over models.dev field by field', () => {
@@ -394,52 +435,6 @@ describe('request construction', () => {
   });
 });
 
-describe('mergeProviderConfig persistence shape', () => {
-  test('merges provider block and clears disabled_providers entry', () => {
-    const validated = validateCustomProvider({
-      form: baseForm(),
-      t,
-      existingProviderIDs: new Set(),
-    });
-    const plan = validated.result!;
-
-    const next = mergeProviderConfig(
-      {
-        model: 'openai/gpt-4o',
-        provider: {
-          openai: { name: 'OpenAI' },
-        },
-        disabled_providers: ['custom-provider', 'other'],
-      },
-      plan.providerID,
-      plan.config,
-    );
-
-    expect(next).toEqual({
-      model: 'openai/gpt-4o',
-      provider: {
-        openai: { name: 'OpenAI' },
-        'custom-provider': plan.config,
-      },
-      disabled_providers: ['other'],
-    });
-  });
-
-  test('creates provider section when missing', () => {
-    const validated = validateCustomProvider({
-      form: baseForm(),
-      t,
-      existingProviderIDs: new Set(),
-    });
-    const plan = validated.result!;
-
-    const next = mergeProviderConfig({}, plan.providerID, plan.config);
-    expect(next.provider).toEqual({
-      'custom-provider': plan.config,
-    });
-  });
-});
-
 describe('provider edit helpers', () => {
   test('detects openai-compatible custom providers and prefills form state', () => {
     expect(isCustomOpenAICompatibleProvider({
@@ -663,6 +658,35 @@ describe('edit form from the stored config entry', () => {
     allowExistingAuth: true,
   }).result?.config;
 
+  test('keeps a stored built-in package until the user changes the protocol', () => {
+    const cases: { packageName: string; protocol: CustomProviderFormState['protocol'] }[] = [
+      { packageName: '@opencode/ai/providers/openai-compatible', protocol: 'openai-chat' },
+      { packageName: '@opencode/ai/providers/openai-compatible/responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai-compatible-responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai/chat', protocol: 'openai-chat' },
+      { packageName: '@opencode/ai/providers/openai/responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/anthropic', protocol: 'anthropic-messages' },
+      { packageName: '@opencode/ai/providers/anthropic-compatible', protocol: 'anthropic-messages' },
+    ];
+    for (const { packageName, protocol } of cases) {
+      const stored = storedProviderEntrySchema.parse({
+        name: 'Campus LLM',
+        package: packageName,
+        settings: { baseURL: 'https://llm.example.edu/v1' },
+        models: { fast: { name: 'Fast' } },
+      });
+      const form = providerToEditFormState(live, stored);
+      expect(form.protocol).toBe(protocol);
+      expect(editAndSave({ ...form, name: 'Renamed' })?.package).toBe(packageName);
+
+      const changedProtocol = protocol === 'openai-chat' ? 'anthropic-messages' : 'openai-chat';
+      expect(editAndSave({ ...form, protocol: changedProtocol })?.package).toBe(
+        changedProtocol === 'anthropic-messages' ? 'aisdk:@ai-sdk/anthropic' : 'aisdk:@ai-sdk/openai-compatible',
+      );
+    }
+  });
+
   test('keeps env and writes back only the levels the user stored', () => {
     const stored = storedProviderEntrySchema.parse({
       name: 'Campus LLM',
@@ -742,6 +766,7 @@ describe('edit form from the stored config entry', () => {
 
   test('without a stored entry the live levels stay out of the save', () => {
     const form = providerToEditFormState(live, null);
+    expect(editAndSave(form)?.package).toBe('aisdk:@ai-sdk/openai-compatible');
     expect(editAndSave(form)?.models.fast).toEqual({ modelID: 'fast', name: 'Fast' });
   });
 });

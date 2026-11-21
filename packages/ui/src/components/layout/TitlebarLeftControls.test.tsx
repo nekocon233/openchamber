@@ -142,6 +142,7 @@ describe('TitlebarLeftControls', () => {
     const create = document.querySelector('[data-new-session-trigger]');
     expect(picker).not.toBeNull();
     expect(create?.getAttribute('aria-label')).toBe('New session');
+    expect(create?.querySelector('use')?.getAttribute('href')).toBe('#oc-chat-new');
     await act(async () => useUIStore.getState().setSidebarOpen(false));
     expect(document.querySelector('[data-session-picker-trigger]')).toBe(picker);
     expect(document.querySelector('[data-new-session-trigger]')).toBe(create);

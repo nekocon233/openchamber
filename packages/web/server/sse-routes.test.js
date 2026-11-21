@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'bun:test';
 
 import { NOTIFICATION_SSE_HEARTBEAT_INTERVAL_MS, registerNotificationRoutes } from './lib/notifications/routes.js';
 import { createClientNotificationAuth, invalidateNotificationAuth } from './lib/notifications/auth-runtime.js';
-import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
+import { createTunnelAuth } from './lib/tunnels/tunnel-auth.js';
 import { registerScheduledTaskRoutes } from './lib/scheduled-tasks/routes.js';
 
 const createRouteRegistry = () => {
@@ -304,6 +304,34 @@ describe('local SSE routes', () => {
     expect(res.listenerCount('error')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
+  });
+
+  it('keeps a stream out of fanout when its identity changes while the watcher starts', async () => {
+    const { app, getRoute } = createRouteRegistry();
+    const clients = new Set();
+    const auth = createClientNotificationAuth('waiting-client');
+    const watcher = Promise.withResolvers();
+    const starting = Promise.withResolvers();
+    registerNotificationRoutes(app, {
+      uiAuthController: {
+        resolveNotificationAuth: async () => auth,
+        validateNotificationAuth: async () => true,
+      },
+      getUiNotificationClients: () => clients,
+      ensureGlobalWatcherStarted: async () => { starting.resolve(); await watcher.promise; },
+      writeSseEvent: vi.fn(),
+    });
+    const req = createMockRequest();
+    const res = createMockResponse();
+    const opening = getRoute('GET', '/api/notifications/stream')(req, res);
+    await starting.promise;
+    expect(clients.size).toBe(0);
+    invalidateNotificationAuth(auth);
+    watcher.resolve();
+    await opening;
+    expect(clients.size).toBe(0);
+    expect(res.body).not.toContain('notification-stream-ready');
+    expect(req.listenerCount('close')).toBe(0);
   });
 
   it('terminates an existing notification stream when its auth expires', async () => {

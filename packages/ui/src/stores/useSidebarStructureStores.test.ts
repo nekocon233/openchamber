@@ -83,7 +83,7 @@ describe('authoritative sidebar structure projections', () => {
   test('submits pin intents and projects the returned snapshot', async () => {
     const worktreeOrderBefore = useWorktreeOrderStore.getState().orderByProject;
     const foldersBefore = useSessionFoldersStore.getState().foldersMap;
-    useSessionPinnedStore.getState().toggle('session-one');
+    void useSidebarStateStore.getState().mutate({ type: 'session.pin', sessionId: 'session-one' });
     expect(useSessionPinnedStore.getState().ids.has('session-one')).toBe(true);
 
     await new Promise((resolve) => setTimeout(resolve, 0));

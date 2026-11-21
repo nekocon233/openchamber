@@ -172,44 +172,12 @@ describe('resolveQueuedSessionStatusType', () => {
     expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
   });
 
-  test('treats an idle parent as busy while its background subagent runs', () => {
-    const store = childStores.ensureChild(DIRECTORY, { bootstrap: false });
-    const child = { id: 'ses_child', parentID: 'ses_1' } as Session;
-    store.setState({ session: [child], session_status: { ses_child: { type: 'busy' } } });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('busy');
-    store.setState({ session_status: {} });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
-  });
-
-  test('holds an idle parent through nested busy and retry descendants', () => {
+  test('holds an idle parent until its background subagents finish', () => {
     const store = childStores.ensureChild(DIRECTORY, { bootstrap: false });
     store.setState({
-      session: [
-        session('ses_child', 'ses_1'),
-        session('ses_grandchild', 'ses_child'),
-        session('ses_unrelated', 'ses_other'),
-      ],
-      session_status: { ses_grandchild: { type: 'busy' } },
+      session: [session('ses_child', 'ses_1'), session('ses_grandchild', 'ses_child')],
+      session_status: { ses_child: { type: 'busy' }, ses_grandchild: { type: 'busy' } },
     });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('busy');
-    store.setState({ session_status: { ses_grandchild: { type: 'retry', attempt: 1, message: 'retry', next: 10 } } });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('busy');
-    store.setState({ session_status: { ses_unrelated: { type: 'busy' } } });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
-    expect(resolveQueuedSessionStatusType('ses_1', '/other')).toBe('idle');
-  });
-
-  test('re-evaluates changed lineage while descendant status stays busy', () => {
-    const store = childStores.ensureChild(DIRECTORY, { bootstrap: false });
-    store.setState({
-      session: [session('ses_grandchild', 'ses_child')],
-      session_status: { ses_grandchild: { type: 'busy' } },
-    });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
-    store.setState({ session: [
-      session('ses_child', 'ses_1'),
-      session('ses_grandchild', 'ses_child'),
-    ] });
     expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('busy');
     store.setState({ session_status: {} });
     expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
@@ -335,7 +303,7 @@ describe('buildQueuedAutoSendPayload', () => {
     const payload = buildQueuedAutoSendPayload([
       {
         id: 'queued-raw',
-        messageId: null,
+        messageId: 'msg_queued',
         content: '/plan feature from raw queue',
         createdAt: 1,
         status: 'queued',
@@ -364,10 +332,18 @@ describe('buildQueuedAutoSendPayload', () => {
       modelID: 'model-1',
       agent: 'agent-1',
       variant: 'variant-1',
-    });
+      subagentModel: null,
+    }, { runtimeKey: 'runtime-original', generation: 4 }, 'auto');
 
     expect(sendMessageCalls[0]?.[0]).toBe('sanitized transport text');
     expect(sendMessageCalls[0]?.[9]).toEqual({
+      messageId: 'msg_queued',
+      expectedRuntime: { runtimeKey: 'runtime-original', generation: 4 },
+      preserveModelSelection: true,
+      subagentModel: null,
+      interruptAntigravity: false,
+      expectedNativeSource: undefined,
+      queuedGoal: null,
       target: {
         runtimeKey: 'runtime-original',
         sessionId: 'session-original',
@@ -387,7 +363,7 @@ describe('buildQueuedAutoSendPayload', () => {
     const payload = buildQueuedAutoSendPayload([
       {
         id: 'queued-1',
-        messageId: null,
+        messageId: 'msg_final',
         content: 'queued message',
         createdAt: 1,
         status: 'queued',
@@ -404,7 +380,7 @@ describe('buildQueuedAutoSendPayload', () => {
       modelID: 'model-1',
       agent: 'agent-1',
       variant: 'variant-1',
-    });
+    }, { runtimeKey: 'runtime-original', generation: 8 }, 'auto');
 
     expect(sendMessageCalls.length).toBe(1);
     expect(sendMessageCalls[0]).toEqual([
@@ -418,6 +394,10 @@ describe('buildQueuedAutoSendPayload', () => {
       'variant-1',
       'normal',
       {
+        messageId: 'msg_final',
+        expectedRuntime: { runtimeKey: 'runtime-original', generation: 8 },
+        preserveModelSelection: true, interruptAntigravity: false,
+        queuedGoal: null, subagentModel: undefined, expectedNativeSource: undefined,
         target: {
           runtimeKey: 'runtime-original',
           sessionId: 'session-original',

@@ -8,7 +8,7 @@ import path from 'path';
 import { OpenCode } from '@opencode/client';
 
 import { createSseBoundaryTracker, registerOpenCodeProxy, writeSseChunkWithBackpressure } from './lib/opencode/proxy.js';
-import { registerCommonRequestMiddleware } from './lib/opencode/core-routes.js';
+import { registerCommonRequestMiddleware } from './lib/server-frame/core-routes.js';
 import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
 import {
   createClientNotificationAuth,
@@ -1739,6 +1739,6 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(Date.now() - startedAt).toBeLessThan(1000);
     await expect(response.json()).resolves.toMatchObject({ error: 'OpenCode service unavailable' });
     expect(upstreamBody).toEqual({ prompt: 'hello' });
-    expect(errorSpy).toHaveBeenCalledWith('[proxy] OpenCode request proxy error:', 'socket hang up');
+    expect(errorSpy).toHaveBeenCalledWith('[proxy] OpenCode proxy error: method=POST route=/api/other function=onApiProxyError class=connection_reset message="socket hang up"');
   });
 });

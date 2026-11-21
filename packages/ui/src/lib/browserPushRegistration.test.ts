@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import type { PushSubscribePayload } from '@/lib/api/types';
+import type { PushSubscribePayload } from '@/lib/api/push';
 import {
   getBrowserPushRegistrationState,
   isBrowserPushRegistrationConfirmed,

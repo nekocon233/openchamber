@@ -141,7 +141,9 @@ describe('GitHub source-control route aliases', () => {
       issues: true,
       changeRequests: true,
       draftChangeRequests: true,
+      draftConversion: true,
       mergeChangeRequests: true,
+      forceMergeChangeRequests: true,
       mergeMethods: ['merge', 'squash', 'rebase'],
       ci: true,
     });

@@ -8,7 +8,11 @@ import { useContextStore } from '@/stores/contextStore';
 import { getAllSyncSessionMap, getDirectoryState } from '@/sync/sync-refs';
 import { hasActiveSubagent } from '@/sync/global-session-status';
 import { useDirectorySync } from '@/sync/sync-context';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getRuntimeEndpointGeneration, getRuntimeKey, RuntimeContextChangedError } from '@/lib/runtime-switch';
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfSessionId, unifiedNativeSessionState } from '@/lib/native-agents/ids';
+import { NativeAgentsRequestError } from '@/lib/native-agents/errors';
+import type { FollowUpQueueSendConfig } from '@/lib/api/types';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { createInputHistorySubmission } from '@/stores/useInputHistoryStore';
 import { isFollowUpQueueClaimAvailable } from '@/lib/followUpQueue';
@@ -88,6 +92,7 @@ export const buildQueuedAutoSendPayload = (queue: QueuedMessage[]) => {
   // file mentions resolved, and the context it was queued with following it.
   return {
     queuedMessageId: queued.id,
+    messageId: queued.messageId,
     historySubmissions: [createInputHistorySubmission(queued.content, queued.attachments ?? [])],
     primaryText: queued.content,
     primaryAttachments: queued.attachments ?? [],
@@ -110,17 +115,13 @@ const getSendableQueue = (target: MessageQueueTarget, now: number): QueuedMessag
 );
 
 type QueuedAutoSendPayload = NonNullable<ReturnType<typeof buildQueuedAutoSendPayload>>;
-type ResolvedQueuedSendConfig = {
-  providerID: string;
-  modelID: string;
-  agent?: string;
-  variant?: string;
-};
-
 export const sendQueuedAutoSendPayload = (
   target: MessageQueueTarget,
   payload: QueuedAutoSendPayload,
-  resolved: ResolvedQueuedSendConfig,
+  resolved: FollowUpQueueSendConfig,
+  expectedRuntime: MessageQueueRuntimeContext,
+  mode: 'manual' | 'auto',
+  expectedNativeSource?: string,
 ) => {
   return useSessionUIStore.getState().sendMessage(
     payload.primaryText,
@@ -132,7 +133,13 @@ export const sendQueuedAutoSendPayload = (
     payload.additionalParts.length > 0 ? payload.additionalParts : undefined,
     resolved.variant,
     'normal',
-    { target, historySubmissions: payload.historySubmissions, queuedGoal: payload.goal },
+    {
+      target, historySubmissions: payload.historySubmissions, queuedGoal: payload.goal,
+      messageId: payload.messageId ?? undefined, expectedRuntime, preserveModelSelection: true,
+      subagentModel: resolved.subagentModel,
+      interruptAntigravity: mode === 'manual' && (nativeBackendOfSessionId(target.sessionId) === 'antigravity' || Boolean(expectedNativeSource)),
+      expectedNativeSource,
+    },
   );
 };
 
@@ -182,6 +189,63 @@ const resolveSessionSendConfig = (sessionId: string) => {
     agent: selectedAgent,
     variant,
   };
+};
+
+/** A claim owns the final payload, its message ID and authorization to finish that item. */
+export const sendClaimedFollowUp = async (
+  target: MessageQueueTarget, itemId: string, mode: 'manual' | 'auto', stillEligible?: () => boolean,
+): Promise<boolean> => {
+  const expectedRuntime = { runtimeKey: getRuntimeKey(), generation: getRuntimeEndpointGeneration() };
+  if (expectedRuntime.runtimeKey !== target.runtimeKey) throw new RuntimeContextChangedError();
+  const handle = await useMessageQueueStore.getState().claim(target, itemId, mode);
+  if (!handle) return false;
+  const { item, claimId, context } = handle;
+  let sending = false;
+  const assertCurrent = () => {
+    const store = useMessageQueueStore.getState();
+    if (getRuntimeKey() !== expectedRuntime.runtimeKey || getRuntimeEndpointGeneration() !== expectedRuntime.generation
+      || store.runtimeKey !== context.runtimeKey || store.generation !== context.generation) throw new RuntimeContextChangedError();
+  };
+  try {
+    assertCurrent();
+    let source: string | undefined;
+    if (isNativeSessionId(target.sessionId)) {
+      const api = getRegisteredRuntimeAPIs()?.nativeAgents;
+      if (!api?.supported) throw new Error('Native sessions are unavailable');
+      if (isUnifiedNativeSessionId(target.sessionId)) {
+        const session = await api.getSession(target.sessionId, target.directory);
+        assertCurrent();
+        const execution = unifiedNativeSessionState(session.metadata);
+        if (!execution || execution.preparing || (mode === 'auto' && !execution.switchReady)) {
+          await useMessageQueueStore.getState().release(target, itemId, claimId, item.status, context);
+          return false;
+        }
+        source = execution.backend === 'antigravity' ? execution.sourceSessionID ?? undefined : undefined;
+      } else if (mode === 'auto') {
+        const status = (await api.statuses(target.directory))[target.sessionId];
+        assertCurrent();
+        if (status && status.type !== 'idle') {
+          await useMessageQueueStore.getState().release(target, itemId, claimId, 'queued', context);
+          return false;
+        }
+      }
+    }
+    const config = item.sendConfig ?? resolveSessionSendConfig(target.sessionId);
+    const payload = buildQueuedAutoSendPayload([item]);
+    if (!payload || !config.providerID || !config.modelID) throw new Error('Queued message has no send configuration');
+    if (stillEligible && !stillEligible()) {
+      await useMessageQueueStore.getState().release(target, itemId, claimId, item.status, context);
+      return false;
+    }
+    sending = true;
+    await sendQueuedAutoSendPayload(target, payload, { ...config, providerID: config.providerID, modelID: config.modelID }, expectedRuntime, mode, source);
+  } catch (error) {
+    const refusedBusy = error instanceof NativeAgentsRequestError && error.code === 'NATIVE_SESSION_BUSY';
+    const status = mode === 'manual' || (sending && !refusedBusy) ? 'staged' : 'queued';
+    await useMessageQueueStore.getState().release(target, itemId, claimId, status, context).catch(() => false);
+    throw error;
+  }
+  return useMessageQueueStore.getState().complete(target, itemId, claimId, context);
 };
 
 export const shouldDispatchQueuedAutoSend = (
@@ -245,7 +309,6 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
   const enabled = typeof enabledOrOptions === 'boolean' ? enabledOrOptions : (enabledOrOptions?.enabled ?? true);
   const queuedMessages = useMessageQueueStore((state) => state.queuedMessages);
   const sessionStatusRecord = useDirectorySync((state) => state.session_status);
-  const sessions = useDirectorySync((state) => state.session);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
   const queuedSessionIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -287,10 +350,11 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
     const dispatchSessionQueue = async (target: MessageQueueTarget, queueSnapshot: QueuedMessage[]) => {
       const { sessionId } = target;
       const targetKey = getMessageQueueKey(target);
+      const inFlightKey = `${target.runtimeKey}\n${sessionId}`;
       if (queueSnapshot.length === 0) {
         return;
       }
-      if (inFlightSessionsRef.current.has(targetKey)) {
+      if (inFlightSessionsRef.current.has(inFlightKey)) {
         return;
       }
       const abortHoldUntil = getAbortHoldUntil(sessionId);
@@ -319,49 +383,11 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
         return;
       }
 
-      // Use send config captured at queue time; fall back to current config
-      const captured = payload.sendConfig;
-      const resolved = captured?.providerID && captured?.modelID
-        ? captured
-        : resolveSessionSendConfig(sessionId);
-      if (!resolved.providerID || !resolved.modelID) {
-        // Legacy queues may predate captured send configuration. Config
-        // hydration is asynchronous, so retry instead of stranding the item
-        // until an unrelated status or directory update happens.
-        retryScheduler.schedule(Date.now() + AUTO_SEND_RETRY_BASE_DELAY_MS);
-        return;
-      }
-
-      inFlightSessionsRef.current.add(targetKey);
-      let claim: { claimId: string; context: MessageQueueRuntimeContext } | null = null;
+      inFlightSessionsRef.current.add(inFlightKey);
       try {
-        // The claim is the queue's own "being delivered" marker: the composer's
-        // send path holds the same claim, so the two cannot deliver one message
-        // twice, and an item another context already claimed is left alone.
-        const handle = await useMessageQueueStore.getState()
-          .claim(target, payload.queuedMessageId, 'auto')
-          .catch(() => null);
-        if (!handle) return;
-        claim = handle;
-        await sendQueuedAutoSendPayload(target, payload, {
-          providerID: resolved.providerID,
-          modelID: resolved.modelID,
-          agent: resolved.agent,
-          variant: resolved.variant,
-        });
-        await useMessageQueueStore.getState()
-          .complete(target, payload.queuedMessageId, claim.claimId, claim.context)
-          .catch(() => false);
+        await sendClaimedFollowUp(target, payload.queuedMessageId, 'auto');
         sendFailuresRef.current.delete(targetKey);
-      } catch (error) {
-        console.warn('[queue] queued auto-send failed:', error);
-        // The item goes back to the queue for the user: a failed automatic
-        // delivery must not keep holding a claim or drop the message.
-        if (claim) {
-          await useMessageQueueStore.getState()
-            .release(target, payload.queuedMessageId, claim.claimId, 'queued', claim.context)
-            .catch(() => false);
-        }
+      } catch {
         const priorFailures = failure?.messageId === payload.queuedMessageId ? failure.failures : 0;
         const failures = priorFailures + 1;
         const nextAttemptAt = Date.now() + getQueuedAutoSendRetryDelayMs(failures);
@@ -372,7 +398,7 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
         });
         retryScheduler.schedule(nextAttemptAt);
       } finally {
-        inFlightSessionsRef.current.delete(targetKey);
+        inFlightSessionsRef.current.delete(inFlightKey);
       }
     };
 
@@ -387,7 +413,7 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
     const queueEntries = Object.entries(queuedMessages);
     queueEntries.forEach(([key, queue]) => {
       const target = parseMessageQueueKey(key);
-      if (!target || target.runtimeKey !== getRuntimeKey() || target.directory !== currentDirectory) return;
+      if (!target || isNativeSessionId(target.sessionId) || target.runtimeKey !== getRuntimeKey() || target.directory !== currentDirectory) return;
       const { sessionId } = target;
       const currentStatusType = resolveQueuedSessionStatusType(sessionId, target.directory);
       const previousStatusType = previousStatusRef.current.get(sessionId);
@@ -399,5 +425,5 @@ export function useQueuedMessageAutoSend(enabledOrOptions?: boolean | { enabled?
     });
 
     previousStatusRef.current = nextStatusMap;
-  }, [enabled, queuedMessages, sessionStatusRecord, sessions, trailingMessageSignature, currentDirectory, retryTick, retryScheduler]);
+  }, [enabled, queuedMessages, sessionStatusRecord, trailingMessageSignature, currentDirectory, retryTick, retryScheduler]);
 }

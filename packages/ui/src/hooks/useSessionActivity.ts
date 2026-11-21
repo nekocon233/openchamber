@@ -1,36 +1,30 @@
 import React from 'react';
 import { getLastConversationMessage, isIncompleteAssistantTurn, type Message } from '@/lib/opencode/model';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useSessionStatus, useSessionMessagesSelector, useSessionPermissions, useSessionForms } from '@/sync/sync-context';
+import { formTurnHold, useRecoverableQuestionsStore } from '@/sync/recoverable-questions';
+import { readUnloadedFormToolLinks } from '@/sync/session-actions';
+import { useDirectorySync, useSessionStatus, useSessionStatusSnapshotReady, useSessionMessagesSelector, useSessionPermissions } from '@/sync/sync-context';
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { normalizeProjectPath } from '@/lib/projectResolution';
 import { deriveSessionActivity, IDLE_SESSION_ACTIVITY } from './sessionActivity';
 import type { SessionActivityResult } from './sessionActivity';
 
+
 // Only the trailing turn matters, so the subscription re-renders the caller
 // when that flag flips rather than on every streamed message update.
-// Plumbing roles are transparent here: a synthetic or switch message landing
-// after the streaming assistant must not read as the turn ending.
 const selectHasPendingAssistant = (messages: Message[]): boolean => (
   isIncompleteAssistantTurn(getLastConversationMessage(messages))
 );
 
 const IDLE_RESULT: SessionActivityResult = IDLE_SESSION_ACTIVITY;
 
-/**
- * Determines if a session is actively working.
- * Checks session_status and, only when no authoritative status snapshot exists,
- * falls back to the trailing assistant message when its completion update has
- * not landed yet. Returns idle when permissions or forms are pending (the
- * permission / form indicator takes priority, and the send button must stay
- * available so the user can supersede the prompt with a new message).
- */
 export function useSessionActivity(sessionId: string | null | undefined, directory?: string): SessionActivityResult {
   const status = useSessionStatus(sessionId ?? '', directory);
+  const statusSnapshotReady = useSessionStatusSnapshotReady(directory, sessionId ?? '');
   const globalResolvedStatus = useGlobalSessionStatusStore(
-    React.useCallback((state) => sessionId ? state.resolvedStatusById.get(sessionId) : undefined, [sessionId]),
+    React.useCallback((state) => (sessionId ? state.resolvedStatusById.get(sessionId) : undefined), [sessionId]),
   );
-  const hasAuthoritativeStatusSnapshot = useGlobalSessionStatusStore(
+  const hasGlobalStatusSnapshot = useGlobalSessionStatusStore(
     React.useCallback((state) => {
       if (!directory) return false;
       return state.statusSnapshotAtByDirectory.has(normalizeProjectPath(directory) ?? directory);
@@ -38,19 +32,32 @@ export function useSessionActivity(sessionId: string | null | undefined, directo
   );
   const hasPendingAssistant = useSessionMessagesSelector(sessionId ?? '', directory, selectHasPendingAssistant);
   const permissions = useSessionPermissions(sessionId ?? '', directory);
-  const forms = useSessionForms(sessionId ?? '', directory);
+  const releasedForms = useRecoverableQuestionsStore((state) => state.releasedForms);
+  const formHoldsTurn = useDirectorySync(React.useCallback((state) => (
+    state.form[sessionId ?? '']?.some((form) => formTurnHold(form, state.part, releasedForms) !== 'released') ?? false
+  ), [sessionId, releasedForms]), directory);
+  const unloadedForms = useDirectorySync(React.useCallback((state) => (
+    (state.form[sessionId ?? ''] ?? [])
+      .filter((form) => formTurnHold(form, state.part, releasedForms) === 'unknown')
+      .map((form) => form.id)
+      .join('\n')
+  ), [sessionId, releasedForms]), directory);
+  const sessionForms = useDirectorySync(React.useCallback((state) => state.form[sessionId ?? ''], [sessionId]), directory);
+  React.useEffect(() => {
+    if (sessionId && unloadedForms) readUnloadedFormToolLinks(sessionId);
+  }, [sessionId, unloadedForms, sessionForms]);
 
   return React.useMemo<SessionActivityResult>(() => {
     if (!sessionId) return IDLE_RESULT;
     return deriveSessionActivity({
       childStatus: status,
       globalResolvedStatus,
-      hasAuthoritativeStatusSnapshot,
+      hasAuthoritativeStatusSnapshot: statusSnapshotReady || hasGlobalStatusSnapshot,
       hasPendingAssistant,
       pendingPermissions: permissions.length,
-      pendingQuestions: forms.length,
+      pendingQuestions: formHoldsTurn ? 1 : 0,
     });
-  }, [sessionId, status, globalResolvedStatus, hasAuthoritativeStatusSnapshot, hasPendingAssistant, permissions, forms]);
+  }, [sessionId, status, statusSnapshotReady, globalResolvedStatus, hasGlobalStatusSnapshot, hasPendingAssistant, permissions.length, formHoldsTurn]);
 }
 
 export function useCurrentSessionActivity(): SessionActivityResult {

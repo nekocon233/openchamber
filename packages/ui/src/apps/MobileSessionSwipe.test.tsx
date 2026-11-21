@@ -45,6 +45,18 @@ test(`mobile session swipe actions preserve identity with ${expectedActions} ava
   const clipboard = spyOn(dom.navigator.clipboard, 'writeText').mockResolvedValue(undefined);
   const successToast = spyOn(toast, 'success').mockImplementation(() => 'success');
   const errorToast = spyOn(toast, 'error').mockImplementation(() => 'error');
+  const copied = new Promise<void>((resolve) => {
+    successToast.mockImplementation(() => {
+      resolve();
+      return 'success';
+    });
+  });
+  const copyFailed = new Promise<void>((resolve) => {
+    errorToast.mockImplementation(() => {
+      resolve();
+      return 'error';
+    });
+  });
 
   const Harness: React.FC = () => {
     const [revealed, updateRevealed] = React.useState(true);
@@ -87,7 +99,7 @@ test(`mobile session swipe actions preserve identity with ${expectedActions} ava
 
     await act(async () => {
       getCopyButton().click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await copied;
     });
 
     expect(clipboard.mock.calls[0]?.[0]).toBe(sessionId);
@@ -100,7 +112,7 @@ test(`mobile session swipe actions preserve identity with ${expectedActions} ava
     await act(async () => setRevealed(true));
     await act(async () => {
       getCopyButton().click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await copyFailed;
     });
 
     expect(clipboard.mock.calls[1]?.[0]).toBe(sessionId);

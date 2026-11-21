@@ -32,7 +32,8 @@ type Props = {
   directory: string | null;
 };
 
-/** One hover/focus target covers both the label and its value. */
+const formatCost = (cost: number): string => `$${cost.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}`;
+
 const TelemetryRow: React.FC<{ label: string; description: string; value: React.ReactNode }> = ({ label, description, value }) => (
   <Tooltip delayDuration={750}>
     <TooltipTrigger asChild>
@@ -130,7 +131,6 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
       title={t('chat.workStatus.section.telemetry')}
       icon="bar-chart-2"
       summary={summary}
-      defaultExpanded
     >
       {stats ? (
         <>
@@ -170,6 +170,14 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
               label={t('chat.workStatus.telemetry.ttft')}
               description={t('chat.workStatus.telemetry.ttftDescription')}
               value={<WorkStatusValue>{formatTelemetryDuration(stats.avgTtftMs)}</WorkStatusValue>}
+            />
+          ) : null}
+
+          {stats.avgFirstOutputMs !== null ? (
+            <TelemetryRow
+              label={t('chat.workStatus.telemetry.firstOutput')}
+              description={t('chat.workStatus.telemetry.firstOutputDescription')}
+              value={<WorkStatusValue>{formatTelemetryDuration(stats.avgFirstOutputMs)}</WorkStatusValue>}
             />
           ) : null}
 
@@ -216,7 +224,7 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
             <TelemetryRow
               label={t('chat.workStatus.telemetry.cost')}
               description={t('chat.workStatus.telemetry.costDescription')}
-              value={<WorkStatusValue tone="muted">{`$${stats.cost.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}`}</WorkStatusValue>}
+              value={<WorkStatusValue tone="muted">{formatCost(stats.cost)}</WorkStatusValue>}
             />
           ) : null}
         </>

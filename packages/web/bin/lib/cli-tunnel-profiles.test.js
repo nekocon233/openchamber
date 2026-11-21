@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getLegacyCloudflareManagedRemoteFilePath,
@@ -10,31 +10,30 @@ import {
 import {
   ensureTunnelProfilesMigrated,
   formatProfileEndpoint,
+  formatProfileTokenStatus,
   getCliManagedRemoteCredentialId,
   persistTunnelProfilesToDisk,
   redactProfileForOutput,
+  resolveProfileByName,
+  resolveToken,
+  writeManagedRemotePairsToDiskFromProfiles,
   writeTunnelProfilesToDisk,
 } from './cli-tunnel-profiles.js';
 
 let tempRoot;
-let priorDataDir;
 
 const readManagedRemoteCredentials = () => JSON.parse(
   fs.readFileSync(getLegacyCloudflareManagedRemoteFilePath(), 'utf8')
 );
 
 beforeEach(() => {
-  priorDataDir = process.env.OPENCHAMBER_DATA_DIR;
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-cli-profile-test-'));
-  process.env.OPENCHAMBER_DATA_DIR = tempRoot;
+  vi.stubEnv('OPENCHAMBER_DATA_DIR', tempRoot);
 });
 
 afterEach(() => {
-  if (typeof priorDataDir === 'string') {
-    process.env.OPENCHAMBER_DATA_DIR = priorDataDir;
-  } else {
-    delete process.env.OPENCHAMBER_DATA_DIR;
-  }
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -107,7 +106,6 @@ describe('FRPC tunnel profiles', () => {
       mode: 'managed-remote',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-
       customDomain: 'openchamber.internal',
       hostname: 'app.example.com',
       token: 'http-profile-test-token',
@@ -252,21 +250,33 @@ describe('FRPC tunnel profiles', () => {
     fs.mkdirSync(path.dirname(pairsPath), { recursive: true });
     fs.writeFileSync(pairsPath, JSON.stringify({
       version: 1,
-      tunnels: [{
-        id: getCliManagedRemoteCredentialId('cloudflare-main'),
-        name: 'cloudflare-main',
-        hostname: 'cli.example.com',
-        token: 'cli-token',
-        updatedAt: 31,
-      }],
+      tunnels: [
+        {
+          id: getCliManagedRemoteCredentialId('cloudflare-main'),
+          name: 'cloudflare-main',
+          hostname: 'cli.example.com',
+          token: 'cli-token',
+          updatedAt: 31,
+        },
+        {
+          id: getCliManagedRemoteCredentialId('invalid'),
+          name: 'invalid',
+          hostname: 'cli.example.com',
+          token: false,
+        },
+        null,
+      ],
     }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    const existingPairs = fs.readFileSync(pairsPath);
 
     const migrated = ensureTunnelProfilesMigrated({ shouldWarn: false });
 
+    expect(migrated.profiles).toHaveLength(1);
     expect(migrated.profiles[0].id).toBe('cloudflare-main');
     expect(readManagedRemoteCredentials().tunnels[0].id).toBe(
       getCliManagedRemoteCredentialId('cloudflare-main')
     );
+    expect(fs.readFileSync(pairsPath)).toEqual(existingPairs);
   });
 
   it('does not import an unowned Settings credential as a CLI profile', () => {
@@ -366,5 +376,84 @@ describe('FRPC tunnel profiles', () => {
 
     expect(fs.readFileSync(getTunnelProfilesFilePath(), 'utf8')).toBe(originalProfiles);
     expect(fs.readFileSync(getLegacyCloudflareManagedRemoteFilePath(), 'utf8')).toBe(originalCredentials);
+  });
+});
+
+const profile = {
+  id: 'saved',
+  name: 'constructor',
+  provider: 'cloudflare',
+  mode: 'managed-remote',
+  hostname: 'app.example.com',
+  token: 'saved-token',
+  createdAt: -1.5,
+  updatedAt: 2.5,
+};
+
+describe('tunnel profile persistence', () => {
+  it('treats non-string tokens as missing during redaction and status formatting', () => {
+    expect(redactProfileForOutput({ token: 42 }, true)).toEqual({ hasToken: false });
+    expect(redactProfileForOutput({ token: 42 }, false)).toEqual({ hasToken: false });
+    expect(formatProfileTokenStatus({ token: 42 })).toBe('token:missing');
+  });
+
+  it('preserves token source validation and file failures', () => {
+    expect(resolveToken({ token: ' flag-token ' })).toBe('flag-token');
+    expect(resolveToken({})).toBeUndefined();
+    expect(resolveToken({ token: null })).toBeUndefined();
+    expect(resolveToken({ token: 42 })).toBeUndefined();
+    expect(() => resolveToken({ token: 'flag-token', tokenFile: 'missing' })).toThrow('Multiple token sources');
+    expect(() => resolveToken({ tokenFile: path.join(tempRoot, 'missing') })).toThrow('not found.');
+  });
+
+  it('normalizes profiles, deduplicates names, and preserves finite timestamps', () => {
+    writeTunnelProfilesToDisk({
+      profiles: [
+        { ...profile, name: ' constructor ', provider: ' Cloudflare ', token: ' saved-token ' },
+        { ...profile, id: 'duplicate', name: 'CONSTRUCTOR' },
+        { ...profile, name: 'missing-token', token: 42 },
+        'constructor',
+        null,
+      ],
+    });
+
+    const store = ensureTunnelProfilesMigrated({ shouldWarn: false });
+    expect(store).toEqual({ version: 2, profiles: [profile] });
+    expect(resolveProfileByName(store.profiles, 'CONSTRUCTOR', undefined).profile).toEqual(profile);
+  });
+
+  it('does not use a non-array profiles property as a list', () => {
+    writeTunnelProfilesToDisk({ profiles: Object.prototype.constructor });
+
+    expect(JSON.parse(fs.readFileSync(getTunnelProfilesFilePath(), 'utf8'))).toEqual({
+      version: 2,
+      profiles: [],
+    });
+  });
+
+  it('replaces unchecked timestamp values with the current time', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(900);
+    writeTunnelProfilesToDisk({ profiles: [{ ...profile, createdAt: '12', updatedAt: Infinity }] });
+
+    expect(ensureTunnelProfilesMigrated({ shouldWarn: false }).profiles).toEqual([
+      { ...profile, createdAt: 900, updatedAt: 900 },
+    ]);
+  });
+
+  it('keeps the legacy cloudflare projection and excludes other providers', () => {
+    writeManagedRemotePairsToDiskFromProfiles({
+      profiles: [profile, { ...profile, id: 'other', provider: 'ngrok' }],
+    });
+
+    expect(JSON.parse(fs.readFileSync(getLegacyCloudflareManagedRemoteFilePath(), 'utf8'))).toEqual({
+      version: 1,
+      tunnels: [{
+        id: getCliManagedRemoteCredentialId(profile.id),
+        name: profile.name,
+        hostname: profile.hostname,
+        token: profile.token,
+        updatedAt: profile.updatedAt,
+      }],
+    });
   });
 });

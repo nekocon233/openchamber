@@ -23,7 +23,7 @@ const replacementRows = (patch: string): ConciseDiffRow[] | null => {
     try {
         // The UI normalizes away structural trailing newlines. Missing file
         // newlines are recorded by explicit patch markers, not this delimiter.
-        const patches = parsePatchFiles(patch.endsWith('\n') ? patch : `${patch}\n`, undefined, true);
+        const patches = parsePatchFiles(patch.endsWith('\n') ? patch : `${patch}\n`);
         const file = patches[0]?.files[0];
         if (patches.length !== 1 || patches[0].files.length !== 1 || !file || file.hunks.length !== 1) return null;
         const hunk = file.hunks[0];

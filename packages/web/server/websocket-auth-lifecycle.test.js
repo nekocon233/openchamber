@@ -15,7 +15,7 @@ import {
   notificationAuthMatchesSelector,
   subscribeNotificationAuthInvalidation,
 } from './lib/notifications/auth-runtime.js';
-import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
+import { createTunnelAuth } from './lib/tunnels/tunnel-auth.js';
 import { createRequestSecurityRuntime } from './lib/security/request-security.js';
 import { createTerminalRuntime } from './lib/terminal/runtime.js';
 import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
@@ -65,6 +65,7 @@ const createGlobalHub = () => ({
   subscribeEvent: () => () => {},
   subscribeStatus: () => () => {},
   replayAfter: () => [],
+  cursor: () => null,
   flushPending() {},
   isConnected: () => true,
   start() {},

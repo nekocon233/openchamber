@@ -1,3 +1,4 @@
+import { beginLayoutAnimation, holdLayoutAnimation, LAYOUT_ANIMATION_EASING, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
@@ -5,7 +6,6 @@ import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { PauseClock } from '@/components/ui/pause-clock';
-import { beginLayoutAnimation, LAYOUT_ANIMATION_EASING, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
 import type { SidebarPeek } from './useSidebarPeek';
 import { clampSidebarWidth, getSidebarWidth } from '@/lib/workspace/sidebarGeometry';
@@ -16,9 +16,7 @@ interface SidebarProps {
     isMobile: boolean;
     children: React.ReactNode;
     className?: string;
-    /** Fixed strip rendered above the scrollable content (e.g. toggle + project actions). */
     topBar?: React.ReactNode;
-    /** The collapsed sidebar shown over the chat on hover (`useSidebarPeek`). */
     peek?: SidebarPeek;
     /** Draws the column as a framed card like the editor layout's other panels. */
     framed?: boolean;
@@ -33,7 +31,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
     const startWidthRef = React.useRef(getSidebarWidth(sidebarWidth));
     const resizingWidthRef = React.useRef<number | null>(null);
     const activeResizePointerIDRef = React.useRef<number | null>(null);
+    const releaseResizeHoldRef = React.useRef<(() => void) | null>(null);
     const sidebarRef = React.useRef<HTMLDivElement | null>(null);
+    const titlebarOverlayRef = React.useRef<HTMLElement | null>(null);
+
+    const getTitlebarOverlay = React.useCallback(() => {
+        const cached = titlebarOverlayRef.current;
+        if (cached?.isConnected) {
+            return cached;
+        }
+
+        const overlay = document.querySelector<HTMLElement>('[data-titlebar-left-controls]');
+        titlebarOverlayRef.current = overlay;
+        return overlay;
+    }, []);
 
     const applyLiveWidth = React.useCallback((nextWidth: number) => {
         const sidebar = sidebarRef.current;
@@ -45,11 +56,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         sidebar.style.minWidth = `${nextWidth}px`;
         sidebar.style.maxWidth = `${nextWidth}px`;
         sidebar.style.setProperty('--oc-left-sidebar-width', `${nextWidth}px`);
-        // A drag writes the DOM directly and does not re-render, so the root
-        // copy has to be written here too or the titlebar overlay keeps
-        // capping itself to the width the drag started from.
-        document.documentElement.style.setProperty('--oc-left-sidebar-width', `${nextWidth}px`);
-    }, []);
+        const overlay = getTitlebarOverlay();
+        if (overlay) {
+            overlay.style.setProperty('--oc-left-sidebar-width', `${nextWidth}px`);
+        }
+    }, [getTitlebarOverlay]);
 
     React.useEffect(() => {
         if (isMobile && isResizing) {
@@ -61,28 +72,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         if (!isResizing) {
             resizingWidthRef.current = null;
             activeResizePointerIDRef.current = null;
+            releaseResizeHoldRef.current?.();
+            releaseResizeHoldRef.current = null;
         }
     }, [isResizing]);
+
+    React.useEffect(() => {
+        if (!isOpen && isResizing) setIsResizing(false);
+    }, [isOpen, isResizing]);
+
+    React.useEffect(() => () => {
+        releaseResizeHoldRef.current?.();
+        releaseResizeHoldRef.current = null;
+    }, []);
 
     const openWidth = getSidebarWidth(sidebarWidth);
     const appliedWidth = isOpen ? openWidth : 0;
     const currentWidth = isResizing ? (resizingWidthRef.current ?? appliedWidth) : appliedWidth;
     const publishedWidth = isResizing ? currentWidth : openWidth;
 
-    // The titlebar overlay that floats above the sidebar is a sibling of it, not
-    // a child, so it cannot read the width published on <aside>. Publish it on
-    // the root as well, the way --oc-header-height and --oc-titlebar-start-inset
-    // already are, so the overlay can cap itself to the sidebar. It is the open
-    // width, which a toggle leaves alone: a new value on the root restyles the
-    // whole document.
     React.useEffect(() => {
         document.documentElement.style.setProperty('--oc-left-sidebar-width', `${publishedWidth}px`);
-    }, [publishedWidth]);
+        const overlay = titlebarOverlayRef.current;
+        if (!isResizing && overlay) {
+            overlay.style.removeProperty('--oc-left-sidebar-width');
+        }
+    }, [publishedWidth, isResizing]);
 
-    // The session list stays mounted while the sidebar is closed, so opening it
-    // does not build the list again. Once the close animation has finished its
-    // content is skipped by rendering (`content-visibility: hidden`); it is
-    // shown again in the frame the sidebar starts to open.
     const [contentSkipped, setContentSkipped] = React.useState(!isOpen);
     if (isOpen && contentSkipped) {
         setContentSkipped(false);
@@ -123,6 +139,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         startWidthRef.current = appliedWidth;
         resizingWidthRef.current = appliedWidth;
         applyLiveWidth(appliedWidth);
+        releaseResizeHoldRef.current?.();
+        releaseResizeHoldRef.current = holdLayoutAnimation();
         event.preventDefault();
     };
 
@@ -157,17 +175,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         resizingWidthRef.current = null;
         setIsResizing(false);
         setSidebarWidth(finalWidth);
+        releaseResizeHoldRef.current?.();
+        releaseResizeHoldRef.current = null;
     };
 
-    // The column never changes its own accessibility state: a toggle hides or
-    // shows only its content, which is the landmark (`aside`), and only through
-    // `inert`. Chrome re-serializes the accessibility tree around a node whose
-    // own hidden state flips, and this column sits beside the transcript, so
-    // `aria-hidden` here cost a 40 to 55 ms frame at the start of every
-    // toggle whenever an accessibility client was on. `inert` already removes
-    // the content from the accessibility tree and from focus.
-    // Collapsed and hovered: the column stays at zero width, so the chat does
-    // not move, and the sidebar slides out over it from the start edge.
     const peekState = !isOpen && peek ? peek.state : false;
     const peeking = peekState !== false;
     const peekAnimation = peeking && peek && peek.animationMs > 0
@@ -185,9 +196,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
                 overlay ? 'absolute inset-s-0 inset-y-0 z-40' : 'relative',
                 overlay && !framed && 'shadow-xl',
                 !peeking && 'overflow-hidden',
-                // In the class, not the inline style: an inline transition
-                // outranked `motion-reduce:transition-none`, so the sidebar
-                // still animated for readers who asked for reduced motion.
                 isResizing ? 'transition-none' : 'transition-[width,min-width,max-width] motion-reduce:transition-none',
                 !isOpen && !framed && 'border-e-0',
                 className,
@@ -264,7 +272,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
             >
                 <PauseClock paused={!isOpen && !peeking}>
                     {topBar}
-                    <ScrollableOverlay outerClassName="flex-1 min-h-0" disableHorizontal>
+                    <ScrollableOverlay outerClassName="overlay-scrollbar-wrapper--no-gutter flex-1 min-h-0" disableHorizontal>
                         <ErrorBoundary>{children}</ErrorBoundary>
                     </ScrollableOverlay>
                 </PauseClock>

@@ -2,8 +2,6 @@
 export const linearIssuePickerI18n = {
   en: {
     'chat.chatInput.actions.linkTrackerItem': 'Link {provider} Issue',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Open issue in {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Remove linked {provider} issue',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Open {identifier} in {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'A {provider} issue',
     'chat.chatInput.actions.linkLinearIssue': 'Link Linear Issue',
@@ -14,8 +12,6 @@ export const linearIssuePickerI18n = {
   },
   nl: {
     'chat.chatInput.actions.linkTrackerItem': '{provider}-issue koppelen',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Issue in {provider} openen',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Gekoppeld {provider}-issue verwijderen',
     'chat.workStatus.linkedIssues.openTrackerItem': '{identifier} in {provider} openen',
     'session.newWorktree.actions.startFromTrackerItem': 'Starten vanuit {provider}-issue',
     'chat.chatInput.actions.linkLinearIssue': 'Linear-issue koppelen',
@@ -26,8 +22,6 @@ export const linearIssuePickerI18n = {
   },
   de: {
     'chat.chatInput.actions.linkTrackerItem': '{provider}-Issue verknüpfen',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Issue in {provider} öffnen',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Verknüpftes {provider}-Issue entfernen',
     'chat.workStatus.linkedIssues.openTrackerItem': '{identifier} in {provider} öffnen',
     'session.newWorktree.actions.startFromTrackerItem': 'Von {provider}-Issue starten',
     'chat.chatInput.actions.linkLinearIssue': 'Linear-Issue verknüpfen',
@@ -38,8 +32,6 @@ export const linearIssuePickerI18n = {
   },
   fr: {
     'chat.chatInput.actions.linkTrackerItem': 'Lier un ticket {provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Ouvrir le ticket dans {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Retirer le ticket {provider} lié',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Ouvrir {identifier} dans {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Démarrer depuis un ticket {provider}',
     'chat.chatInput.actions.linkLinearIssue': 'Lier un ticket Linear',
@@ -50,8 +42,6 @@ export const linearIssuePickerI18n = {
   },
   es: {
     'chat.chatInput.actions.linkTrackerItem': 'Vincular issue de {provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Abrir issue en {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Quitar issue de {provider} vinculado',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Abrir {identifier} en {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Empezar desde un issue de {provider}',
     'chat.chatInput.actions.linkLinearIssue': 'Vincular issue de Linear',
@@ -62,8 +52,6 @@ export const linearIssuePickerI18n = {
   },
   ja: {
     'chat.chatInput.actions.linkTrackerItem': '{provider} Issueをリンク',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': '{provider}でIssueを開く',
-    'chat.chatInput.linked.trackerItem.removeAria': 'リンクした{provider} Issueを削除',
     'chat.workStatus.linkedIssues.openTrackerItem': '{provider}で {identifier} を開く',
     'session.newWorktree.actions.startFromTrackerItem': '{provider} Issueから開始',
     'chat.chatInput.actions.linkLinearIssue': 'Linear Issueをリンク',
@@ -74,8 +62,6 @@ export const linearIssuePickerI18n = {
   },
   'pt-BR': {
     'chat.chatInput.actions.linkTrackerItem': 'Vincular issue do {provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Abrir issue no {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Remover issue do {provider} vinculada',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Abrir {identifier} no {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Começar a partir de uma issue do {provider}',
     'chat.chatInput.actions.linkLinearIssue': 'Vincular issue do Linear',
@@ -86,8 +72,6 @@ export const linearIssuePickerI18n = {
   },
   uk: {
     'chat.chatInput.actions.linkTrackerItem': 'Прив’язати {provider} issue',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Відкрити issue в {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Прибрати прив’язаний {provider} issue',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Відкрити {identifier} у {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Почати з {provider} issue',
     'chat.chatInput.actions.linkLinearIssue': 'Прив’язати Linear issue',
@@ -98,8 +82,6 @@ export const linearIssuePickerI18n = {
   },
   ko: {
     'chat.chatInput.actions.linkTrackerItem': '{provider} 이슈 연결',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': '{provider}에서 이슈 열기',
-    'chat.chatInput.linked.trackerItem.removeAria': '연결된 {provider} 이슈 제거',
     'chat.workStatus.linkedIssues.openTrackerItem': '{provider}에서 {identifier} 열기',
     'session.newWorktree.actions.startFromTrackerItem': '{provider} 이슈에서 시작',
     'chat.chatInput.actions.linkLinearIssue': 'Linear 이슈 연결',
@@ -110,8 +92,6 @@ export const linearIssuePickerI18n = {
   },
   pl: {
     'chat.chatInput.actions.linkTrackerItem': 'Powiąż zgłoszenie {provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'Otwórz zgłoszenie w {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'Usuń powiązane zgłoszenie {provider}',
     'chat.workStatus.linkedIssues.openTrackerItem': 'Otwórz {identifier} w {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Zacznij od zgłoszenia {provider}',
     'chat.chatInput.actions.linkLinearIssue': 'Powiąż zgłoszenie Linear',
@@ -122,8 +102,6 @@ export const linearIssuePickerI18n = {
   },
   'zh-CN': {
     'chat.chatInput.actions.linkTrackerItem': '关联 {provider} Issue',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': '在 {provider} 中打开 Issue',
-    'chat.chatInput.linked.trackerItem.removeAria': '移除已关联的 {provider} Issue',
     'chat.workStatus.linkedIssues.openTrackerItem': '在 {provider} 中打开 {identifier}',
     'session.newWorktree.actions.startFromTrackerItem': '从 {provider} Issue 开始',
     'chat.chatInput.actions.linkLinearIssue': '关联 Linear Issue',
@@ -134,8 +112,6 @@ export const linearIssuePickerI18n = {
   },
   'zh-TW': {
     'chat.chatInput.actions.linkTrackerItem': '關聯 {provider} Issue',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': '在 {provider} 中開啟 Issue',
-    'chat.chatInput.linked.trackerItem.removeAria': '移除已關聯的 {provider} Issue',
     'chat.workStatus.linkedIssues.openTrackerItem': '在 {provider} 中開啟 {identifier}',
     'session.newWorktree.actions.startFromTrackerItem': '從 {provider} Issue 開始',
     'chat.chatInput.actions.linkLinearIssue': '關聯 Linear Issue',
@@ -146,8 +122,6 @@ export const linearIssuePickerI18n = {
   },
   tr: {
     'chat.chatInput.actions.linkTrackerItem': '{provider} Issue bağla',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': "Issue'u {provider} üzerinde aç",
-    'chat.chatInput.linked.trackerItem.removeAria': "Bağlı {provider} issue'u kaldır",
     'chat.workStatus.linkedIssues.openTrackerItem': "{identifier} issue'unu {provider} üzerinde aç",
     'session.newWorktree.actions.startFromTrackerItem': "{provider} Issue'dan başla",
     'chat.chatInput.actions.linkLinearIssue': 'Linear Issue bağla',
@@ -158,8 +132,6 @@ export const linearIssuePickerI18n = {
   },
   ar: {
     'chat.chatInput.actions.linkTrackerItem': 'ربط مهمة {provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'فتح المهمة في {provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'إزالة مهمة {provider} المرتبطة',
     'chat.workStatus.linkedIssues.openTrackerItem': 'فتح {identifier} في {provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'مهمة {provider}',
     'chat.chatInput.actions.linkLinearIssue': 'ربط مهمة Linear',
@@ -170,8 +142,6 @@ export const linearIssuePickerI18n = {
   },
   he: {
     'chat.chatInput.actions.linkTrackerItem': 'קשר Issue מ-{provider}',
-    'chat.chatInput.linked.trackerItem.openInBrowserAria': 'פתח את ה-Issue ב-{provider}',
-    'chat.chatInput.linked.trackerItem.removeAria': 'הסר את ה-Issue המקושר מ-{provider}',
     'chat.workStatus.linkedIssues.openTrackerItem': 'פתח את {identifier} ב-{provider}',
     'session.newWorktree.actions.startFromTrackerItem': 'Issue מ-{provider}',
     'chat.chatInput.actions.linkLinearIssue': 'קשר Issue מ-Linear',

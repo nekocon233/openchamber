@@ -47,10 +47,14 @@ test('manifests combine after partial build failures while publication stays str
 test('publication stays with upstream, so this fork publishes Desktop artifacts only', () => {
   // The finalizer counts skipped jobs as done, so the fork's policy rests on
   // every publication the fork does not run keeping its own repository guard.
-  assert.equal(
-    workflow.jobs['publish-npm'].if,
-    "${{ github.repository == 'openchamber/openchamber' && github.event.inputs.finish_published_release != 'true' }}",
-  );
+  const expression = workflow.jobs['publish-npm'].if.trim().slice(3, -2);
+  const canPublishNpm = (repository, inputs = {}) => runInNewContext(expression, {
+    github: { repository, event: { inputs } },
+  });
+  assert.equal(canPublishNpm('nekocon233/openchamber'), false);
+  assert.equal(canPublishNpm('openchamber/openchamber'), true);
+  assert.equal(canPublishNpm('openchamber/openchamber', { finish_published_release: 'true' }), false);
+  assert.equal(canPublishNpm('openchamber/openchamber', { skip_npm: 'true' }), false);
   assert.match(workflow.jobs['mobile-release'].if, /github\.repository == 'openchamber\/openchamber'/);
 
   const finalizeSteps = workflow.jobs['finalize-release'].steps;

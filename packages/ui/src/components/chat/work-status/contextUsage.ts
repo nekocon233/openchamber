@@ -1,25 +1,10 @@
-/**
- * Context-window usage for a specific session.
- *
- * The header's readout cannot serve this panel. It reads the current
- * session's messages with **no directory**, which resolves to the *current*
- * directory's child store. A session held by another directory — a worktree,
- * or any moment right after a directory switch — therefore reads as "no
- * messages" and the readout silently disappears while the header still shows
- * a value.
- *
- * This computes the same quantity from messages the caller has already
- * subscribed to for a known session and directory, so there is no hidden
- * global read to race with.
- */
 
-import { findLatestContextFill, resolveContextReadingLimits, type ContextFillMessage } from '@/stores/utils/tokenUtils';
+import { computeCacheHitRate, findLatestContextFill, resolveContextReadingLimits, type ContextFillMessage } from '@/stores/utils/tokenUtils';
 
 type WorkStatusContextUsage =
   | {
     state: 'measured';
     totalTokens: number;
-    /** Context limit actually used for the ratio, after the default fallback. */
     limit: number;
     /** Unrounded, so the panel and the header cannot disagree by a rounding step. */
     percent: number | null;
@@ -29,17 +14,8 @@ type WorkStatusContextUsage =
   /** Compacted since the last response that reported tokens: the fill is unknown, not zero. */
   | { state: 'compacted'; limit: number; window: number; compactionThreshold?: number };
 
-/** The store's own fallback when a model exposes no context limit. */
 export const DEFAULT_CONTEXT_LIMIT = 200_000;
 
-/**
- * Usage from the newest assistant message that reported a non-zero token count,
- * or `compacted` when a finished compaction is newer than any such message
- * (see `findLatestContextFill`). The latest turn describes the current fill —
- * not a sum across turns. Within a turn, the server-reported `total` is the
- * final round-trip's window; summing the breakdown fields instead overstates
- * multi-step turns, whose input/cache fields accumulate across round-trips.
- */
 export const computeContextUsage = (
   messages: readonly ContextFillMessage[],
   contextLimit: number,
@@ -52,4 +28,46 @@ export const computeContextUsage = (
 
   return { state: 'measured', totalTokens: fill.totalTokens, ...limits,
     percent: limits.limit > 0 ? (fill.totalTokens / limits.limit) * 100 : null };
+};
+
+export const computeLastReplyCacheHit = (messages: readonly ContextFillMessage[]): number | null => {
+  const fill = findLatestContextFill(messages);
+  if (fill?.state !== 'measured') return null;
+  const hitRate = computeCacheHitRate(messages[fill.index]?.tokens);
+  return hitRate.hasInput ? hitRate.percent : null;
+};
+
+type SessionTokenRecord = {
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  };
+};
+
+type SessionTokenTotals = {
+  prompt: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheHitPercent: number | null;
+};
+
+export const computeSessionTokenTotals = (session: SessionTokenRecord | null | undefined): SessionTokenTotals | null => {
+  const tokens = session?.tokens;
+  if (!tokens) return null;
+  const cacheRead = tokens.cache?.read ?? 0;
+  const cacheWrite = tokens.cache?.write ?? 0;
+  const totals = {
+    prompt: (tokens.input ?? 0) + cacheRead + cacheWrite,
+    output: tokens.output ?? 0,
+    reasoning: tokens.reasoning ?? 0,
+    cacheRead,
+    cacheWrite,
+  };
+  if (totals.prompt + totals.output + totals.reasoning <= 0) return null;
+  const hitRate = computeCacheHitRate(tokens);
+  return { ...totals, cacheHitPercent: hitRate.hasInput ? hitRate.percent : null };
 };

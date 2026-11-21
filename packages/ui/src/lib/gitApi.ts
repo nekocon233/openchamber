@@ -32,16 +32,9 @@ const getRuntimeGit = () => {
   return getRegisteredRuntimeAPIs()?.git ?? null;
 };
 
-// A registered runtime that omits an operation does not have it. Falling back
-// to the HTTP adapter would call a server that runtime does not run.
 const unsupportedByRuntime = (operation: string): Promise<never> =>
   Promise.reject(new GitNetworkOperationRequestError('RUNTIME_UNSUPPORTED', `${operation} is not supported in this runtime`, 501));
 
-// Runtime git adapters (the VS Code bridge today) do not go through the HTTP
-// adapter's cache, so the invalidation signal `useGitStore` relies on has to be
-// emitted here, at the dispatch layer, once a runtime mutation succeeds. The
-// HTTP adapter keeps emitting it itself when it clears its own cache, so a
-// mutation is announced exactly once on either path.
 const runtimeStatusMutation = async <T>(directory: string, mutation: Promise<T>): Promise<T> => {
   const result = await mutation;
   notifyGitStatusInvalidated(directory);
@@ -94,7 +87,6 @@ export async function resolveGitPrimaryRoot(directory: string): Promise<string> 
   return result.root;
 }
 
-/** Where `directory` sits inside its repository's checkout; `''` at the root. Rejects when unknown. */
 export async function resolveGitRepositoryPrefix(directory: string): Promise<string> {
   const runtime = getRuntimeGit();
   if (runtime?.resolveRepositoryPrefix) return runtime.resolveRepositoryPrefix(directory);
@@ -182,9 +174,6 @@ export async function getGitUnpushedBranchCounts(directory: string, branches: st
 
 const COMMIT_DIFF_FILE_LIMIT = 30;
 const COMMIT_DIFF_TOTAL_CHAR_LIMIT = 120_000;
-// Each in-flight file issues a staged + unstaged pair, so the peak request
-// count here is twice this value. Two matches the store's diff-prefetch
-// concurrency and keeps the browser connection pool able to serve the UI.
 const COMMIT_DIFF_CONCURRENCY = 2;
 
 const collectSelectedFileDiffs = async (directory: string, files: string[]): Promise<string> => {
@@ -221,9 +210,6 @@ const collectSelectedFileDiffs = async (directory: string, files: string[]): Pro
 const COMMIT_STYLE_SAMPLE_COUNT = 10;
 const COMMIT_STYLE_SUBJECT_CHAR_LIMIT = 200;
 
-// Recent commit subjects give the model the repository's own commit style —
-// language, prefixes, capitalization — instead of a hardcoded English default.
-// A repository with no history yet is normal, so an empty sample is not an error.
 const collectRecentCommitSubjects = async (directory: string): Promise<string> => {
   try {
     const log = await getGitLog(directory, { maxCount: COMMIT_STYLE_SAMPLE_COUNT });
@@ -253,10 +239,6 @@ const parseCommitStructured = (structured: Record<string, unknown> | null): { su
   return { subject, highlights };
 };
 
-// Legacy transport: run the structured generation inside the active chat
-// session. Kept as the fallback for setups with no direct provider login
-// (vanilla installs on OpenCode's free models), where the small-model
-// endpoint has nothing to call but the session itself still works.
 async function generateCommitMessageViaSession(
   directory: string,
   visiblePrompt: string,
@@ -318,8 +300,6 @@ export async function generateCommitMessage(
     }, { notifyOnError: false });
 
     if (response.status === 404) {
-      // No authenticated provider has a small model — fall back to the
-      // session transport so free-model-only setups keep a working button.
       console.info('[git-generation][browser] small model unavailable, falling back to session transport');
       assertGenerationRuntime(expectedRuntime);
       const result = await generateCommitMessageViaSession(directory, visiblePrompt, hiddenPrompt, expectedRuntime);
@@ -361,11 +341,6 @@ export async function generateCommitMessage(
   }
 }
 
-// Conventional pull request template locations. GitHub resolves `.github/`
-// first, then the repository root, then `docs/`; both casings are probed
-// because case-sensitive filesystems treat them as different files. GitLab
-// keeps its merge request templates in `.gitlab/merge_request_templates/`,
-// where `Default.md` is the one applied without an explicit choice.
 const PULL_REQUEST_TEMPLATE_PATHS = [
   '.github/pull_request_template.md',
   '.github/PULL_REQUEST_TEMPLATE.md',
@@ -399,11 +374,7 @@ const readOptionalRepoTextFile = async (directory: string, relativePath: string)
   }
 };
 
-// A repository that ships a PR template expects descriptions in its shape, so
-// the template wins over the built-in section layout. Missing template is the
-// normal case, not a failure: probing stops at the first file that has content.
 const collectPullRequestTemplate = async (directory: string, provider: ChangeRequestProviderWords | undefined): Promise<string> => {
-  // A provider's own templates (GitLab's merge request template) come before any GitHub-style one the project may also carry.
   const own = provider?.features.changeRequestTemplates ?? [];
   const paths = [...own, ...PULL_REQUEST_TEMPLATE_PATHS.filter((candidate) => !own.includes(candidate))];
   const noun = provider?.terminology.promptNoun ?? 'pull request';
@@ -417,7 +388,6 @@ const collectPullRequestTemplate = async (directory: string, provider: ChangeReq
       length: trimmed.length,
     });
     const body = trimmed.slice(0, PULL_REQUEST_TEMPLATE_CHAR_LIMIT);
-    // Leading blank line keeps the block visually separate from the file list.
     return [
       '',
       '',
@@ -431,7 +401,6 @@ const collectPullRequestTemplate = async (directory: string, provider: ChangeReq
   return '';
 };
 
-/** What a generation prompt says of the project's provider: its name, its English noun, its template paths. */
 type ChangeRequestProviderWords = Pick<SourceControlProviderDescriptor, 'label' | 'terminology' | 'features'>;
 
 export async function generatePullRequestDescription(
@@ -531,8 +500,6 @@ export async function generatePullRequestDescription(
     }, { notifyOnError: false });
 
     if (response.status === 404) {
-      // No authenticated provider has a small model — fall back to the
-      // session transport so free-model-only setups keep working.
       console.info('[git-generation][browser] small model unavailable, falling back to session transport');
       assertGenerationRuntime(expectedRuntime);
       const generationSession = await resolveGenerationSessionContext(expectedRuntime);
@@ -733,8 +700,6 @@ const runStructuredGenerationInActiveSession = async ({
   requestChatForceScrollBottom(generationSession.sessionId);
 
   assertGenerationRuntime(generationSession.expectedRuntime);
-  // v2 generates in the session's own context and answers with the text, so
-  // the generation no longer lands in the transcript as a prompt/reply pair.
   const assistantText = await opencodeClient.generateSessionText(
     generationSession.sessionId,
     prompt,
@@ -820,7 +785,18 @@ async function deleteGitWorktree(
   return gitHttp.deleteGitWorktree(directory, payload);
 }
 
-/** Renames the task of the worktree at `directory`; the user's name stays over the agent's. */
+async function teardownGitWorktree(
+  directory: string,
+  payload: import('./api/types').TeardownGitWorktreePayload
+): Promise<{ success: boolean }> {
+  const runtime = getRuntimeGit();
+  if (runtime?.worktree?.teardown) {
+    return runtime.worktree.teardown(directory, payload);
+  }
+  if (runtime) throw new Error('Running teardown commands alone is not available here');
+  return gitHttp.teardownGitWorktree(directory, payload);
+}
+
 export async function setGitWorktreeTitle(
   directory: string,
   title: string,
@@ -834,10 +810,6 @@ export async function setGitWorktreeTitle(
   return gitHttp.setGitWorktreeTitle(directory, title, by);
 }
 
-/**
- * Pins the task of the worktree at `directory` to the top of the sidebar, or
- * unpins it. `list` files the pin in one of the user's pin lists; null is Pinned.
- */
 export async function setGitWorktreePinned(
   directory: string,
   pinned: boolean,
@@ -862,10 +834,6 @@ export async function snapshotGitWorktree(
   return gitHttp.snapshotGitWorktree(directory, payload);
 }
 
-/**
- * Worktree archives exist where the runtime's git offers them: web and the
- * desktop app, through the server. VS Code keeps its own list without them.
- */
 export const canArchiveWorktrees = (): boolean => {
   const runtime = getRuntimeGit();
   return runtime ? Boolean(runtime.worktree?.archive && runtime.worktree.listArchives && runtime.worktree.restoreArchive && runtime.worktree.deleteArchive) : true;
@@ -892,6 +860,7 @@ export const git = {
     validate: validateGitWorktree,
     create: createGitWorktree,
     remove: deleteGitWorktree,
+    teardown: teardownGitWorktree,
     snapshot: snapshotGitWorktree,
     archive: (directory: string, payload: import('./api/types').ArchiveGitWorktreePayload) => runtimeWorktreeArchives().archive(directory, payload),
     listArchives: (directory: string) => runtimeWorktreeArchives().listArchives(directory),
@@ -973,15 +942,18 @@ export async function getGitCommitDiff(directory: string, options: import('./api
   return gitHttp.getGitCommitDiff(directory, options);
 }
 
+export const getGitRangeFileVersions = gitHttp.getGitRangeFileVersions;
+
 export async function getCommitFileDiff(
   directory: string,
   hash: string,
   filePath: string,
-  isBinary: boolean
+  isBinary: boolean,
+  previousPath?: string,
 ): Promise<import('./api/types').CommitFileDiffResponse> {
   const runtime = getRuntimeGit();
   if (runtime) return runtime.getCommitFileDiff ? runtime.getCommitFileDiff(directory, hash, filePath, isBinary) : unsupportedByRuntime('getCommitFileDiff');
-  return gitHttp.getCommitFileDiff(directory, hash, filePath, isBinary);
+  return gitHttp.getCommitFileDiff(directory, hash, filePath, isBinary, previousPath);
 }
 
 export async function getGitIdentities(): Promise<import('./api/types').GitIdentityProfile[]> {
@@ -1070,10 +1042,6 @@ export async function resetToCommit(
   return gitHttp.resetToCommit(directory, hash, mode, force);
 }
 
-/**
- * Whether `directory` exists inside the checkout at `worktreeRoot` once both
- * are canonicalized, so a symlink out of the checkout reports `insideWorktreeRoot: false`.
- */
 export async function validateWorktreeDirectory(directory: string, worktreeRoot: string): Promise<{
   valid: boolean;
   insideWorktreeRoot: boolean;

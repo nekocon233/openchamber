@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { registerCommonRequestMiddleware } from '../opencode/core-routes.js';
+import path from 'node:path';
+import { registerCommonRequestMiddleware } from '../server-frame/core-routes.js';
 import { registerProjectDirectoryRoutes } from './routes.js';
 
 const createApp = (overrides = {}) => {
@@ -38,7 +39,7 @@ describe('OpenChamber project directory route', () => {
       .send({ path: '/projects/testing-one', create: true })
       .expect(200);
 
-    expect(dependencies.fsPromises.mkdir).toHaveBeenCalledWith('/projects/testing-one', { recursive: true });
+    expect(dependencies.fsPromises.mkdir).toHaveBeenCalledWith(path.resolve('/projects/testing-one'), { recursive: true });
     expect(dependencies.validateDirectoryPath).toHaveBeenCalledWith('/projects/testing-one');
     expect(dependencies.sidebarStateRuntime.applyOperation).toHaveBeenCalledWith({
       type: 'project.add',
@@ -64,8 +65,36 @@ describe('OpenChamber project directory route', () => {
     expect(dependencies.fsPromises.mkdir).not.toHaveBeenCalled();
   });
 
-  it('activates an existing project without adding it again', async () => {
-    const project = { id: 'existing', path: '/projects/existing', addedAt: 123 };
+  it.each([false, 'true', 1, null, {}, []].map((create) => [create]))('creates nothing for a non-literal create value: %j', async (create) => {
+    const { app, dependencies } = createApp();
+    await request(app).post('/api/openchamber/directory')
+      .send({ path: '/projects/existing', create }).expect(200);
+    expect(dependencies.fsPromises.mkdir).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ message: 'Plain error' }, 'Plain error'],
+    [Object.create({ message: 'Inherited error' }), 'Inherited error'],
+    ['error', 'Failed to update working directory'],
+    [null, "Cannot read properties of null (reading 'message')"],
+    [undefined, "Cannot read properties of undefined (reading 'message')"],
+  ])('preserves thrown message handling for %j', async (cause, expected) => {
+    const { app } = createApp({
+      persistSettings: async () => { throw cause; },
+    });
+    app.use((error, _req, res, _next) => res.status(500).json({ error: error.message }));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await request(app).post('/api/openchamber/directory')
+        .send({ path: '/projects/new' }).expect(500);
+      expect(response.body).toEqual({ error: expected });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('activates an existing project without duplicating it or changing its metadata', async () => {
+    const project = { id: 'existing', path: '/projects/existing', addedAt: 123, lastOpenedAt: 456 };
     const { app, dependencies } = createApp({
       sidebarStateRuntime: {
         readSnapshot: vi.fn(async () => ({ projects: [project] })),

@@ -4,17 +4,8 @@ import { runtimeFetch } from './runtime-fetch';
 
 const errorSchema = z.object({ error: z.string().min(1) }).catch({ error: '' });
 
-/**
- * Sends the user's answer to a secret an agent is waiting on (secret.request):
- * the value, or a decline. The server writes the value to a private file and
- * only the file's path reaches the agent. A request that no longer waits,
- * because it was answered elsewhere or its turn ended, is refused with the
- * server's message. `directory` is the session's: in an isolated space the
- * call waits on the space's own server, which is also where the agent's
- * commands read the file.
- */
 export async function answerSecretRequest(
-    input: { sessionId: string; callId: string } & ({ value: string } | { declined: true }),
+    input: { sessionId: string; callId: string } & ({ value: string } | { values: Record<string, string>; remember: string[] } | { declined: true }),
     directory: string | undefined,
 ): Promise<void> {
     const response = await runtimeFetch('/api/openchamber/secret/answer', {
@@ -26,4 +17,17 @@ export async function answerSecretRequest(
     if (response.ok) return;
     const payload = errorSchema.parse(await response.json().catch(() => null));
     throw new Error(payload.error || `The secret was not saved (${response.status})`);
+}
+
+const secretRunFieldsSchema = z.object({ fields: z.array(z.string()), reused: z.array(z.string()) });
+
+export async function readSecretRunFields(
+    input: { sessionId: string; callId: string },
+    directory: string | undefined,
+): Promise<z.infer<typeof secretRunFieldsSchema> | null> {
+    const query = new URLSearchParams({ sessionId: input.sessionId, callId: input.callId });
+    const response = await runtimeFetch(`/api/openchamber/secret/fields?${query.toString()}`, { directory });
+    if (!response.ok) return null;
+    const parsed = secretRunFieldsSchema.safeParse(await response.json().catch(() => null));
+    return parsed.success ? parsed.data : null;
 }

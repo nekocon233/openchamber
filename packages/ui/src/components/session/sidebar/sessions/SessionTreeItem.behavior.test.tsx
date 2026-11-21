@@ -28,7 +28,6 @@ mock.module('./hooks/useSessionActions', () => ({
       args.setEditingId(id);
       args.setEditTitle(title);
     },
-    handleCopySessionId: () => undefined,
     handleDeleteSession: () => undefined,
     handleRestoreSession: () => undefined,
   }),
@@ -60,10 +59,10 @@ describe('SessionTreeItem public behavior', () => {
     const current = { ...session('chat'), metadata: { openchamber: { work: { state: 'open' } } } };
     const props: SessionTreeItemProps = {
       node: { session: current, children: [], worktree: null },
-      pinnedSessionIds: ids, expandedParents: ids, hasSessionSearchQuery: false, normalizedSessionSearchQuery: '',
-      notifyOnSubtasks: false, editingId: null, editingRowKey: null, editTitle: '', openSidebarMenuKey: null,
+      pinnedSessionIds: ids, expandedParents: ids,
+      editingId: null, editingRowKey: null, editTitle: '', openSidebarMenuKey: null,
       setEditingId: noop, setEditingRowKey: noop, setEditTitle: noop, toggleParent: noop, setOpenSidebarMenuKey: noop,
-      allowReselect: false, resetSessionSearch: noop, deleteSessionConfirm: null, setDeleteSessionConfirm: noop,
+      allowReselect: false, deleteSessionConfirm: null, setDeleteSessionConfirm: noop,
       startFolderRename: noop, startSessionWorktreeMenuLoad: noopStartSessionWorktreeMenuLoad,
       mobileVariant: false, alwaysShowActions: false, renderContext: 'tree-chat',
     };
@@ -113,9 +112,6 @@ describe('SessionTreeItem public behavior', () => {
         node={rowNode}
         pinnedSessionIds={new Set()}
         expandedParents={new Set()}
-        hasSessionSearchQuery={false}
-        normalizedSessionSearchQuery=""
-        notifyOnSubtasks={false}
         editingId={editingId}
         editingRowKey={editingRowKey}
         setEditingId={setEditingId}
@@ -126,7 +122,6 @@ describe('SessionTreeItem public behavior', () => {
         openSidebarMenuKey={menuKey}
         setOpenSidebarMenuKey={setMenuKey}
         allowReselect={false}
-        resetSessionSearch={noop}
         deleteSessionConfirm={null}
         setDeleteSessionConfirm={noop}
         startFolderRename={noop}

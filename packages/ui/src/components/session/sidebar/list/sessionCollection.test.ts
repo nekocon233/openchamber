@@ -2,11 +2,9 @@ import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { opencodeClient } from '@/lib/opencode/client';
 import { describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
-import { deriveRecentSessions } from '../recent/activitySections';
 import {
   buildActiveSessionNode,
   buildSidebarSessionProjection,
-  buildZoneSessionNode,
   getDescendantIds,
   partitionSidebarSessions,
   projectSidebarActiveSessions,
@@ -23,6 +21,12 @@ const session = (id: string, directory: string | null): Session => {
 };
 
 describe('projectSidebarActiveSessions', () => {
+  test('admits project descendants but not sibling prefixes or differently cased host paths', () => {
+    expect(projectSidebarActiveSessions({
+      globalActiveSessions: [session('child', '/Kept/subdir'), session('sibling', '/Kept-other'), session('case', '/kept')],
+      liveSessions: [], knownDirectories: new Set(['/Kept']), isVSCode: false,
+    }).map(entry => entry.id)).toEqual(['child']);
+  });
   test('keeps case-insensitive membership local to projection without rewriting request paths', () => {
     const knownDirectories = new Set(['/Users/Developer/Project']);
     const input = {
@@ -63,7 +67,7 @@ describe('projectSidebarActiveSessions', () => {
     }).map((entry) => entry.id)).toEqual(['known']);
   });
 
-  test('allows missing or unknown directories for web when no directories are known', () => {
+  test('hides missing or unknown directories for web when no projects are registered', () => {
     const sessions = [session('unknown', '/workspace/unknown'), session('empty', null)];
 
     expect(projectSidebarActiveSessions({
@@ -71,10 +75,10 @@ describe('projectSidebarActiveSessions', () => {
       liveSessions: [],
       knownDirectories: new Set(),
       isVSCode: false,
-    }).map((entry) => entry.id)).toEqual(['unknown', 'empty']);
+    }).map((entry) => entry.id)).toEqual([]);
   });
 
-  test('retains unknown active full-app records when topology directories are known', () => {
+  test('hides unknown active full-app records without removing raw input records', () => {
     const restored = { ...session('restored', '/deleted/worktrees/feature'), time: { created: 1, updated: 1 } };
 
     expect(projectSidebarActiveSessions({
@@ -82,10 +86,27 @@ describe('projectSidebarActiveSessions', () => {
       liveSessions: [],
       knownDirectories: new Set(['/workspace/known']),
       isVSCode: false,
-    }).map((entry) => entry.id)).toEqual(['restored']);
+    }).map((entry) => entry.id)).toEqual([]);
+    expect(restored.id).toBe('restored');
   });
 
-  test('keeps archived sessions despite directory filtering', () => {
+  test('keeps a subsession in an unknown folder under a parent it shows, and only there', () => {
+    const parent = session('parent', '/workspace/known');
+    const worker = { ...session('worker', '/removed/worktree'), parentID: 'parent' };
+    const grandchild = { ...session('grandchild', '/removed/worktree'), parentID: 'worker' };
+    const stray = { ...session('stray', '/removed/worktree'), parentID: 'unlisted' };
+    const input = {
+      globalActiveSessions: [parent, worker, grandchild, stray, session('root', '/removed/worktree')],
+      liveSessions: [],
+      knownDirectories: new Set(['/workspace/known']),
+      isVSCode: false,
+    };
+    expect(projectSidebarActiveSessions(input).map((entry) => entry.id)).toEqual(['parent', 'worker', 'grandchild']);
+    expect(buildSidebarSessionProjection({ ...input, pinnedSessionIds: new Set(), sessionOrderRanks: new Map() })
+      .childrenMap.get('parent')?.map((entry) => entry.id)).toEqual(['worker']);
+  });
+
+  test('hides archived sessions in unregistered directories too', () => {
     const archived = session('archived', '/workspace/unknown');
     archived.time.archived = 1;
 
@@ -94,7 +115,7 @@ describe('projectSidebarActiveSessions', () => {
       liveSessions: [],
       knownDirectories: new Set(['/workspace/known']),
       isVSCode: true,
-    }).map((entry) => entry.id)).toEqual(['archived']);
+    }).map((entry) => entry.id)).toEqual([]);
   });
 
   test('does not replace a filtered global record with a live duplicate', () => {
@@ -141,41 +162,27 @@ describe('projectSidebarCollection', () => {
     expect(after.map((entry) => entry.id)).toEqual(['a', 'b']);
   });
 
-  test('keeps project membership independent from Recent active membership', () => {
-    const input = {
-      globalActiveSessions: [session('old-root', '/workspace/a')],
-      liveSessions: [],
-      knownDirectories: new Set(['/workspace/a']),
-      isVSCode: false,
-    };
-    const projectBefore = projectSidebarCollection(input);
-    const recentBefore = deriveRecentSessions(projectBefore, new Set(), 200_000_000);
-    const projectAfter = projectSidebarCollection(input);
-    const recentAfter = deriveRecentSessions(projectAfter, new Set(['old-root']), 200_000_000);
-
-    expect(projectAfter).toEqual(projectBefore);
-    expect(recentBefore).toEqual([]);
-    expect(recentAfter.map((entry) => entry.id)).toEqual(['old-root']);
-  });
-
   test('keeps managed Chats in a dedicated projection and out of project ownership', () => {
     const managed = session('managed', '/home/.config/openchamber/chats/2026-08-24/session-managed');
-    const managedChild = { ...session('managed-child', '/home/.config/openchamber/chats/2026-08-24/session-managed'), parentID: 'managed' };
     const project = session('project', '/workspace/a');
-    const input = {
-      globalActiveSessions: [managed, managedChild, project],
+    const projects = projectSidebarCollection({
+      globalActiveSessions: [managed, project],
       liveSessions: [],
       knownDirectories: new Set(['/workspace/a']),
       isVSCode: false,
-    };
-    const projection = buildSidebarSessionProjection({ ...input, pinnedSessionIds: new Set(), sessionOrderRanks: new Map() });
+    });
 
-    expect(projectSidebarCollection(input).map((entry) => entry.id)).toEqual(['project']);
+    expect(projects.map((entry) => entry.id)).toEqual(['project']);
     expect(partitionSidebarSessions([managed, project], false).chatSessions.map((entry) => entry.id)).toEqual(['managed']);
-    // A chat's subagent stays under its root, as a project child does.
-    expect(projection.recentRootSessions.map((entry) => entry.id)).toEqual(['project', 'managed']);
-    expect(deriveRecentSessions(projection.recentRootSessions, new Set(['managed', 'project']), 200_000_000)
-      .map((entry) => entry.id)).toEqual(['project', 'managed']);
+  });
+
+  test("keeps a managed Chat's subsession in an unknown folder under that Chat", () => {
+    const chat = session('chat', '/home/.config/openchamber/chats/2026-08-24/session-chat');
+    const worker = { ...session('worker', '/removed/worktree'), parentID: 'chat' };
+    const input = { globalActiveSessions: [chat, worker], liveSessions: [], knownDirectories: new Set(['/workspace/a']), isVSCode: false };
+    expect(projectSidebarCollection(input).map((entry) => entry.id)).toEqual(['worker']);
+    expect(buildSidebarSessionProjection({ ...input, pinnedSessionIds: new Set(), sessionOrderRanks: new Map() })
+      .childrenMap.get('chat')?.map((entry) => entry.id)).toEqual(['worker']);
   });
 
   test('keeps managed Chats out of the VS Code sidebar', () => {
@@ -188,10 +195,6 @@ describe('projectSidebarCollection', () => {
       knownDirectories: new Set(),
       isVSCode: true,
     })).toEqual([]);
-    expect(buildSidebarSessionProjection({
-      globalActiveSessions: [managed], liveSessions: [], knownDirectories: new Set(), isVSCode: true,
-      pinnedSessionIds: new Set(), sessionOrderRanks: new Map(),
-    }).recentRootSessions).toEqual([]);
   });
 
   test('keeps a canonical managed chat visible when the server root uses different home casing', () => {
@@ -221,15 +224,35 @@ describe('projectSidebarCollection', () => {
 
     expect(projectSidebarCollection({ ...input, globalActiveSessions: [fork, project] }).map((entry) => entry.id)).toEqual(['project']);
     expect(partitionSidebarSessions([fork], false).chatSessions).toEqual([]);
-    expect(buildSidebarSessionProjection({
-      ...input, globalActiveSessions: [fork, project], pinnedSessionIds: new Set(), sessionOrderRanks: new Map(),
-    }).recentRootSessions.map((entry) => entry.id)).toEqual(['project']);
 
     const promoted = {
       ...fork,
       metadata: { openchamber: {} },
     };
     expect(partitionSidebarSessions([promoted], false).chatSessions.map((entry) => entry.id)).toEqual(['fork']);
+  });
+
+  test('keeps workflow agents in the hierarchy, where their requests count for the parent', () => {
+    const parent = { ...session('parent', '/workspace/a'), time: { created: 1, updated: 1 } };
+    const subagent = { ...session('subagent', '/workspace/a'), parentID: 'parent', time: { created: 2, updated: 2 } };
+    const agent = {
+      ...session('workflow-agent', '/workspace/a'),
+      parentID: 'parent',
+      time: { created: 3, updated: 3 },
+      metadata: { openchamber: { kind: 'workflow-agent' } },
+    };
+
+    const projection = buildSidebarSessionProjection({
+      globalActiveSessions: [parent, subagent, agent],
+      liveSessions: [],
+      knownDirectories: new Set(['/workspace/a']),
+      isVSCode: false,
+      pinnedSessionIds: new Set(),
+      sessionOrderRanks: new Map(),
+    });
+
+    // Their rows are left out where rows are listed (`listedChildren`).
+    expect(projection.childrenMap.get('parent')?.map((entry) => entry.id).sort()).toEqual(['subagent', 'workflow-agent']);
   });
 
   test('keeps a ranked managed root and its active child in the Chats hierarchy', () => {
@@ -254,6 +277,23 @@ describe('projectSidebarCollection', () => {
     expect(projection.chatSessions.map((entry) => entry.id)).toEqual(['managed-root', 'managed-child']);
     expect(projection.orderedSessions.map((entry) => entry.id)).toEqual(['managed-root', 'managed-child', 'project-root']);
     expect(projection.childrenMap.get('managed-root')?.map((entry) => entry.id)).toEqual(['managed-child']);
+  });
+
+  test('orders running sessions ahead of newer idle sessions when openTurnSessionIds is provided', () => {
+    const running = { ...session('running', '/workspace/a'), time: { created: 1, updated: 1 } };
+    const idle = { ...session('idle', '/workspace/a'), time: { created: 10, updated: 10 } };
+
+    const projection = buildSidebarSessionProjection({
+      globalActiveSessions: [idle, running],
+      liveSessions: [],
+      knownDirectories: new Set(['/workspace/a']),
+      isVSCode: false,
+      pinnedSessionIds: new Set(),
+      sessionOrderRanks: new Map(),
+      openTurnSessionIds: new Set(['running']),
+    });
+
+    expect(projection.projectSessions.map((entry) => entry.id)).toEqual(['running', 'idle']);
   });
 
 });
@@ -333,20 +373,6 @@ describe('buildActiveSessionNode', () => {
 
     expect(node.children.map((entry) => entry.session.id)).toEqual(['a']);
     expect(node.children[0]?.children).toEqual([]);
-  });
-});
-
-describe('buildZoneSessionNode', () => {
-  test('keeps the subtree only for an expandable zone row', () => {
-    const child = session('child', '/workspace');
-    const tree = buildActiveSessionNode(new Map([['root', [child]]]), session('root', '/workspace'));
-    const worktree = { path: '/workspace', projectDirectory: '/workspace', branch: 'main', label: 'main' };
-
-    expect(buildZoneSessionNode(tree, worktree, true)).toMatchObject({
-      worktree,
-      children: [{ session: { id: 'child' } }],
-    });
-    expect(buildZoneSessionNode(tree, worktree, false)).toMatchObject({ worktree, children: [] });
   });
 });
 

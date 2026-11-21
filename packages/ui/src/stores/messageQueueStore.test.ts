@@ -178,6 +178,7 @@ const createClient = (options: {
     let mutationCounter = 0;
     let claimCounter = 0;
     const store = createMessageQueueStore({
+        serverOwnsQueue: () => false,
         getAPI: () => options.api ?? authority.api,
         getRuntimeKey: options.getRuntimeKey ?? (() => 'runtime-a'),
         storage,
@@ -994,7 +995,7 @@ describe('host-authoritative follow-up queue client', () => {
         const { store } = createClient({ api, authority, storage, client: 'legacy-race' });
         const unwatch = store.getState().watchSession('session-one');
         const initialize = store.getState().initialize();
-        expect(store.getState().popToInput('session-one', 'legacy-race')?.content).toBe('legacy race');
+        expect((await store.getState().popToInput('session-one', 'legacy-race'))?.content).toBe('legacy race');
 
         resolveLoad(clone(authority.getSnapshot('session-one')));
         await initialize;

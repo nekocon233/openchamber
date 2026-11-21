@@ -4,20 +4,6 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { NATIVE_PROVIDER_ANTIGRAVITY } from '@/lib/native-agents/ids';
 
-/**
- * Provider ids the Small Model and Changes Walkthrough pickers may offer, from
- * `GET /api/small-model`. Antigravity is excluded because its native adapter
- * does not implement the Small Model protocol. `undefined` until the server answers.
- *
- * Asked again whenever the provider catalog changes. A panel that mounts while
- * OpenCode is still starting gets an empty answer, and asking once per mount
- * left a walkthrough panel restored at launch with an empty picker for the
- * whole run. The catalog arriving, a provider login and a runtime switch all
- * replace the catalog, and each can change this answer. A failed request keeps
- * the previous answer. The model list is directory-scoped, so the request
- * names the current directory; without one the picker would answer for
- * OpenCode's own working location, which need not hold the project's models.
- */
 export function useCallableModelProviders(enabled = true): string[] | undefined {
   const catalog = useConfigStore((state) => state.providers);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);

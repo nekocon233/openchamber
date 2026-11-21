@@ -304,6 +304,7 @@ export const useWebNotificationStream = (options?: { enabled?: boolean; deliverN
     // A second EventSource consumed another HTTP/1.1 slot in every browser tab.
     return subscribeOpenchamberEvents((event) => {
       if (event.type !== 'notification' || !deliverNotifications) return;
+      if (event.payload.kind === 'share-answer' && event.payload.toastOnly === true) return;
       if (desktopShell && getRuntimeKey() === 'local' && (event.payload.desktopNotificationDelivered || event.payload.desktopStdoutActive)) return;
       const settings = useUIStore.getState();
       if (!settings.nativeNotificationsEnabled) return;

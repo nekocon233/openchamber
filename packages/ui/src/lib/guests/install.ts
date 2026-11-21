@@ -18,6 +18,7 @@ const errorSchema = z.object({
     'id-taken',
     'already-installed',
     'missing-build',
+    'invalid-opencode-plugin',
     'host-too-old',
     'bundled',
     'reserved-id',
@@ -29,6 +30,7 @@ const errorSchema = z.object({
   ]),
   required: z.string().trim().min(1).max(64).optional(),
   id: z.string().trim().min(1).max(128).optional(),
+  reason: z.string().trim().min(1).max(1000).optional(),
 });
 
 export type InstallGuestErrorCode =
@@ -39,6 +41,7 @@ export type InstallGuestErrorCode =
   | 'id-taken'
   | 'already-installed'
   | 'missing-build'
+  | 'invalid-opencode-plugin'
   | 'host-too-old'
   | 'bundled'
   | 'reserved-id'
@@ -47,13 +50,12 @@ export type InstallGuestErrorCode =
   | 'extract-failed'
   | 'too-large'
   | 'enterprise-mode'
-  /** The server installed it, but this build cannot read the row it answered with. */
   | 'unreadable'
   | 'failed';
 
 type InstallGuestResult =
   | { ok: true; guest: InstalledGuest; replaced?: boolean }
-  | { ok: false; code: InstallGuestErrorCode; required?: string; id?: string; diagnostic?: GuestRequestFailure };
+  | { ok: false; code: InstallGuestErrorCode; required?: string; id?: string; reason?: string; diagnostic?: GuestRequestFailure };
 
 type UninstallGuestResult =
   | { ok: true }
@@ -88,7 +90,7 @@ export const parseInstallInput = (raw: string): ParseInstallInputResult => {
 
 const readInstallError = async (
   response: Response,
-): Promise<{ code: InstallGuestErrorCode; required?: string; id?: string }> => {
+): Promise<{ code: InstallGuestErrorCode; required?: string; id?: string; reason?: string }> => {
   try {
     const parsed = errorSchema.safeParse(JSON.parse(await response.text()));
     if (!parsed.success) {
@@ -102,6 +104,9 @@ const readInstallError = async (
     }
     if (parsed.data.id) {
       return { code: parsed.data.error, id: parsed.data.id };
+    }
+    if (parsed.data.error === 'invalid-manifest' && parsed.data.reason) {
+      return { code: 'invalid-manifest', reason: parsed.data.reason };
     }
     return { code: parsed.data.error };
   } catch {
@@ -153,12 +158,6 @@ export const installGuest = async (
   }
 };
 
-/**
- * Send a `.zip` picked or dropped in the browser to the host. Same result
- * shape as `installGuest`, so one flow handles both; the archive travels as a
- * raw octet-stream body over `runtimeFetch`, which is what the files tree
- * upload uses too, so relay and tunnel runtimes carry it unchanged.
- */
 export const uploadGuestZip = async (
   file: File,
   options: InstallGuestOptions = {},
@@ -188,8 +187,6 @@ export const uninstallGuest = async (id: string): Promise<UninstallGuestResult> 
     const response = await runtimeFetch(`/api/guests/${id}`, { method: 'DELETE' });
     if (response.status === 204) {
       if (storageId && globalThis.indexedDB) {
-        // Server removal has already succeeded. A failed local cleanup cannot undo it;
-        // the retired installation identity makes any retained bytes inaccessible.
         await removeDeviceGuestStorage({ runtimeKey, guestId: id, storageId }).catch(() => {
           console.warn('Could not clear local extension preferences.');
         });
@@ -216,7 +213,6 @@ export const setGuestEnabled = async (id: string, enabled: boolean): Promise<boo
   }
 };
 
-/** Record the user's answer to the approval dialog. An empty list withdraws approval. */
 export const approveGuestCapabilities = async (id: string, granted: readonly GuestCapability[]): Promise<boolean> => {
   try {
     const response = await runtimeFetch(`/api/guests/${id}/capabilities`, {

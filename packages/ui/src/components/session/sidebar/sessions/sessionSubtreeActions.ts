@@ -5,10 +5,11 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
 import { describeSessionActionError } from './sessionActionError';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
-import { nativeBackendOfSessionId, isUnifiedNativeSessionId } from '@/lib/native-agents/ids';
+import { isUnifiedNativeSessionId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import { readGlobalSessionLineage } from '@/stores/sessionLineage';
 import { useSessionUIStore, type SessionUIState } from '@/sync/session-ui-store';
-import { buildActiveSessionNode, getDescendantIds } from '../list/sessionCollection';
+import { buildActiveSessionNode } from '../list/sessionCollection';
 import type { SessionNode } from '../types';
 
 type Translate = (key: I18nKey, params?: I18nParams) => string;
@@ -25,56 +26,35 @@ type SessionSubtreeOutcome = {
   failedIds: string[];
 };
 
-/**
- * Every descendant an archive or delete should reach, resolved when the user
- * acts rather than while rows render.
- *
- * `knownDescendantIds` is what the surface already sees: the rendered tree on
- * desktop, the active list on mobile. Both stop at an archived child, so an
- * active subagent under an archived intermediate stayed behind (an edge #2580
- * pointed out). The global cache holds active and archived sessions together,
- * so walking it from the root reaches through archived intermediates. Archived
- * sessions are then dropped for archive, which must not retimestamp them, and
- * kept for delete, which removes the whole subtree.
- *
- * A Claude Code session's subagent sessions are part of its transcript: the
- * server archives, restores and deletes them with it, so none is acted on
- * alone.
- */
 export const collectSessionSubtreeIds = (
   rootId: string,
   knownDescendantIds: readonly string[],
   includeArchived: boolean,
 ): string[] => {
   if (nativeBackendOfSessionId(rootId) === 'claude' || isUnifiedNativeSessionId(rootId)) return [];
-  const global = useGlobalSessionsStore.getState();
-  const childrenByParentId = new Map<string, Session[]>();
-  for (const session of [...global.activeSessions, ...global.archivedSessions]) {
-    const parentId = session.parentID;
-    if (!parentId) continue;
-    const siblings = childrenByParentId.get(parentId) ?? [];
-    siblings.push(session);
-    childrenByParentId.set(parentId, siblings);
-  }
   const ids = new Set(knownDescendantIds);
-  for (const id of getDescendantIds(childrenByParentId, rootId)) {
-    if (!includeArchived && global.entityById.get(id)?.time?.archived) continue;
-    ids.add(id);
-  }
+  const descendants = readGlobalSessionLineage().descendantsOf(rootId, includeArchived ? 'all' : 'activeThroughArchived');
+  for (const descendant of descendants) ids.add(descendant.id);
   ids.delete(rootId);
   return [...ids];
 };
 
-/**
- * A session's active subtree from the global cache, built the way the project
- * tree builds it: it stops at an archived session and everything below it.
- * In work, Pinned and the List view render a root with no children, so an
- * action that needs the subagents of such a row resolves them here when the
- * user acts.
- */
+export const collectParentIdDescendantIds = (root: SessionNode): string[] => {
+  const ids: string[] = [];
+  const visit = (node: SessionNode): void => {
+    for (const child of node.children) {
+      if (child.session.parentID !== node.session.id) continue;
+      ids.push(child.session.id);
+      visit(child);
+    }
+  };
+  visit(root);
+  return ids;
+};
+
 export const buildActiveSessionTreeFromCache = (root: Session): SessionNode => {
   const childrenByParentId = new Map<string, Session[]>();
-  for (const session of useGlobalSessionsStore.getState().activeSessions) {
+  for (const session of readGlobalSessionLineage().descendantsOf(root.id, 'active')) {
     const parentId = session.parentID;
     if (!parentId) continue;
     const siblings = childrenByParentId.get(parentId) ?? [];
@@ -84,40 +64,20 @@ export const buildActiveSessionTreeFromCache = (root: Session): SessionNode => {
   return buildActiveSessionNode(childrenByParentId, root);
 };
 
-/**
- * Every descendant a move to another worktree takes along: the row's rendered
- * tree (`knownDescendants`) plus the active subtree from the global cache, so
- * a move from a flat row takes the subagents along as a move from the project
- * tree always did.
- */
 export const collectSessionMoveDescendants = (root: Session, knownDescendants: readonly Session[]): Session[] => {
   const descendants = new Map(knownDescendants.map((session) => [session.id, session]));
-  const walk = (node: SessionNode): void => {
-    for (const child of node.children) {
-      if (!descendants.has(child.session.id)) descendants.set(child.session.id, child.session);
-      walk(child);
-    }
-  };
-  walk(buildActiveSessionTreeFromCache(root));
+  for (const descendant of readGlobalSessionLineage().descendantsOf(root.id, 'active')) {
+    if (!descendants.has(descendant.id)) descendants.set(descendant.id, descendant);
+  }
   descendants.delete(root.id);
   return [...descendants.values()];
 };
 
-// The first recorded server answer for the failed ids, as a toast description.
 const failureDescription = (ids: readonly string[], t: Translate): { description: string } | undefined => {
   const error = takeSessionActionFailure(ids);
   return error ? { description: describeSessionActionError(error, t) } : undefined;
 };
 
-/**
- * Undo an archive that just succeeded.
- *
- * Restores exactly the sessions that archive moved, on the runtime they were
- * archived on. When the archive closed the open session (`reopenId`) and the
- * user has not opened another one since, it opens again, so the screen returns
- * to where it was. Archive side effects that are not archive state, such as a
- * deleted btw fork, are not undone.
- */
 export const undoArchive = async (
   archivedIds: readonly string[],
   reopenId: string | null,
@@ -136,7 +96,6 @@ export const undoArchive = async (
   if (session) ui.setCurrentSession(reopenId, resolveGlobalSessionDirectory(session));
 };
 
-/** Toast options offering Undo for an archive that just succeeded. */
 export const archiveUndoToastOptions = (
   archivedIds: readonly string[],
   reopenId: string | null,
@@ -151,16 +110,6 @@ export const archiveUndoToastOptions = (
   };
 };
 
-/**
- * Archive or hard-delete a session together with its descendants.
- *
- * The server does not cascade `time.archived`, so a parent archived on its own
- * leaves its subagents active as orphan roots. Desktop sidebar rows, Recent,
- * managed Chats, and the mobile sessions sheet resolve the subtree first and
- * run it through here, so the calls made and the outcome the user sees stay
- * the same: a lone session keeps the singular copy, a subtree reports counts,
- * and a partial failure says how many sessions were left behind.
- */
 export const runSessionSubtreeAction = async (
   action: SessionSubtreeAction,
   session: Session,
@@ -187,9 +136,6 @@ export const runSessionSubtreeAction = async (
 
   const ids = [session.id, ...descendantIds];
   if (hardDelete) {
-    // Delete root + all descendants individually. If the server
-    // cascade-deletes some children before we get to them, 404 is
-    // treated as success by deleteSession and no rollback occurs.
     const { deletedIds, failedIds } = await store.deleteSessions(ids);
     if (failedIds.length === 0) {
       const totalDeleted = deletedIds.length;
@@ -215,17 +161,4 @@ export const runSessionSubtreeAction = async (
       : t('sessions.sidebar.bulkActions.failedArchivePlural', { count: failedIds.length }), failureDescription(failedIds, t));
   }
   return { succeededIds: archivedIds, failedIds };
-};
-
-export const collectParentIdDescendantIds = (root: SessionNode): string[] => {
-  const ids: string[] = [];
-  const visit = (node: SessionNode): void => {
-    for (const child of node.children) {
-      if (child.session.parentID !== node.session.id) continue;
-      ids.push(child.session.id);
-      visit(child);
-    }
-  };
-  visit(root);
-  return ids;
 };

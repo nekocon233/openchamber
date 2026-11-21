@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { appendInstalledSources, isInstalledFromSource, readInstalledSources, removeInstalledSources } from './installed-sources.js';
+import {
+  appendInstalledSources, isInstalledFromSource, readInstalledSources,
+  readInstalledSourcesForProject, removeInstalledSources,
+} from './installed-sources.js';
 
 let dataDir;
 let previousDataDir;
@@ -31,6 +34,15 @@ const entry = (overrides = {}) => ({
 });
 
 describe('installed skill provenance registry', () => {
+  it('retains unchecked metadata and the original untrimmed identity fields', () => {
+    const raw = entry({ skillName: ' skill-creator ', sourceId: ' acme ', scope: 42, source: null, sourceRef: { raw: true } });
+    fs.writeFileSync(path.join(dataDir, 'skills-installed-sources.json'), JSON.stringify({ version: 1, entries: [raw] }));
+
+    expect(readInstalledSources().get('skill-creator')).toEqual([raw]);
+    appendInstalledSources([entry({ skillName: 'other', skillDir: 'other' })]);
+    expect(readInstalledSources().get('skill-creator')).toEqual([raw]);
+  });
+
   it('round-trips entries keyed by skill name', () => {
     appendInstalledSources([entry(), entry({ skillName: 'other', sourceId: 'other', skillDir: 'skills/other' })]);
 
@@ -90,5 +102,19 @@ describe('installed skill provenance registry', () => {
     expect(isInstalledFromSource(byName, 'skill-creator', 'acme', 'skills/skill-creator')).toBe(true);
     expect(isInstalledFromSource(byName, 'skill-creator', 'other', 'skills/skill-creator')).toBe(false);
     expect(isInstalledFromSource(byName, 'unrecorded', 'any', 'skills/unrecorded')).toBe(true);
+  });
+
+  it('scopes same-named catalog skills to the project and install scope', () => {
+    appendInstalledSources([
+      entry({ scope: 'project', projectDirectory: '/projects/alpha', sourceId: 'alpha' }),
+      entry({ scope: 'project', projectDirectory: '/projects/beta', sourceId: 'beta' }),
+      entry({ scope: 'user', sourceId: 'user-catalog' }),
+    ]);
+    const beta = readInstalledSourcesForProject('/projects/beta');
+    expect(isInstalledFromSource(beta, 'skill-creator', 'alpha', 'skills/skill-creator', 'project')).toBe(false);
+    expect(isInstalledFromSource(beta, 'skill-creator', 'beta', 'skills/skill-creator', 'project')).toBe(true);
+    expect(isInstalledFromSource(beta, 'skill-creator', 'beta', 'skills/skill-creator', 'user')).toBe(false);
+    const manualProject = readInstalledSourcesForProject('/projects/manual');
+    expect(isInstalledFromSource(manualProject, 'skill-creator', 'other', 'skills/skill-creator', 'project')).toBe(true);
   });
 });

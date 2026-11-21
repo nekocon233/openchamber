@@ -1,53 +1,72 @@
 import React from 'react';
+import { CollapsedSessionActivityIndicator } from '../sessions/collapsedActivityIndicator';
 import {
   DndContext,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
+  DragOverlay,
+  MeasuringStrategy,
+  type Active,
+  type DragEndEvent,
 } from '@dnd-kit/core';
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Button } from '@/components/ui/button';
-import { formatDirectoryName, formatPathForDisplay } from '@/lib/utils';
+import { cn, formatPathForDisplay } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { isVSCodeRuntime, requestDirectoryAccess } from '@/lib/desktop';
+import { isVSCodeRuntime } from '@/lib/desktop';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { CHAT_DRAFT_PROJECT_ID } from '@/lib/chatDirectories';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
-import { refreshGlobalSessions } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useChildStoreManager } from '@/sync/sync-context';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import type { ProjectSortOrder, WorktreeSortOrder } from '@/stores/useSessionDisplayStore';
+import type { ProjectSortOrder } from '@/stores/useSessionDisplayStore';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
-import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
 import { SessionSidebarFolderItem } from '../folders/SessionSidebarFolderItem';
 import { SessionTreeItem } from '../sessions/SessionTreeItem';
 import { RunSidebarRow } from '../sessions/RunSidebarRow';
 import { computeNodeStructureKey, nodeContainsSessionId } from '../sessions/sessionNodeItemUtils';
-import { DroppableFolderWrapper } from '../folders/sessionFolderDnd';
+import { DroppableFolderWrapper, SessionFolderOwnersProvider } from '../folders/sessionFolderDnd';
+import { sessionFolderCollision } from '../folders/sessionFolderCollision';
+import { applySessionFolderDrop, resolveCurrentSessionFolderDropSource, resolveCurrentSessionFolderDropTarget } from '../folders/sessionFolderDrop';
 import { FolderDeleteConfirmDialog, type DeleteFolderConfirmState } from '../shell/ConfirmDialogs';
 import type { SessionGroup } from '../types';
-import { SessionSidebarRows } from '../SessionSidebarRows';
-import { sessionTreeTextInset } from '../sessions/sessionTreeGeometry';
-import { SessionSidebarActivityHeader } from '../sessionSidebarHeaderPresentation';
-import { resolveSessionSidebarStickyHeader, type SessionSidebarRow, type SessionSidebarRowModel } from '../sessionSidebarRowModel';
-import { SortableGroupItem, SortableProjectItem } from './sortableItems';
+import { SessionSidebarRows, type SessionSidebarHeldRow } from '../SessionSidebarRows';
+import { copyDragSource, keepRowInList, ROW_DRAG_AUTO_SCROLL, useRowDragSensors } from '../rowDrag';
+import { RowDragPreview } from '../RowDragPreview';
+import { SidebarConversationRow, SidebarSearchArchivedCaption, SidebarSearchShowMore, SidebarSearchMore, type SidebarSearchPresentation } from '../SidebarConversationRow';
+import { setSidebarBlockDrag, useSidebarBlockDragStore } from '../list/blockDrag';
+import { removeFolderFromSections, saveSidebarSections, useSidebarSectionsUiStore } from '../sections/sectionActions';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
+import { SortableSidebarSection } from './SortableSidebarSection';
+import { sectionDragId, sectionIdOfRow } from './sectionDrag';
+import { sessionDetailedRowPaddingLeft, sessionTreeTextInset } from '../sessions/sessionTreeGeometry';
+import { SessionSidebarActivityHeader, SessionSidebarCaption } from '../sessionSidebarHeaderPresentation';
+import { useSidebarPages } from '../pages/useSidebarPages';
+import { SidebarPageRow } from '../pages/SidebarPageRow';
+import { isPinnedZoneRowKey, resolveSessionSidebarStickyHeader, type SessionSidebarRow, type SessionSidebarRowModel } from '../sessionSidebarRowModel';
+import { SortableProjectItem } from './sortableItems';
+import { WorktreeWorkRow } from '../works/WorktreeWorkRow';
+import { SessionDraftRow } from '../works/SessionDraftRow';
+import { isGroupWork } from '../works/sidebarWorks';
 import { SessionGroupSection, type SessionGroupSectionProps } from './SessionGroupSection';
 import type { ProjectSection } from './sessionProjectRender';
-import { formatProjectLabel } from '../utils';
 import { CrossfadeZoneHeader, CrossfadeZoneHeaders } from './CrossfadeZoneHeaders';
+import { getPinnedZoneHeaderHeight } from './pinnedZoneHeader';
 import { prepareSessionProjectAction } from './sessionProjectActionContext';
-import { selectArchiveAllSessionIds } from './archiveAllSessions';
+import { applyShowControl, getProjectLabel, grantGroupAccess, retryGroupStatus, toggleActivityZone, toggleProjectsCaption } from './sessionProjectListActions';
+import { countArchiveAllOutcome, selectArchiveAllSessionIds, withArchiveAllSubtrees } from './archiveAllSessions';
+import { collectSessionSubtreeIds } from '../sessions/sessionSubtreeActions';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui';
-import { isSessionPinned, useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
+import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
+import { isSessionPinned } from '@/lib/sessionPins';
 import { isSessionBusyNow } from '@/sync/session-actions';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { isSessionInWork } from '@/lib/sessionWorkMetadata';
+import { useOpenProjectOnBoard } from '@/components/sourceBoard/openTrackerItem';
+import { useProjectsInSidebarOrder } from '../list/useProjectsInSidebarOrder';
+import { useResumeOpenCodeFolder } from '@/components/projects/useOpenCodeTrustPause';
 
 type SessionProjectScrollerState = Pick<SessionGroupSectionProps,
   | 'editingId'
@@ -62,13 +81,12 @@ type SessionProjectScrollerState = Pick<SessionGroupSectionProps,
 };
 
 type GroupProps = Pick<SessionGroupSectionProps,
-  | 'hasSessionSearchQuery' | 'normalizedSessionSearchQuery' | 'groupSearchDataByGroup'
   | 'collapsedGroups' | 'hideDirectoryControls' | 'mobileVariant' | 'alwaysShowActions'
-  | 'activeProjectId' | 'notifyOnSubtasks' | 'expandedParents' | 'editTitle'
+  | 'activeProjectId' | 'expandedParents' | 'editTitle'
   | 'editingRowKey'
   | 'folderRename' | 'setFolderRenameDraft' | 'clearFolderRename'
   | 'setEditingId' | 'setEditingRowKey' | 'setEditTitle' | 'toggleParent' | 'allowReselect'
-  | 'onSessionSelected' | 'resetSessionSearch' | 'deleteSessionConfirm'
+  | 'onSessionSelected' | 'deleteSessionConfirm'
   | 'setDeleteSessionConfirm' | 'startFolderRename'
   | 'startSessionWorktreeMenuLoad'
 > & { pinnedSessionIds: Set<string>; sessionOrderIndex: Map<string, number> };
@@ -78,7 +96,8 @@ type GroupActions = Pick<SessionGroupSectionProps,
   | 'setSessionSwitcherOpen' | 'openNewSessionDraft' | 'onToggleCollapsedGroup'
 >;
 
-type SessionProjectScrollerModel = {
+export type SessionProjectScrollerModel = {
+  search?: SidebarSearchPresentation;
   rowModel: SessionSidebarRowModel;
   sectionsForRender: ProjectSection[];
   projectSections: ProjectSection[];
@@ -90,17 +109,17 @@ type SessionProjectScrollerModel = {
   groupProps: GroupProps;
 };
 
-type View = {
+export type SessionProjectScrollerView = {
   homeDirectory: string | null;
   hasSessionSearchQuery: boolean;
   hideDirectoryControls: boolean;
   mobileVariant: boolean;
   alwaysShowActions: boolean;
+  isVSCode: boolean;
   projectSortOrder: ProjectSortOrder;
-  worktreeSortOrder: WorktreeSortOrder;
 };
 
-type Actions = {
+export type SessionProjectScrollerActions = {
   group: GroupActions;
   toggleProject: (id: string) => void;
   setActiveProjectIdOnly: (id: string) => void;
@@ -111,92 +130,114 @@ type Actions = {
   openProjectEditDialog: (id: string) => void;
   removeProject: (id: string) => void;
   reorderProjects: (fromIndex: number, toIndex: number) => void;
-  setGroupOrderByProject: React.Dispatch<React.SetStateAction<Map<string, string[]>>>;
   renderProjectStatusIndicator?: (projectId: string, groups: SessionGroup[]) => React.ReactNode;
   setSingleProjectId: (id: string) => void;
 };
 
-type Props = { model: SessionProjectScrollerModel; view: View; actions: Actions };
+export type SessionProjectListProps = { model: SessionProjectScrollerModel; view: SessionProjectScrollerView; actions: SessionProjectScrollerActions };
 
 const FLAT_TEXT_INSET_PX = 10;
 
-const getProjectLabel = (project: ProjectSection['project'], homeDirectory: string | null): string => formatProjectLabel(
-  project.label?.trim() || formatDirectoryName(project.normalizedPath, homeDirectory) || project.normalizedPath,
-);
+const PROJECTS_SORT_GROUP = 'projects';
+const ROW_DRAG_MODIFIERS = [keepRowInList];
+const ROW_DRAG_MEASURING = { droppable: { strategy: MeasuringStrategy.Always } };
 
-function SessionProjectScrollerComponent({ model, view, actions }: Props): React.ReactNode {
+type SidebarDragData = {
+  type?: 'session' | 'project' | 'section';
+  sessionId?: string;
+  rowKey?: string;
+  sortGroup?: string;
+  sectionId?: string;
+};
+
+// SAFETY: every drag payload in the sidebar comes from its own rows:
+// DraggableSessionRow, SortableProjectItem and SortableSidebarSection.
+const readDragData = (active: Active): SidebarDragData => (active.data.current ?? {}) as SidebarDragData;
+
+
+function SessionProjectScrollerComponent({ model, view, actions }: SessionProjectListProps): React.ReactNode {
   streamPerfCount('ui.sidebar_projects_list.render');
   const { t } = useI18n();
   const childStores = useChildStoreManager();
+  const resumeFolder = useResumeOpenCodeFolder();
   const { files } = useRuntimeAPIs();
   const toggleFolderCollapse = useSessionFoldersStore((state) => state.toggleFolderCollapse);
   const renameFolder = useSessionFoldersStore((state) => state.renameFolder);
   const deleteFolder = useSessionFoldersStore((state) => state.deleteFolder);
   const addSessionToFolder = useSessionFoldersStore((state) => state.addSessionToFolder);
   const showDeletionDialog = useUIStore((state) => state.showDeletionDialog);
-  // A project's isolated spaces page: while the feature's switch is on, and never in VS Code (decision 16).
   const spacesPageAvailable = useUIStore((state) => state.isolatedSpacesEnabled) && !isVSCodeRuntime();
+  const openProjectOnBoard = useOpenProjectOnBoard();
   const [folderDeleteConfirm, setFolderDeleteConfirm] = React.useState<DeleteFolderConfirmState>(null);
   const [stickyIdentity, setStickyIdentity] = React.useState<string | null>(null);
   const [focusedRowKey, setFocusedRowKey] = React.useState<string | null>(null);
   const [scrollElement, setScrollElement] = React.useState<HTMLElement | null>(null);
-  // What is being dragged decides which headers take part in the sort: a
-  // project moves among projects, a worktree among its own project's
-  // worktrees. Mixing them shifted worktree headers under a dragged project
-  // and let it drop on a worktree, which moved nothing.
-  const [activeDrag, setActiveDrag] = React.useState<{ kind: 'project' } | { kind: 'group'; projectId: string | null } | null>(null);
-  const isProjectDragging = activeDrag?.kind === 'project';
+  const blockDrag = useSidebarBlockDragStore((state) => state.kind);
+  const [dragSource, setDragCopy] = React.useState<Element | null>(null);
+  const heldRowRef = React.useRef<SessionSidebarHeldRow | null>(null);
+  const foldFrameRef = React.useRef<number | null>(null);
+  React.useEffect(() => () => {
+    if (foldFrameRef.current !== null) cancelAnimationFrame(foldFrameRef.current);
+    setSidebarBlockDrag(null);
+  }, []);
   const scrollContainerRef = React.useRef<HTMLElement | null>(null);
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useRowDragSensors({ keyboard: true });
+  const savedSections = useSessionDisplayStore((state) => state.sections);
+  const editingSection = useSidebarSectionsUiStore((state) => state.draft !== null);
   const setScrollContainer = React.useCallback((element: HTMLElement | null) => {
     scrollContainerRef.current = element;
     setScrollElement(element);
   }, []);
 
-  const projectPickerOptions = React.useMemo(() => model.projectSections.map((section) => ({
-    id: section.project.id,
-    projectLabel: getProjectLabel(section.project, view.homeDirectory),
-    projectDescription: formatPathForDisplay(section.project.normalizedPath, view.homeDirectory),
-    projectIcon: section.project.icon,
-    projectColor: section.project.color,
-    projectIconImage: section.project.iconImage,
-    projectIconBackground: section.project.iconBackground,
-  })), [model.projectSections, view.homeDirectory]);
+  const projectPickerProjects = React.useMemo(() => model.projectSections.map((section) => section.project), [model.projectSections]);
+  const orderedPickerProjects = useProjectsInSidebarOrder(projectPickerProjects, model.singleProjectMode);
+  const projectPickerOptions = React.useMemo(() => orderedPickerProjects.map((project) => ({
+    id: project.id,
+    projectLabel: getProjectLabel(project, view.homeDirectory),
+    projectDescription: formatPathForDisplay(project.normalizedPath, view.homeDirectory),
+    projectIcon: project.icon,
+    projectColor: project.color,
+    projectIconImage: project.iconImage,
+    projectIconBackground: project.iconBackground,
+  })), [orderedPickerProjects, view.homeDirectory]);
 
   const archiveAllConfirm = useConfirmDialog();
   const { confirm: confirmArchiveAll } = archiveAllConfirm;
   const requestArchiveAll = React.useCallback(async (projectLabel: string, groups: SessionGroup[]) => {
     const pinnedIds = useSessionPinnedStore.getState().ids;
-    const ids = selectArchiveAllSessionIds(groups, (session) =>
-      isSessionPinned(pinnedIds, session.directory, session.id)
-      || isSessionBusyNow(session.id)
-      || isSessionInWork(session));
-    if (ids.length === 0) {
+    const targets = withArchiveAllSubtrees(
+      selectArchiveAllSessionIds(groups, (session) =>
+        isSessionPinned(pinnedIds, session.directory, session.id)
+        || isSessionBusyNow(session.id)
+        || isSessionInWork(session)),
+      (id) => collectSessionSubtreeIds(id, [], false),
+      isSessionBusyNow,
+    );
+    if (targets.length === 0) {
       toast.info(t('sessions.sidebar.project.archiveAll.nothing'));
       return;
     }
     const confirmed = await confirmArchiveAll({
       title: t('sessions.sidebar.project.archiveAll.title', { project: projectLabel }),
-      message: ids.length === 1
-        ? t('sessions.sidebar.project.archiveAll.descriptionSingle', { count: ids.length })
-        : t('sessions.sidebar.project.archiveAll.descriptionPlural', { count: ids.length }),
+      message: targets.length === 1
+        ? t('sessions.sidebar.project.archiveAll.descriptionSingle', { count: targets.length })
+        : t('sessions.sidebar.project.archiveAll.descriptionPlural', { count: targets.length }),
       action: t('sessions.sidebar.bulkActions.archive'),
     });
     if (!confirmed) return;
-    const { archivedIds, failedIds } = await useSessionUIStore.getState().archiveSessions(ids);
-    if (archivedIds.length > 0) {
-      toast.success(archivedIds.length === 1
-        ? t('sessions.sidebar.bulkActions.archivedSingle', { count: archivedIds.length })
-        : t('sessions.sidebar.bulkActions.archivedPlural', { count: archivedIds.length }));
+    const { failedIds } = await useSessionUIStore.getState().archiveSessions(
+      targets.flatMap(({ id, descendantIds }) => [id, ...descendantIds]),
+    );
+    const outcome = countArchiveAllOutcome(targets, failedIds);
+    if (outcome.archived > 0) {
+      toast.success(outcome.archived === 1
+        ? t('sessions.sidebar.bulkActions.archivedSingle', { count: outcome.archived })
+        : t('sessions.sidebar.bulkActions.archivedPlural', { count: outcome.archived }));
     }
-    if (failedIds.length > 0) {
-      toast.error(failedIds.length === 1
-        ? t('sessions.sidebar.bulkActions.failedArchiveSingle', { count: failedIds.length })
-        : t('sessions.sidebar.bulkActions.failedArchivePlural', { count: failedIds.length }));
+    if (outcome.failed > 0) {
+      toast.error(outcome.failed === 1
+        ? t('sessions.sidebar.bulkActions.failedArchiveSingle', { count: outcome.failed })
+        : t('sessions.sidebar.bulkActions.failedArchivePlural', { count: outcome.failed }));
     }
   }, [confirmArchiveAll, t]);
 
@@ -241,21 +282,33 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
     setStickyIdentity((current) => current === nextIdentity ? current : nextIdentity);
   }, [model.rowModel.stickyHeaders]);
 
+  const projectSortGroupById = React.useMemo(() => {
+    const groups = new Map<string, string>();
+    let caption = PROJECTS_SORT_GROUP;
+    for (const row of model.rowModel.rows) {
+      if (row.kind === 'caption') caption = row.caption;
+      else if (row.kind === 'project-header') groups.set(row.section.project.id, caption);
+    }
+    return groups;
+  }, [model.rowModel.rows]);
+  const savedSectionIds = React.useMemo(() => new Set(savedSections.map((entry) => entry.id)), [savedSections]);
+  const sectionsSortable = !view.hasSessionSearchQuery && !editingSection && model.state.editingId === null && !model.singleProjectMode;
+  const sortableSection = React.useCallback((row: SessionSidebarRow, header: React.ReactNode): React.ReactNode => {
+    const sectionId = sectionIdOfRow(row);
+    if (sectionId === null || !savedSectionIds.has(sectionId)) return header;
+    return <SortableSidebarSection sectionId={sectionId} rowKey={row.key} disabled={!sectionsSortable}>{header}</SortableSidebarSection>;
+  }, [savedSectionIds, sectionsSortable]);
+
   const renderStatus = React.useCallback((row: Extract<SessionSidebarRow, { kind: 'status' }>) => {
-    const retry = () => {
-      if (!row.status.directory) {
-        void refreshGlobalSessions();
-        return;
-      }
-      childStores.requestBootstrap({ directory: row.status.directory, priority: 'expanded', reason: row.group.isMain ? 'project-expanded' : 'worktree-expanded', force: true });
-    };
-    const grant = async () => {
-      if (!row.status.directory) return;
-      const result = await requestDirectoryAccess(row.status.directory);
-      if (result.success) retry();
-    };
+    const retry = () => retryGroupStatus(row, childStores);
+    const grant = () => grantGroupAccess(row, childStores);
+    const trustPaused = row.status.state === 'trust-paused';
+    const pausedDirectory = trustPaused ? row.status.directory : null;
     let label: string;
     switch (row.status.state) {
+      case 'trust-paused':
+        label = t('sessions.sidebar.group.empty.trustPaused');
+        break;
       case 'permission-denied':
         label = t('sessions.sidebar.group.empty.permissionDenied');
         break;
@@ -268,60 +321,56 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
       default:
         label = t('sessions.sidebar.group.empty.loadingSessions');
     }
-    return <div className="relative py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: row.flat ? FLAT_TEXT_INSET_PX : sessionTreeTextInset(row.depth ?? 0) }}>
+    return <div className="relative py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: row.flat ? FLAT_TEXT_INSET_PX : row.detailed ? sessionDetailedRowPaddingLeft(row.depth ?? 0) : sessionTreeTextInset(row.depth ?? 0) }}>
       <span className="inline-flex flex-wrap items-center gap-1.5">
-        {row.status.state === 'loading' ? <Icon name="loader-4" className="size-3 animate-spin" /> : null}
+        {row.status.state === 'loading' ? <Spinner className="size-3" /> : null}
         {label}
         {row.status.canGrantAccess ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={() => void grant()}>{t('sessions.sidebar.group.empty.grantAccess')}</Button> : null}
-        {row.status.state !== 'loading' ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={retry}>{t('sessions.sidebar.group.empty.retry')}</Button> : null}
+        {pausedDirectory ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={() => void resumeFolder(pausedDirectory)}>{t('sessions.sidebar.group.empty.reviewTrust')}</Button> : null}
+        {row.status.state !== 'loading' && !trustPaused ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={retry}>{t('sessions.sidebar.group.empty.retry')}</Button> : null}
       </span>
     </div>;
-  }, [childStores, t]);
+  }, [childStores, resumeFolder, t]);
+
+  const listsPages = React.useMemo(() => model.rowModel.rows.some((row) => row.kind === 'page'), [model.rowModel.rows]);
+  const sidebarPages = useSidebarPages(listsPages);
+  const pageById = React.useMemo(() => new Map(sidebarPages.map((page) => [page.id, page])), [sidebarPages]);
 
   const renderRow = React.useCallback((row: SessionSidebarRow): React.ReactNode => {
+    if (row.kind === 'page') {
+      const page = pageById.get(row.pageId);
+      return page ? <SidebarPageRow page={page} /> : null;
+    }
     if (row.kind === 'activity-header') {
-      return <CrossfadeZoneHeader
-        className="sticky top-0 z-20 oc-session-sidebar-surface"
+      return sortableSection(row, <CrossfadeZoneHeader
+        className={cn('sticky top-0 z-20', view.mobileVariant ? 'bg-background' : 'oc-session-sidebar-surface')}
         data-sidebar-sticky-header="true"
       >
         <SessionSidebarActivityHeader
           activityKey={row.activityKey}
+          label={row.label}
+          preview={row.preview === true}
+          loading={row.loading === true}
           collapsed={row.collapsed}
-          forceExpanded={row.forceExpanded}
           alwaysShowActions={view.alwaysShowActions}
-          onToggle={() => {
-            // Collapsing a zone forgets its Show more state: reopening it
-            // starts from the default reveal, like a group or project.
-            if (!row.collapsed) {
-              const containerKey = `activity:${row.activityKey}`;
-              actions.group.resetGroupSessionLimit(containerKey);
-              model.state.setVisibleActivityCountByKey((current) => {
-                if (!current.has(containerKey)) return current;
-                const next = new Map(current);
-                next.delete(containerKey);
-                return next;
-              });
-            }
-            model.state.setCollapsedActivityKeys((current) => {
-              const next = new Set(current);
-              if (next.has(row.activityKey)) next.delete(row.activityKey); else next.add(row.activityKey);
-              return next;
-            });
-          }}
+          onToggle={() => toggleActivityZone(row, { model, actions })}
           onNewChat={() => {
             useUIStore.getState().closeMainSurfaces();
             if (view.mobileVariant) actions.setSessionSwitcherOpen(false);
             actions.openNewSessionDraft({ selectedProjectId: CHAT_DRAFT_PROJECT_ID, directoryOverride: null });
           }}
         />
-      </CrossfadeZoneHeader>;
+      </CrossfadeZoneHeader>);
     }
     if (row.kind === 'project-header') {
       const project = row.section.project;
       const label = getProjectLabel(project, view.homeDirectory);
+      const sortGroup = projectSortGroupById.get(project.id) ?? PROJECTS_SORT_GROUP;
       return <SortableProjectItem
         id={project.id}
-        disabled={model.singleProjectMode || row.forceExpanded || model.state.editingId !== null || view.projectSortOrder !== 'manual'}
+        sortGroup={sortGroup}
+        disabled={model.singleProjectMode || model.state.editingId !== null
+          || (sortGroup === PROJECTS_SORT_GROUP && view.projectSortOrder !== 'manual')}
         projectLabel={label}
         projectDescription={formatPathForDisplay(project.normalizedPath, view.homeDirectory)}
         projectDirectory={project.normalizedPath}
@@ -333,7 +382,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         openSidebarMenuKey={model.state.openSidebarMenuKey} setOpenSidebarMenuKey={model.state.setOpenSidebarMenuKey}
         projectPickerOptions={model.singleProjectMode ? projectPickerOptions : undefined}
         onProjectSelect={model.singleProjectMode ? actions.setSingleProjectId : undefined}
-        onToggle={() => { if (!row.forceExpanded && !model.singleProjectMode) actions.toggleProject(project.id); }}
+        onToggle={() => { if (!model.singleProjectMode) actions.toggleProject(project.id); }}
         onNewSession={() => {
           prepareSessionProjectAction({
             projectId: project.id,
@@ -356,6 +405,12 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         }}
         onManageWorktrees={() => actions.openWorktreesPage(project.id)}
         onManageSpaces={spacesPageAvailable ? () => useUIStore.getState().setSpacesPageProjectId(project.id) : undefined}
+        onOpenSourceBoard={openProjectOnBoard ? () => openProjectOnBoard(project.id) : undefined}
+        onNewFolder={() => {
+          if (row.collapsed) actions.toggleProject(project.id);
+          const folder = useSessionFoldersStore.getState().createFolder(project.normalizedPath, t('sessions.sidebar.folders.newFolderTitle'));
+          model.groupProps.startFolderRename(project.normalizedPath, folder);
+        }}
         onOpenFolder={project.normalizedPath && files.revealPath ? () => openProjectFolder(project.normalizedPath) : undefined}
         onRenameStart={() => actions.openProjectEditDialog(project.id)}
         onArchiveAll={() => void requestArchiveAll(label, row.section.groups)}
@@ -364,33 +419,41 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
       />;
     }
     if (row.kind === 'group-header') {
-      return <SortableGroupItem id={row.groupKey} disabled={row.forceExpanded || model.state.editingId !== null || view.worktreeSortOrder !== 'manual'}>
-        {(dragHandleProps) => <SessionGroupSection
+      return isGroupWork(row.group)
+        ? <WorktreeWorkRow
+          group={row.group} groupKey={row.groupKey} projectId={row.projectId} depth={row.depth} detailed={row.detailed} mixed={row.mixed} inPinnedZone={isPinnedZoneRowKey(row.key)}
+          collapsed={row.collapsed} empty={row.empty}
+          alwaysShowActions={view.alwaysShowActions} mobileVariant={view.mobileVariant}
+          onToggle={actions.group.onToggleCollapsedGroup}
+          setSessionSwitcherOpen={actions.setSessionSwitcherOpen}
+        />
+        : <SessionGroupSection
           {...model.groupProps} {...actions.group}
           group={row.group} groupKey={row.groupKey} projectId={row.projectId} isEmpty={row.empty}
           visibleSessionCount={model.state.visibleSessionCountByGroup.get(row.groupKey)}
           editingId={model.state.editingId} openSidebarMenuKey={model.state.openSidebarMenuKey}
           setOpenSidebarMenuKey={model.state.setOpenSidebarMenuKey}
-          dragHandleProps={dragHandleProps} renderBody={false}
-        />}
-      </SortableGroupItem>;
+          renderBody={false}
+        />;
     }
     if (row.kind === 'folder-header') {
       const renaming = model.groupProps.folderRename?.folderId === row.folder.id && model.groupProps.folderRename.scopeKey === row.scopeKey;
+      const folderProject = row.mixed ? model.projectSections.find((section) => section.project.id === row.projectId)?.project : undefined;
       return <DroppableFolderWrapper folderId={row.folder.id} scopeKey={row.scopeKey} ownerKey={row.ownerKey} disabled={!row.dropEnabled}>
         {(droppableRef, isDropTarget) => <SessionSidebarFolderItem
-          notifyOnSubtasks={model.groupProps.notifyOnSubtasks}
           activityNodes={row.activityNodes}
-          folder={row.folder} displayName={row.displayName} sessions={row.nodes} depth={row.depth} canExpand={!row.empty}
-          isCollapsed={row.collapsed} onToggle={row.forceExpanded ? () => undefined : () => toggleFolderCollapse(row.folder.id)}
+          folder={row.folder} displayName={row.displayName} sessions={row.nodes} memberCount={row.memberCount} depth={row.depth}
+          projectLabel={folderProject ? getProjectLabel(folderProject, view.homeDirectory) : undefined} canExpand={!row.empty}
+          isCollapsed={row.collapsed} onToggle={() => toggleFolderCollapse(row.folder.id)}
           onRename={(name) => renameFolder(row.scopeKey, row.folder.id, name)}
           onDelete={() => {
             if (row.archived) {
               sessionEvents.requestDelete({ sessions: [...row.deleteSessions], mode: 'session' });
             } else if (!showDeletionDialog) {
               deleteFolder(row.scopeKey, row.folder.id);
+              removeFolderFromSections(row.folder.id);
             } else {
-              setFolderDeleteConfirm({ scopeKey: row.scopeKey, folderId: row.folder.id, folderName: row.folder.name, subFolderCount: row.subFolderCount, sessionCount: row.nodes.length });
+              setFolderDeleteConfirm({ scopeKey: row.scopeKey, folderId: row.folder.id, folderName: row.folder.name, subFolderCount: row.subFolderCount, sessionCount: row.memberCount });
             }
           }}
           renderBody={false} groupDirectory={row.scopeDirectory ?? row.group.directory} projectId={row.projectId}
@@ -419,9 +482,10 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
       return <div onFocusCapture={() => setFocusedRowKey(row.key)} onBlurCapture={() => setFocusedRowKey((current) => current === row.key ? null : current)}>
         <SessionTreeItem
           {...model.groupProps}
-          node={row.node} depth={row.depth} groupDirectory={row.groupDirectory} projectId={row.projectId}
+          node={row.node} depth={row.depth} ownsWork={row.ownsWork} groupDirectory={row.groupDirectory} projectId={row.projectId}
+          ownerProjectId={row.ownerProjectId}
           folderOwnerKey={row.ownerKey} selectionScopeKey={row.selectionScopeKey}
-          archivedBucket={row.archived} renderContext={row.renderContext} rowKey={row.key} dragKey={row.key}
+          archivedBucket={row.archived} renderContext={row.renderContext} detailed={row.detailed} repeat={row.repeat} rowKey={row.key} dragKey={row.key}
           secondaryMeta={row.secondaryMeta} renderChildren={false}
           editingId={model.state.editingId} openSidebarMenuKey={model.state.openSidebarMenuKey}
           setOpenSidebarMenuKey={model.state.setOpenSidebarMenuKey}
@@ -436,120 +500,216 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         />
       </div>;
     }
-    if (row.kind === 'run') {
-      return <RunSidebarRow
-        run={row.run} depth={row.depth} laneNodes={row.laneNodes} blockingSessionIds={row.blockingSessionIds} renderContext={row.renderContext}
-        projectId={row.projectId} projectLabel={row.projectLabel}
-        expansionKey={row.expansionKey} expanded={row.expanded} forceExpanded={row.forceExpanded}
-        notifyOnSubtasks={model.groupProps.notifyOnSubtasks} toggleParent={model.groupProps.toggleParent}
+    if (row.kind === 'search-result') {
+      return <SidebarConversationRow result={row.result} context={row.context} search={model.search} />;
+    }
+    if (row.kind === 'search-archived-caption') {
+      return <CrossfadeZoneHeader className={cn('sticky top-0 z-20', view.mobileVariant ? 'bg-background' : 'oc-session-sidebar-surface')} data-sidebar-sticky-header="true">
+        <SidebarSearchArchivedCaption />
+      </CrossfadeZoneHeader>;
+    }
+    if (row.kind === 'search-show-more') return <SidebarSearchShowMore section={row.section} hidden={row.hidden} onShow={model.search?.showMore} />;
+    if (row.kind === 'search-more') return <SidebarSearchMore onLoadMore={() => model.search?.loadMore(row.section)} />;
+    if (row.kind === 'draft') {
+      return <SessionDraftRow
+        draft={row.draft} depth={row.depth} detailed={row.detailed} mixed={row.mixed}
+        alwaysShowActions={view.alwaysShowActions} mobileVariant={view.mobileVariant}
+        setSessionSwitcherOpen={actions.setSessionSwitcherOpen}
       />;
     }
-    // Show more and the archive's empty line align with the text of the rows
-    // they close: 10px in under gutterless timeline-style rows; past the tree
-    // level's chevron slot on tree rows.
+    if (row.kind === 'run') {
+      return <RunSidebarRow
+        run={row.run} depth={row.depth} laneNodes={row.laneNodes} blockingSessionIds={row.blockingSessionIds}
+        detailed={row.detailed} mixed={row.renderContext === 'timeline-mixed' || row.renderContext === 'mixed-compact'}
+        projectId={row.projectId} projectLabel={row.projectLabel}
+        expansionKey={row.expansionKey} expanded={row.expanded}
+        alwaysShowActions={view.alwaysShowActions}
+        toggleParent={model.groupProps.toggleParent}
+      />;
+    }
     const rowTextInset = row.kind === 'show-control' && row.flat === true
       ? FLAT_TEXT_INSET_PX
-      : sessionTreeTextInset(row.kind === 'show-control' || row.kind === 'empty' ? row.depth ?? 0 : 0);
+      : row.kind === 'show-control' && row.detailed === true
+        ? sessionDetailedRowPaddingLeft(row.depth ?? 0)
+        : sessionTreeTextInset(row.kind === 'show-control' || row.kind === 'empty' ? row.depth ?? 0 : 0);
     if (row.kind === 'show-control') {
-      return <div><button type="button" className="mt-0.5 flex items-center justify-start rounded-md pe-1.5 py-0.5 text-start text-xs text-muted-foreground/70 leading-tight hover:text-foreground hover:underline" style={{ paddingInlineStart: rowTextInset }} onClick={() => {
-        if (row.containerKey.startsWith('activity:')) {
-          model.state.setVisibleActivityCountByKey((current) => {
-            const next = new Map(current);
-            if (row.control === 'more') next.set(row.containerKey, row.currentCount + row.increment); else next.delete(row.containerKey);
-            return next;
-          });
-        } else if (row.control === 'more') actions.group.showMoreGroupSessions(row.containerKey, row.currentCount, row.increment);
-        else actions.group.resetGroupSessionLimit(row.containerKey);
-      }}>{t(row.control === 'more' ? 'sessions.sidebar.group.showMore' : 'sessions.sidebar.group.showFewer')}</button></div>;
+      const control = (kind: 'more' | 'fewer') => (
+        <button type="button" className="inline-flex items-center gap-1.5 rounded-md py-0.5 typography-micro text-muted-foreground leading-tight hover:text-foreground hover:underline" onClick={() => applyShowControl(row, kind, { model, actions })}>
+          {t(kind === 'more' ? 'sessions.sidebar.group.showMore' : 'sessions.sidebar.group.showFewer')}
+          {kind === 'more' ? <CollapsedSessionActivityIndicator nodes={row.hiddenNodes} /> : null}
+        </button>
+      );
+      return (
+        <div className="mt-0.5 flex items-center gap-1.5 pe-1.5" style={{ paddingInlineStart: rowTextInset }}>
+          {row.more ? control('more') : null}
+          {row.more && row.fewer ? <span aria-hidden="true" className="typography-micro text-muted-foreground/50">·</span> : null}
+          {row.fewer ? control('fewer') : null}
+        </div>
+      );
     }
     if (row.kind === 'status') return renderStatus(row);
+    if (row.kind === 'caption') {
+      return sortableSection(row, <SessionSidebarCaption
+        label={row.label}
+        preview={row.preview === true}
+        collapsed={row.collapsed}
+        alwaysShowActions={view.alwaysShowActions}
+        addsProjects={row.caption === 'projects'}
+        onToggle={() => toggleProjectsCaption(row, { model })}
+      />);
+    }
     if (row.emptyKind === 'sidebar') return model.emptyState;
     if (row.emptyKind === 'search') return model.searchEmptyState;
     return <div className="py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: rowTextInset }}>
-      {t('sessions.sidebar.group.empty.noArchivedSessions')}
+      {row.emptyKind === 'section' ? t('sessions.sidebar.sections.empty') : t('sessions.sidebar.group.empty.noArchivedSessions')}
     </div>;
-  }, [actions, deleteFolder, files, model, openProjectFolder, projectPickerOptions, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, spacesPageAvailable, t, toggleFolderCollapse, view]);
+  }, [actions, deleteFolder, files, model, openProjectFolder, openProjectOnBoard, pageById, projectPickerOptions, projectSortGroupById, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, sortableSection, spacesPageAvailable, t, toggleFolderCollapse, view]);
 
-  const structuralIds = React.useMemo(() => model.rowModel.rows.flatMap((row) => {
-    if (row.kind === 'project-header') return activeDrag?.kind === 'group' ? [] : [row.section.project.id];
-    if (row.kind !== 'group-header') return [];
-    if (activeDrag?.kind === 'project') return [];
-    if (activeDrag?.kind === 'group' && row.projectId !== activeDrag.projectId) return [];
-    return [row.groupKey];
-  }), [activeDrag, model.rowModel.rows]);
-  const projectDragIds = React.useMemo(() => new Set(model.sectionsForRender.map((section) => section.project.id)), [model.sectionsForRender]);
+  const sortableIds = React.useMemo(() => {
+    const projects: string[] = [];
+    const sections: string[] = [];
+    for (const row of model.rowModel.rows) {
+      if (row.kind === 'project-header') projects.push(row.section.project.id);
+      const sectionId = sectionIdOfRow(row);
+      if (sectionId !== null && savedSectionIds.has(sectionId)) sections.push(sectionDragId(sectionId));
+    }
+    return blockDrag === 'project' ? projects : blockDrag === 'section' ? sections : [...sections, ...projects];
+  }, [blockDrag, model.rowModel.rows, savedSectionIds]);
+  const folderDropOwnerKeys = React.useMemo(() => model.rowModel.folderDropTargets
+    .flatMap((target) => (target.enabled ? [target.ownerKey] : [])), [model.rowModel.folderDropTargets]);
   const zoneLayoutKey = React.useMemo(() => model.rowModel.stickyHeaders
     .map(({ kind, id, rowIndex }) => `${kind}:${id}:${rowIndex}`)
     .join('\u0001'), [model.rowModel.stickyHeaders]);
 
+  const holdRow = (rowKey: string, top: number | undefined): void => {
+    const scroller = scrollContainerRef.current;
+    const rowTop = top ?? scroller?.querySelector(`[data-sidebar-row-key="${CSS.escape(rowKey)}"]`)?.getBoundingClientRect().top;
+    heldRowRef.current = scroller && rowTop !== undefined ? { key: rowKey, offset: rowTop - scroller.getBoundingClientRect().top } : null;
+  };
+  const handleDragStart = ({ active }: { active: Active }): void => {
+    setDragCopy(copyDragSource(active.data.current));
+    const data = readDragData(active);
+    if ((data.type !== 'project' && data.type !== 'section') || !data.rowKey) return;
+    const scroller = scrollContainerRef.current;
+    const placeTop = scroller?.querySelector(`[data-sidebar-row-key="${CSS.escape(data.rowKey)}"]`)?.getBoundingClientRect().top;
+    if (scroller && placeTop !== undefined) {
+      const listTop = scroller.getBoundingClientRect().top;
+      if (placeTop < listTop) scroller.scrollTop -= listTop - placeTop;
+    }
+    holdRow(data.rowKey, undefined);
+    const kind = data.type;
+    const fold = (): void => {
+      foldFrameRef.current = requestAnimationFrame(() => {
+        if (!active.rect.current.initial) {
+          fold();
+          return;
+        }
+        foldFrameRef.current = null;
+        setSidebarBlockDrag(kind);
+      });
+    };
+    fold();
+  };
+  const endBlockDrag = (active: Active, top: number | undefined): void => {
+    setDragCopy(null);
+    const data = readDragData(active);
+    if ((data.type !== 'project' && data.type !== 'section') || !data.rowKey) return;
+    if (foldFrameRef.current !== null) {
+      cancelAnimationFrame(foldFrameRef.current);
+      foldFrameRef.current = null;
+      heldRowRef.current = null;
+      return;
+    }
+    holdRow(data.rowKey, top);
+    setSidebarBlockDrag(null);
+  };
+  const handleDragEnd = (event: DragEndEvent): void => {
+    const { active, over } = event;
+    const moved = over !== null && over.id !== active.id;
+    endBlockDrag(active, moved ? active.rect.current.translated?.top : active.rect.current.initial?.top);
+    if (!over) return;
+    const activeData = readDragData(active);
+    // SAFETY: folder payloads are created by the sidebar's droppable folder rows.
+    const overData = over.data.current as { type?: string; folderId?: string; scopeKey?: string; sectionId?: string } | undefined;
+    if (activeData.type === 'session' && activeData.sessionId && overData?.type === 'folder' && overData.folderId && overData.scopeKey) {
+      const source = resolveCurrentSessionFolderDropSource(model.rowModel.rows, String(active.id), activeData.sessionId);
+      if (!source) return;
+      const dropTarget = resolveCurrentSessionFolderDropTarget(model.rowModel.folderDropTargets, String(over.id), overData.scopeKey, overData.folderId);
+      const authority = model.rowModel.folderAuthorityByOwner.get(source.ownerKey);
+      const store = useSessionFoldersStore.getState();
+      applySessionFolderDrop({
+        sessionId: source.sessionId,
+        sessionOwnerKey: source.ownerKey,
+        target: dropTarget,
+        authority,
+        removeSessionFromFolder: store.removeSessionFromFolder,
+        addSessionToFolder,
+      });
+      return;
+    }
+    if (view.hasSessionSearchQuery || model.state.editingId !== null || active.id === over.id) return;
+    if (activeData.type === 'section' && activeData.sectionId && overData?.sectionId) {
+      const sections = useSessionDisplayStore.getState().sections;
+      const from = sections.findIndex((entry) => entry.id === activeData.sectionId);
+      const to = sections.findIndex((entry) => entry.id === overData.sectionId);
+      if (from >= 0 && to >= 0) saveSidebarSections(arrayMove(sections, from, to));
+      return;
+    }
+    if (activeData.type !== 'project') return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (activeData.sortGroup && activeData.sortGroup !== PROJECTS_SORT_GROUP) {
+      const groupId = activeData.sortGroup.slice('section:'.length);
+      const sections = useSessionDisplayStore.getState().sections;
+      saveSidebarSections(sections.map((entry) => {
+        if (entry.kind !== 'custom' || entry.id !== groupId) return entry;
+        const ids = entry.filter.projectIds;
+        const from = ids.indexOf(activeId);
+        const to = ids.indexOf(overId);
+        return from >= 0 && to >= 0 ? { ...entry, filter: { ...entry.filter, projectIds: arrayMove([...ids], from, to) } } : entry;
+      }));
+      return;
+    }
+    const projectIds = model.sectionsForRender.map((section) => section.project.id);
+    const projectFrom = projectIds.indexOf(activeId);
+    const projectTo = projectIds.indexOf(overId);
+    if (projectFrom >= 0 && projectTo >= 0 && view.projectSortOrder === 'manual') actions.reorderProjects(projectFrom, projectTo);
+  };
+
   return <div className="relative flex min-h-0 flex-1">
     <CrossfadeZoneHeaders
-      suspended={isProjectDragging}
+      suspended={blockDrag !== null}
       layoutKey={zoneLayoutKey}
       scrollRef={scrollContainerRef}
     >
       <ScrollableOverlay
-        // Sticky zone headers replace the top shadow.
         ref={setScrollContainer} useScrollShadow hideTopScrollShadow scrollShadowSize={40}
+        scrollShadowSurface={view.mobileVariant ? 'var(--background)' : 'var(--sidebar)'}
         outerClassName="flex-1 min-h-0" className="oc-sidebar-scroller pb-1 ps-2.5 pe-2 [overflow-anchor:none]"
       >
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={(event) => {
-          const activeId = String(event.active.id);
-          if (projectDragIds.has(activeId)) {
-            setActiveDrag({ kind: 'project' });
-            return;
-          }
-          const groupRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === activeId);
-          // Session rows drag into folders and take no part in the header sort.
-          setActiveDrag(groupRow ? { kind: 'group', projectId: groupRow.projectId } : null);
-        }} onDragCancel={() => setActiveDrag(null)} onDragEnd={(event) => {
-          setActiveDrag(null);
-          if (!event.over) return;
-          // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
-          const activeData = event.active.data.current as { type?: string; sessionId?: string; ownerKey?: string | null; archivedBucket?: boolean } | undefined;
-          // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
-          const overData = event.over.data.current as { type?: string; folderId?: string; scopeKey?: string; ownerKey?: string | null } | undefined;
-          if (activeData?.type === 'session' && activeData.sessionId && activeData.ownerKey && activeData.archivedBucket !== true && overData?.type === 'folder' && overData.folderId && overData.scopeKey && overData.ownerKey === activeData.ownerKey) {
-            const dropTarget = model.rowModel.folderDropTargets.find((entry) => entry.folderId === overData.folderId && entry.scopeKey === overData.scopeKey && entry.ownerKey === activeData.ownerKey);
-            const authority = model.rowModel.folderAuthorityByOwner.get(activeData.ownerKey);
-            if (!dropTarget?.enabled || authority?.complete !== true) return;
-            const store = useSessionFoldersStore.getState();
-            for (const scopeKey of authority.scopeKeys) {
-              if (scopeKey !== overData.scopeKey) store.removeSessionFromFolder(scopeKey, activeData.sessionId);
-            }
-            addSessionToFolder(overData.scopeKey, overData.folderId, activeData.sessionId);
-            return;
-          }
-          if (view.hasSessionSearchQuery || model.state.editingId !== null || event.active.id === event.over.id) return;
-          const activeId = String(event.active.id);
-          const overId = String(event.over.id);
-          const projectIds = model.sectionsForRender.map((section) => section.project.id);
-          const projectFrom = projectIds.indexOf(activeId);
-          const projectTo = projectIds.indexOf(overId);
-          if (projectFrom >= 0 && projectTo >= 0 && view.projectSortOrder === 'manual') {
-            actions.reorderProjects(projectFrom, projectTo);
-            return;
-          }
-          const activeRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === activeId);
-          const overRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === overId);
-          if (!activeRow || !overRow || activeRow.projectId !== overRow.projectId || !activeRow.projectId) return;
-          const projectId = activeRow.projectId;
-          const section = model.sectionsForRender.find((entry) => entry.project.id === projectId);
-          if (!section) return;
-          const from = section.groups.findIndex((group) => group.id === activeRow.group.id);
-          const to = section.groups.findIndex((group) => group.id === overRow.group.id);
-          if (from < 0 || to < 0) return;
-          actions.setGroupOrderByProject((current) => new Map(current).set(projectId, arrayMove(section.groups, from, to).map((group) => group.id)));
-        }}>
-          <SortableContext items={structuralIds} strategy={verticalListSortingStrategy}>
-            <SessionSidebarRows model={model.rowModel} scrollElement={scrollElement} pinnedRowIndexes={pinnedRowIndexes} renderRow={renderRow} onFirstVisibleIndexChange={handleFirstVisibleIndexChange} />
+        <SessionFolderOwnersProvider ownerKeys={folderDropOwnerKeys}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={sessionFolderCollision}
+          modifiers={ROW_DRAG_MODIFIERS}
+          autoScroll={ROW_DRAG_AUTO_SCROLL}
+          measuring={ROW_DRAG_MEASURING}
+          onDragStart={handleDragStart}
+          onDragCancel={({ active }) => endBlockDrag(active, active.rect.current.initial?.top)}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+            <SessionSidebarRows model={model.rowModel} scrollElement={scrollElement} pinnedRowIndexes={pinnedRowIndexes} renderRow={renderRow} onFirstVisibleIndexChange={handleFirstVisibleIndexChange} getStickyHeaderHeight={getPinnedZoneHeaderHeight} heldRowRef={heldRowRef} projectDivider={!view.isVSCode} />
           </SortableContext>
+          <DragOverlay dropAnimation={null}>{dragSource ? <RowDragPreview copy={dragSource} /> : null}</DragOverlay>
         </DndContext>
+        </SessionFolderOwnersProvider>
       </ScrollableOverlay>
     </CrossfadeZoneHeaders>
     <FolderDeleteConfirmDialog value={folderDeleteConfirm} setValue={setFolderDeleteConfirm} onConfirm={() => {
       if (!folderDeleteConfirm) return;
       deleteFolder(folderDeleteConfirm.scopeKey, folderDeleteConfirm.folderId);
+      removeFolderFromSections(folderDeleteConfirm.folderId);
       setFolderDeleteConfirm(null);
     }} />
     {archiveAllConfirm.dialog}

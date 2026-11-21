@@ -13,8 +13,7 @@ resources/native-memory-cli.mjs
 resources/deepseek-maintenance-worker.mjs
 resources/deepseek-maintenance-plugin.mjs
 resources/sidecar/
-resources/opencode-cli/*
-!resources/opencode-cli/.gitkeep
+resources/opencode-server/
 resources/ripgrep/*
 !resources/ripgrep/.gitkeep
 .cache/

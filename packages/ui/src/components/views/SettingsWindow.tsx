@@ -3,6 +3,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { registerCloseTabTarget } from '@/lib/closeTabTarget';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 
 const SettingsView = lazyWithChunkRecovery(() => import('./SettingsView').then((m) => ({ default: m.SettingsView })));
@@ -12,10 +13,6 @@ interface SettingsWindowProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * Settings rendered as a centered window with blurred backdrop.
- * Used for desktop and web (non-mobile) environments.
- */
 export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChange }) => {
   const { t } = useI18n();
   const descriptionId = React.useId();
@@ -35,6 +32,14 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChan
     );
   }, []);
 
+  React.useEffect(() => {
+    if (!open) return;
+    return registerCloseTabTarget(() => {
+      if (hasOpenFloatingMenu()) return;
+      onOpenChange(false);
+    }, popupRef, 1);
+  }, [hasOpenFloatingMenu, onOpenChange, open]);
+
   return (
     <Dialog.Root
       open={open}
@@ -46,7 +51,7 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChan
       <Dialog.Portal>
         <Dialog.Backdrop
           className={cn(
-            'oc-glass-backdrop fixed inset-0 z-50 bg-black/25 dark:bg-black/40',
+            'oc-glass-backdrop fixed inset-0 z-50 bg-surface-overlay/60',
             'transition-opacity duration-150 ease-out',
             'data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
           )}
@@ -55,8 +60,6 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChan
           <Dialog.Popup
             ref={popupRef}
             aria-describedby={descriptionId}
-            // Open straight into the settings search, so typing filters at
-            // once; the window itself if the field is not there.
             initialFocus={focusSettingsSearch}
             className={cn(
               'relative pointer-events-auto outline-none',
@@ -66,8 +69,6 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChan
               'transition-all duration-150 ease-out',
               'data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.98]',
               'data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.98]',
-              // Dim this window when a nested dialog (e.g. "Add a device") opens
-              // on top of it, mirroring how the page behind a dialog is dimmed.
               'data-[nested-dialog-open]:brightness-[0.55] dark:data-[nested-dialog-open]:brightness-[0.4]',
             )}
           >

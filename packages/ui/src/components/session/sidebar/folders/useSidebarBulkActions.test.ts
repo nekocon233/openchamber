@@ -1,9 +1,5 @@
-import { describe, expect, spyOn, test } from 'bun:test';
-import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
-import { opencodeClient } from '@/lib/opencode/client';
-import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
-import { resolveBulkCompleteIds, resolveBulkDeleteConfirmation, resolveSelectionFolderScopes } from './useSidebarBulkActions';
-import type { SessionRowOrderSnapshot } from '../sessions/sessionRowOrder';
+import { describe, expect, test } from 'bun:test';
+import { selectSessionsToMarkDone, resolveBulkDeleteConfirmation, resolveSelectionFolderScopes } from './useSidebarBulkActions';
 
 describe('sidebar bulk project scopes', () => {
   test('uses every root and worktree scope owned by the selected project', () => {
@@ -55,38 +51,21 @@ describe('bulk delete confirmation authority', () => {
 });
 
 describe('sidebar bulk completion targets', () => {
-  const doneWork = { openchamber: { work: { state: 'done' } } };
-  const sessions = (): Map<string, SessionRowOrderSnapshot> => new Map([
-    ['open', {}],
-    ['open-two', { metadata: { openchamber: { work: { state: 'open' } } } }],
-    ['done', { metadata: doneWork }],
-    ['child', { parentID: 'open' }],
-    ['archived', { time: { archived: 1 } }],
-  ]);
-
-  test('targets nothing when work is off or the archive is selected', () => {
-    const selected = new Set(['open']);
-    expect(resolveBulkCompleteIds(selected, sessions(), { sessionWorkEnabled: false, archivedBucket: false })).toEqual([]);
-    expect(resolveBulkCompleteIds(selected, sessions(), { sessionWorkEnabled: true, archivedBucket: true })).toEqual([]);
-  });
-
-  test('keeps top-level project sessions that are not done yet', () => {
-    const selected = new Set(['open', 'open-two', 'done', 'child', 'archived', 'missing']);
-    expect(resolveBulkCompleteIds(selected, sessions(), { sessionWorkEnabled: true, archivedBucket: false }))
-      .toEqual(['open', 'open-two']);
-  });
-
-  test('leaves chats alone once their root is known', async () => {
-    const home = spyOn(opencodeClient, 'getFilesystemHomeInfo').mockResolvedValue({ home: '/home/user', chatsRoot: '/srv/chats' });
-    switchRuntimeEndpoint({ apiBaseUrl: 'https://bulk-complete.test', runtimeKey: 'bulk-complete' });
-    try {
-      await ensureChatsRootDirectory();
-      const withChat = sessions();
-      withChat.set('chat', { directory: '/srv/chats/2026-10-18/session-a' });
-      expect(resolveBulkCompleteIds(new Set(['open', 'chat']), withChat, { sessionWorkEnabled: true, archivedBucket: false }))
-        .toEqual(['open']);
-    } finally {
-      home.mockRestore();
-    }
+  test('marks only active top-level sessions that the work list owns', () => {
+    const fixture = (id: string, work: 'open' | 'done', parentID?: string, archived?: number) => ({
+      id, parentID, time: { created: 1, updated: 1, archived },
+      metadata: { openchamber: { work: { state: work } } },
+    });
+    const rows = [
+      fixture('open', 'open'),
+      fixture('done', 'done'),
+      fixture('child', 'open', 'open'),
+      fixture('archived', 'open', undefined, 1),
+    ];
+    const sessions = new Map(rows.map((row) => [row.id, {
+      ...row, directory: '/project', projectID: 'test', title: row.id,
+      cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }]));
+    expect(selectSessionsToMarkDone([...sessions.keys(), 'missing'], sessions).map((session) => session.id)).toEqual(['open']);
   });
 });

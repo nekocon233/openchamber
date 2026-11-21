@@ -1,3 +1,4 @@
+import type { SidebarFoldReason } from './zoneFitWatch';
 import React from 'react';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { getContextSurfaceDefaultWidth } from '@/lib/surfaces/registry';
@@ -9,21 +10,11 @@ import { getSidebarWidth } from '@/lib/workspace/sidebarGeometry';
 type Side = 'left' | 'right';
 type UIState = ReturnType<typeof useUIStore.getState>;
 
-/**
- * Keeps the chat usable when a side zone opens in a narrow window: the
- * session sidebar folds first, then the zone on the other side closes
- * (`planZoneFit`). Both come back when the zone that took their room closes,
- * the sidebar only if the user has not toggled it since. Renders nothing and
- * reads the store outside React, so it re-renders nothing either.
- */
 export const ZoneFitArbiter: React.FC = () => {
   const effectiveDirectory = useEffectiveDirectory();
   const directoryKey = effectiveDirectory ? normalizeContextPanelDirectoryKey(effectiveDirectory) : '';
 
-  // What this arbiter did, so it can undo exactly that. Memory only. The
-  // folded sidebar outlives a project switch (the sidebar is not per project);
-  // a displaced zone belongs to its project and is dropped with it.
-  const sidebarFoldedByRef = React.useRef<Side | null>(null);
+  const sidebarFoldedByRef = React.useRef<SidebarFoldReason | null>(null);
 
   React.useEffect(() => {
     if (!directoryKey) return undefined;
@@ -55,7 +46,7 @@ export const ZoneFitArbiter: React.FC = () => {
     // The project switched to may not show the side the sidebar folded for:
     // the reason is gone, so the sidebar comes back.
     const foldedFor = sidebarFoldedByRef.current;
-    if (foldedFor && !previous[foldedFor]) {
+    if (foldedFor && foldedFor !== 'expanded' && !previous[foldedFor]) {
       sidebarFoldedByRef.current = null;
       if (!useUIStore.getState().isSidebarOpen) setSidebar(true);
     }

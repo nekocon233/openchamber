@@ -29,9 +29,14 @@ const createCtx = (workingDirectory, restartImpl = async () => undefined) => {
   const restart = mock(restartImpl);
   return {
     restart,
+    context: {
+      globalStorageUri: { fsPath: path.join(scratchConfigRoot, 'storage') },
+    },
     manager: {
       getWorkingDirectory: () => workingDirectory,
       restart,
+      getDebugInfo: () => ({ mode: 'managed', status: 'connected', workingDirectory }),
+      refreshPluginSwitches: async () => ({ updated: true, requiresManualRestart: false }),
     },
   };
 };
@@ -427,9 +432,10 @@ describe('VS Code config bridge plugin parity', () => {
 describe('skills catalog update bridge', () => {
   test('plans the project skills that are still installed', async () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-update-'));
+    const defaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-default-'));
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-data-'));
     const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
-    tempRoots.push(projectRoot, dataDir);
+    tempRoots.push(projectRoot, defaultRoot, dataDir);
     try {
       const skillDir = path.join(projectRoot, '.opencode', 'skills', 'demo');
       fs.mkdirSync(skillDir, { recursive: true });
@@ -438,7 +444,12 @@ describe('skills catalog update bridge', () => {
         version: 1,
         entries: [{
           skillName: 'demo', skillDir: 'skills/demo', scope: 'project',
+          projectDirectory: fs.realpathSync(projectRoot),
           source: 'opencode', sourceId: 'acme', sourceRef: 'acme/skills',
+        }, {
+          skillName: 'demo', skillDir: 'other/demo', scope: 'project',
+          projectDirectory: fs.realpathSync(defaultRoot),
+          source: 'opencode', sourceId: 'other', sourceRef: 'other/skills',
         }],
       }));
       process.env.OPENCHAMBER_DATA_DIR = dataDir;
@@ -446,8 +457,8 @@ describe('skills catalog update bridge', () => {
       const response = await handleConfigBridgeMessage({
         id: 'skills-update-plan',
         type: 'api:config/skills:update',
-        payload: { dryRun: true },
-      }, createCtx(projectRoot), deps);
+        payload: { dryRun: true, directory: projectRoot },
+      }, createCtx(defaultRoot), deps);
 
       expect(response?.success).toBe(true);
       expect(response?.data).toEqual({
@@ -495,5 +506,251 @@ describe('user skill sync bridge', () => {
     } finally {
       syncHome = previousHome;
     }
+  });
+});
+
+describe('skills catalog bridge', () => {
+  const savedEnv = {};
+  const setEnv = (key, value) => {
+    if (!(key in savedEnv)) savedEnv[key] = process.env[key];
+    process.env[key] = value;
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      delete savedEnv[key];
+    }
+  });
+
+  // A local bare repository stands in for github.com/acme/skills, and a `git`
+  // wrapper first on PATH records every Git command the scan runs.
+  const createCatalogFixture = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-catalog-'));
+    tempRoots.push(root);
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const runGit = (cwd, ...args) => execFileSync(realGit, ['-c', 'user.name=lab', '-c', 'user.email=lab@example.com', ...args], { cwd, stdio: 'pipe' });
+    const work = path.join(root, 'work');
+    for (const skillDir of ['skills/alpha', 'skills/beta', 'plugins/bundle/skills/gamma']) {
+      fs.mkdirSync(path.join(work, skillDir), { recursive: true });
+      fs.writeFileSync(path.join(work, skillDir, 'SKILL.md'), `---\nname: ${path.basename(skillDir)}\n---\nBody\n`);
+    }
+    runGit(work, 'init', '-q');
+    runGit(work, 'add', '.');
+    runGit(work, 'commit', '-qm', 'skills');
+    const bare = path.join(root, 'remote', 'acme', 'skills.git');
+    runGit(root, 'clone', '-q', '--bare', work, bare);
+    runGit(bare, 'config', 'uploadpack.allowFilter', 'true');
+
+    const binDir = path.join(root, 'bin');
+    const log = path.join(root, 'git.log');
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(path.join(binDir, 'git'), `#!/bin/sh\necho "$*" >> "${log}"\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+    setEnv('PATH', `${binDir}${path.delimiter}${process.env.PATH}`);
+    setEnv('GIT_CONFIG_COUNT', '1');
+    setEnv('GIT_CONFIG_KEY_0', `url.${new URL(`file://${path.join(root, 'remote')}/`).href}.insteadOf`);
+    setEnv('GIT_CONFIG_VALUE_0', 'https://github.com/');
+    setEnv('OPENCHAMBER_DATA_DIR', path.join(root, 'data'));
+
+    const gitCommands = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
+    return { root, gitCommands };
+  };
+
+  const catalogDeps = {
+    ...deps,
+    readSettings: () => ({ skillCatalogs: [{ id: 'acme', label: 'Acme', source: 'acme/skills', subpath: 'skills' }] }),
+  };
+
+  test.skipIf(process.platform === 'win32')('lists the sources without scanning any of them', async () => {
+    const { root, gitCommands } = createCatalogFixture();
+
+    const response = await handleConfigBridgeMessage({ id: 'c1', type: 'api:config/skills:catalog' }, createCtx(root), catalogDeps);
+
+    expect(response?.success).toBe(true);
+    expect(response?.data.ok).toBe(true);
+    expect(response?.data.sources.map((source) => source.id)).toContain('acme');
+    expect(response?.data.itemsBySource).toEqual({});
+    expect(gitCommands()).toEqual([]);
+  });
+
+  test.skipIf(process.platform === 'win32')('scans one source once for requests that arrive together', async () => {
+    const { root, gitCommands } = createCatalogFixture();
+    const request = (id, refresh) => handleConfigBridgeMessage({
+      id,
+      type: 'api:config/skills:catalog/source',
+      payload: { sourceId: 'acme', refresh },
+    }, createCtx(root), catalogDeps);
+
+    const responses = await Promise.all([request('s1', false), request('s2', true), request('s3', true)]);
+
+    for (const response of responses) {
+      expect(response?.data.ok).toBe(true);
+      expect(response?.data.items.map((item) => item.skillDir)).toEqual(['skills/alpha', 'skills/beta']);
+    }
+    const commands = gitCommands();
+    expect(commands.filter((line) => line.startsWith('clone '))).toHaveLength(1);
+    expect(commands.filter((line) => line.includes(' show '))).toEqual([]);
+  });
+
+  test('answers an unknown source with an error', async () => {
+    const response = await handleConfigBridgeMessage({
+      id: 's4',
+      type: 'api:config/skills:catalog/source',
+      payload: { sourceId: 'missing' },
+    }, createCtx(os.tmpdir()), deps);
+
+    expect(response?.data).toEqual({ ok: false, error: { kind: 'invalidSource', message: 'Unknown source' } });
+  });
+});
+
+describe('VS Code plugin switches', () => {
+  test('switches an entry off in its own store and reports it in the list', async () => {
+    const root = path.join(scratchConfigRoot, 'xdg', 'opencode');
+    fs.mkdirSync(root, { recursive: true });
+    tempRoots.push(root);
+    process.env.OPENCODE_CONFIG = path.join(root, 'opencode.json');
+    fs.writeFileSync(process.env.OPENCODE_CONFIG, JSON.stringify({ plugins: ['leakshield'] }));
+    const storage = fs.mkdtempSync(path.join(scratchConfigRoot, 'storage-'));
+    tempRoots.push(storage);
+    const ctx = createCtx(root);
+    ctx.context.globalStorageUri.fsPath = storage;
+
+    const listed = await handleConfigBridgeMessage(
+      { id: 'l', type: 'api:config/plugins', payload: { target: 'list', directory: root } },
+      ctx,
+      deps,
+    );
+    const entry = listed.data.entries.find((candidate) => candidate.spec === 'leakshield');
+    expect(entry.switchState).toBe('on');
+
+    const off = await handleConfigBridgeMessage({
+      id: 'off',
+      type: 'api:config/plugins',
+      payload: { method: 'PUT', target: 'entry', action: 'enabled', pluginId: entry.id, body: { enabled: false }, directory: root },
+    }, ctx, deps);
+    expect(off.success).toBe(true);
+    expect(off.data).toMatchObject({ enabled: false, resource: 'plugin:leakshield', changed: true, requiresManualRestart: false });
+    expect(readJson(path.join(storage, 'plugin-switches.json'))).toEqual({ version: 1, disabled: ['plugin:leakshield'] });
+
+    const after = await handleConfigBridgeMessage(
+      { id: 'l2', type: 'api:config/plugins', payload: { target: 'list', directory: root } },
+      ctx,
+      deps,
+    );
+    expect(after.data.entries.find((candidate) => candidate.spec === 'leakshield').switchState).toBe('off');
+  });
+
+  test('keeps the saved switch and asks for a restart when the managed layer cannot be rewritten', async () => {
+    const root = path.join(scratchConfigRoot, 'xdg', 'opencode');
+    fs.mkdirSync(root, { recursive: true });
+    tempRoots.push(root);
+    process.env.OPENCODE_CONFIG = path.join(root, 'opencode.json');
+    fs.writeFileSync(process.env.OPENCODE_CONFIG, JSON.stringify({ plugins: ['leakshield'] }));
+    const storage = fs.mkdtempSync(path.join(scratchConfigRoot, 'storage-'));
+    tempRoots.push(storage);
+    const base = createCtx(root);
+    base.context.globalStorageUri.fsPath = storage;
+    const ctx = {
+      ...base,
+      manager: { ...base.manager, refreshPluginSwitches: async () => { throw new Error('disk full'); } },
+    };
+
+    const listed = await handleConfigBridgeMessage(
+      { id: 'l', type: 'api:config/plugins', payload: { target: 'list', directory: root } },
+      ctx,
+      deps,
+    );
+    const entry = listed.data.entries.find((candidate) => candidate.spec === 'leakshield');
+    const off = await handleConfigBridgeMessage({
+      id: 'off',
+      type: 'api:config/plugins',
+      payload: { method: 'PUT', target: 'entry', action: 'enabled', pluginId: entry.id, body: { enabled: false }, directory: root },
+    }, ctx, deps);
+
+    expect(off.success).toBe(true);
+    expect(off.data).toMatchObject({ enabled: false, changed: true, requiresReload: false, requiresManualRestart: true });
+    expect(readJson(path.join(storage, 'plugin-switches.json'))).toEqual({ version: 1, disabled: ['plugin:leakshield'] });
+  });
+
+  test('reports a plugin a config allow keeps loading and refuses to switch it off', async () => {
+    const root = path.join(scratchConfigRoot, 'xdg', 'opencode');
+    fs.mkdirSync(root, { recursive: true });
+    tempRoots.push(root);
+    process.env.OPENCODE_CONFIG = path.join(root, 'opencode.json');
+    fs.writeFileSync(process.env.OPENCODE_CONFIG, JSON.stringify({
+      plugins: ['leakshield'],
+      policies: [{ action: 'plugin.use', resource: '*', effect: 'allow' }],
+    }));
+    const storage = fs.mkdtempSync(path.join(scratchConfigRoot, 'storage-'));
+    tempRoots.push(storage);
+    const ctx = createCtx(root);
+    ctx.context.globalStorageUri.fsPath = storage;
+
+    const listed = await handleConfigBridgeMessage(
+      { id: 'l', type: 'api:config/plugins', payload: { target: 'list', directory: root } },
+      ctx,
+      deps,
+    );
+    const entry = listed.data.entries.find((candidate) => candidate.spec === 'leakshield');
+    expect(entry.switchState).toBe('overridden');
+
+    let thrown;
+    try {
+      await handleConfigBridgeMessage({
+        id: 'off',
+        type: 'api:config/plugins',
+        payload: { method: 'PUT', target: 'entry', action: 'enabled', pluginId: entry.id, body: { enabled: false }, directory: root },
+      }, ctx, deps);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown?.code).toBe('SWITCH_OVERRIDDEN');
+    expect(fs.existsSync(path.join(storage, 'plugin-switches.json'))).toBe(false);
+  });
+
+  test('refuses a switch when the extension connects to an external OpenCode', async () => {
+    const base = createCtx(os.tmpdir());
+    const ctx = {
+      ...base,
+      manager: {
+        ...base.manager,
+        getDebugInfo: () => ({ mode: 'external' }),
+      },
+    };
+    let thrown;
+    try {
+      await handleConfigBridgeMessage({
+        id: 'x',
+        type: 'api:config/plugins',
+        payload: { method: 'PUT', target: 'entry', action: 'enabled', pluginId: 'id', body: { enabled: false } },
+      }, ctx, deps);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.code).toBe('SWITCH_UNAVAILABLE');
+  });
+});
+
+describe('magic prompt bridge', () => {
+  test('hands the parsed request to the host and returns its status and body', async () => {
+    const handleMagicPromptRequest = mock(async () => ({ status: 409, body: { error: 'bad file', code: 'project_config_invalid' } }));
+    const send = (body) => handleConfigBridgeMessage({
+      id: 'm1',
+      type: 'api:magic-prompts',
+      payload: { method: 'PUT', id: 'plan.todo.instructions', query: { projectId: ['path_abc'], scope: ['project'], sessionDirectory: [] }, body },
+    }, undefined, { ...deps, handleMagicPromptRequest });
+
+    const response = await send({ text: '' });
+    // A selector in the body is reported, so the host refuses it instead of writing the global file.
+    await send({ text: 'x', scope: 'project' });
+
+    expect(handleMagicPromptRequest.mock.calls.map(([request]) => request)).toEqual([
+      { method: 'PUT', id: 'plan.todo.instructions', projectId: ['path_abc'], scope: ['project'], sessionDirectory: [], text: '', bodyNamesSelector: false },
+      { method: 'PUT', id: 'plan.todo.instructions', projectId: ['path_abc'], scope: ['project'], sessionDirectory: [], text: 'x', bodyNamesSelector: true },
+    ]);
+    expect(response).toEqual({ id: 'm1', type: 'api:magic-prompts', success: true, data: { status: 409, body: { error: 'bad file', code: 'project_config_invalid' } } });
   });
 });

@@ -1,4 +1,5 @@
-import { substituteCommandVariables } from '@/lib/openchamberConfig';
+import { getWorktreeCreateCommand, substituteCommandVariables } from '@/lib/openchamberConfig';
+import { resolveWorktreeTeardownCommands } from '@/lib/sharedTrustConfirmation';
 import { normalizePath as normalizePathImpl } from '@/lib/pathNormalization';
 import { captureRuntimeInstance, getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { toast } from '@/components/ui';
@@ -8,6 +9,7 @@ import { git } from '@/lib/gitApi';
 import { runBoundRemoteBranchDelete } from '@/lib/boundGitNetworkOperation';
 import {
   clearWorktreeBootstrapState,
+  getWorktreeBootstrapState,
   markWorktreeBootstrapPending,
   setWorktreeBootstrapState,
   startWorktreeBootstrapWatcher,
@@ -56,10 +58,6 @@ const deriveCanonicalWorktreeFields = (
 ): Pick<WorktreeMetadata, 'worktreeRoot' | 'worktreeStatus' | 'headState' | 'worktreeSource'> => {
   return {
     worktreeRoot: worktreePath,
-    // A prunable worktree is still registered by git but its directory is
-    // gone. It stays in the topology as `missing` so the sessions that lived
-    // there keep their group in the sidebar and can be opened and relocated;
-    // dropping it would hide those sessions with no way back.
     worktreeStatus: entry.prunable === true ? 'missing' : 'ready',
     headState: deriveHeadStateFromWorktreeEntry(entry),
     worktreeSource: 'existing',
@@ -70,7 +68,6 @@ export type ProjectRef = { id: string; path: string };
 
 const normalizePath = (value: string | null | undefined): string => normalizePathImpl(value) ?? '';
 
-/** The name the sidebar shows for a worktree, used in worktree-scoped toasts. */
 export const getWorktreeDisplayName = (worktree: WorktreeMetadata): string =>
   worktree.branch || worktree.label || worktree.path;
 
@@ -207,13 +204,13 @@ const deriveSdkWorktreeNameFromDirectory = (directory: string): string => {
   return parts[parts.length - 1] ?? normalized;
 };
 
-const buildSdkStartCommand = (args: {
+const joinWorktreeCommands = (args: {
   projectDirectory: string;
-  setupCommands: string[];
+  commands: string[];
 }): string | undefined => {
   const commands: string[] = [];
 
-  for (const raw of args.setupCommands) {
+  for (const raw of args.commands) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
     commands.push(
@@ -241,7 +238,6 @@ const toCreatePayload = (args: {
   expectedRevision?: string;
   changeRequestSource?: GitChangeRequestSourceRequest;
   returnAfterDirectoryCreated?: boolean;
-  /** The pull request's or issue's title, the worktree's task title until the agent names it. */
   taskTitle?: string;
 }, projectDirectory: string): CreateGitWorktreePayload => {
   const mode = args.mode === 'existing' ? 'existing' : 'new';
@@ -256,9 +252,9 @@ const toCreatePayload = (args: {
   const startRef = (args.startRef || '').trim();
 
   const commands = Array.isArray(args.setupCommands) ? args.setupCommands : [];
-  const startCommand = buildSdkStartCommand({
+  const startCommand = joinWorktreeCommands({
     projectDirectory,
-    setupCommands: commands,
+    commands,
   });
 
   const payload: CreateGitWorktreePayload = { mode };
@@ -276,8 +272,6 @@ const toCreatePayload = (args: {
   if (args.changeRequestSource) payload.changeRequestSource = args.changeRequestSource;
   if (args.returnAfterDirectoryCreated) payload.returnAfterDirectoryCreated = true;
   if (args.taskTitle?.trim()) payload.taskTitle = args.taskTitle.trim();
-  // Quick worktree's `agile-chipmunk`, or the dialog's suggestion kept as is
-  // (an issue's `issue-180-merry-salamander` keeps its number on rename).
   const generatedPrefix = mode === 'new' && branchName ? generatedBranchPrefix(branchName) : null;
   if (generatedPrefix !== null) {
     payload.generatedBranchName = branchName;
@@ -286,24 +280,6 @@ const toCreatePayload = (args: {
   return payload;
 };
 
-/**
- * Compare two worktree-by-project maps for equality.
- * Compares discovery-owned metadata (not reference equality)
- * because readStableProjectWorktrees creates new object instances on
- * each call, making reference checks always report changed.
- *
- * `branch` is included so an external `git checkout` between
- * discoveries — which changes `branch` (and the derived `label`
- * and `headState`) while leaving `path` unchanged — still triggers
- * a store update. Without this, the branch label in the sidebar
- * could go stale until the next worktree create/remove or project
- * switch, since there is no periodic worktree-list refresh.
- *
- * Status changes (`worktreeStatus`) are not compared here: those
- * flow through `setStoredWorktreeStatus`, which writes a new Map
- * reference that the persist subscriber picks up directly.
- *
- */
 export const worktreeMapsEqual = (
   a: Map<string, WorktreeMetadata[]>,
   b: Map<string, WorktreeMetadata[]>,
@@ -325,11 +301,7 @@ export const worktreeMapsEqual = (
         || next.worktreeStatus !== current.worktreeStatus
         || next.worktreeSource !== current.worktreeSource
         || next.source !== current.source
-        // The task title changes while the worktree stays: the agent names
-        // the task, the user renames it. Left out, a renamed list read as
-        // unchanged and the sidebar kept the old name.
         || next.title !== current.title
-        // Pinning changes it the same way.
         || next.pinnedAt !== current.pinnedAt
         || next.pinList !== current.pinList) return false;
     }
@@ -337,20 +309,6 @@ export const worktreeMapsEqual = (
   return true;
 };
 
-/**
- * Partition shared Git worktree topology across configured projects.
- *
- * A configured project may itself be a linked worktree. Asking Git for the
- * worktree list from every configured checkout returns the same repository
- * topology each time, which would otherwise render every sibling worktree
- * under every project. The primary checkout owns the topology when it is
- * configured; otherwise the first configured checkout for that repository
- * owns it. Checkouts that are configured projects are omitted from the owned
- * worktree list because they already have their own project section. So are
- * checkouts that hold a configured project in a sub-folder, such as the
- * repository root of a project at `repo/app`: deleting one would delete that
- * project's folder.
- */
 export const partitionWorktreesByRegisteredProject = (
   projects: ReadonlyArray<Pick<ProjectRef, 'path'>>,
   worktreesByProject: ReadonlyMap<string, WorktreeMetadata[]>,
@@ -419,23 +377,9 @@ export const partitionWorktreesByRegisteredProject = (
   return partitioned;
 };
 
-/**
- * A worktree this client created and is still bootstrapping, or whose
- * bootstrap failed, keeps that status through an authoritative refresh: git
- * lists the entry as a plain registered worktree and would otherwise report
- * `ready` while population or setup scripts are still running.
- */
 const isClientTrackedWorktreeStatus = (status: WorktreeMetadata['worktreeStatus']): boolean =>
   status === 'pending' || status === 'invalid';
 
-/**
- * Replace the worktree buckets of one repository with a freshly listed set.
- *
- * A registered project may itself be a linked worktree, so every bucket whose
- * repository root matches the refreshed one is replaced together; buckets of
- * other repositories keep their references. An empty refreshed set removes the
- * repository's buckets.
- */
 export const replaceRepositoryWorktrees = (
   worktreesByProject: ReadonlyMap<string, WorktreeMetadata[]>,
   projectPath: string,
@@ -478,11 +422,6 @@ export const replaceRepositoryWorktrees = (
   return next;
 };
 
-/**
- * Carry client-tracked bootstrap statuses from the published topology into a
- * freshly partitioned one before it is published. Buckets without such an
- * entry keep their references.
- */
 export const preserveClientTrackedWorktreeStatus = (
   nextByProject: Map<string, WorktreeMetadata[]>,
   publishedByProject: ReadonlyMap<string, WorktreeMetadata[]>,
@@ -515,11 +454,10 @@ export const preserveClientTrackedWorktreeStatus = (
   return changed ? result : nextByProject;
 };
 
-// Cache worktree listings to avoid repeated git worktree list + rev-parse calls
 const _worktreeListCache = new Map<string, { value: WorktreeMetadata[]; at: number }>();
 const _worktreeListInflight = new Map<string, { generation: number; promise: Promise<WorktreeMetadata[]> }>();
 const _worktreeListGeneration = new Map<string, number>();
-const WORKTREE_LIST_CACHE_TTL = 30_000; // 30 seconds
+const WORKTREE_LIST_CACHE_TTL = 30_000;
 const WORKTREE_LIST_MAX_CONVERGENCE_ATTEMPTS = 3;
 
 const getWorktreeListGeneration = (projectDirectory: string): number => {
@@ -531,9 +469,6 @@ const invalidateWorktreeList = (projectDirectory: string): void => {
   _worktreeListCache.delete(projectDirectory);
 };
 
-// The list and root caches are keyed by path, and two instances can have a
-// project at the same path. Transport changes may retry a read; instance
-// changes retire its owner before another request or cache write.
 subscribeRuntimeEndpointChanged(() => {
   const directories = new Set([..._worktreeListGeneration.keys(), ..._worktreeListCache.keys(), ..._worktreeListInflight.keys()]);
   for (const directory of directories) invalidateWorktreeList(directory);
@@ -554,7 +489,6 @@ const readProjectWorktrees = async (projectDirectory: string, isCurrent: () => b
       const branch = (entry.branch || '').replace(/^refs\/heads\//, '').trim();
       const name = (entry.name || '').trim();
 
-      // Derive canonical worktree metadata from worktree list entry
       const canonical = deriveCanonicalWorktreeFields(entry, worktreePath);
 
       return {
@@ -615,13 +549,11 @@ export async function listProjectWorktrees(project: ProjectRef, options?: { forc
 
   const generation = getWorktreeListGeneration(projectDirectory);
 
-  // Return cached if fresh
   const cached = _worktreeListCache.get(projectDirectory);
   if (!force && cached && Date.now() - cached.at < WORKTREE_LIST_CACHE_TTL) {
     return cached.value;
   }
 
-  // Dedup in-flight requests
   const inflight = _worktreeListInflight.get(projectDirectory);
   if (inflight && inflight.generation === generation) return inflight.promise;
 
@@ -662,7 +594,6 @@ export type CreateWorktreeArgs = {
   expectedRevision?: string;
   changeRequestSource?: GitChangeRequestSourceRequest;
   returnAfterDirectoryCreated?: boolean;
-  /** The pull request's or issue's title, the worktree's task title until the agent names it. */
   taskTitle?: string;
 };
 
@@ -676,11 +607,13 @@ export async function createWorktree(project: ProjectRef, args: CreateWorktreeAr
   const metadataProjectDirectory = await resolveProjectRoot(projectDirectory).catch(() => projectDirectory);
   assertCurrent();
   const payload = toCreatePayload(args, projectDirectory);
+  const createCommand = await getWorktreeCreateCommand(project);
+  assertCurrent();
+  if (createCommand) payload.createCommand = createCommand;
 
   const created = await git.worktree.create(projectDirectory, payload);
   assertCurrent();
   if (created?.sourceFetchFailed) {
-    // Say why when the user can fix it: the repository's access.
     toast.warning(formatMessage(
       useI18nStore.getState().dictionary,
       created.sourceFetchReason === 'access' ? 'session.newWorktree.toast.fetchSourceAccess' : 'session.newWorktree.toast.fetchSourceFailed',
@@ -730,11 +663,8 @@ export async function createWorktree(project: ProjectRef, args: CreateWorktreeAr
   }
 
   invalidateWorktreeList(projectDirectory);
-  // The new worktree changes the repo's worktree topology; drop cached root
-  // resolutions so root-branch lookups re-resolve against the new layout.
   invalidateResolvedProjectRootCache();
 
-  // Update sidebar store so new worktree appears immediately
   useSessionUIStore.setState((state) => {
     const updatedByProject = new Map(state.availableWorktreesByProject);
     const createdWorktreePath = normalizePath(metadata.path);
@@ -776,18 +706,11 @@ export async function validateWorktreeCreate(project: ProjectRef, args: CreateWo
   return git.worktree.validate(projectDirectory, payload);
 }
 
-/**
- * Drops a worktree whose folder is gone from this client's state, so its row
- * leaves the sidebar at once instead of on the next topology refresh.
- */
 const forgetRemovedWorktree = (project: ProjectRef, worktree: WorktreeMetadata): void => {
   clearWorktreeBootstrapState(worktree.path);
   invalidateWorktreeList(normalizePath(project.path));
-  // Removing a worktree changes the repo's worktree topology; drop cached root
-  // resolutions so root-branch lookups re-resolve against the new layout.
   invalidateResolvedProjectRootCache();
 
-  // Update sidebar store so removed worktree disappears immediately
   const normalizedWorktreePath = normalizePath(worktree.path);
   const currentByProject = useSessionUIStore.getState().availableWorktreesByProject;
   const updatedByProject = new Map(currentByProject);
@@ -800,7 +723,6 @@ const forgetRemovedWorktree = (project: ProjectRef, worktree: WorktreeMetadata):
     }
   }
 
-  // Clean up worktreeMetadata for sessions in the removed worktree
   const currentMetadata = useSessionUIStore.getState().worktreeMetadata;
   const updatedMetadata = new Map(currentMetadata);
   for (const [sid, meta] of currentMetadata.entries()) {
@@ -819,11 +741,19 @@ const forgetRemovedWorktree = (project: ProjectRef, worktree: WorktreeMetadata):
   clearWorktreeRemoval(worktree.path);
 };
 
-/**
- * Archives the worktree: the server records its state with `sessionIds` (the
- * sessions the caller archived for it) under a private ref and removes the
- * folder, keeping the branch. The row shows the removal until git answers.
- */
+export const resolveWorktreeTeardownCommand = async (
+  project: ProjectRef,
+  worktree: WorktreeMetadata,
+  { ask = true }: { ask?: boolean } = {},
+): Promise<string | undefined> => {
+  if (getWorktreeBootstrapState(worktree.path)?.status === 'failed') return undefined;
+  if (worktree.provenance?.kind === 'contributor-fork') return undefined;
+  return joinWorktreeCommands({
+    projectDirectory: normalizePath(project.path),
+    commands: await resolveWorktreeTeardownCommands(project, { ask }),
+  });
+};
+
 export async function archiveProjectWorktree(
   project: ProjectRef,
   worktree: WorktreeMetadata,
@@ -849,6 +779,7 @@ export async function removeProjectWorktree(project: ProjectRef, worktree: Workt
     sourceControl: Pick<SourceControlAPI, 'repositoryBinding'>;
     git: Pick<GitAPI, 'planNetworkOperation' | 'executeNetworkOperation' | 'getNetworkOperation'>;
   };
+  skipTeardown?: boolean;
 }): Promise<void> {
   const projectDirectory = normalizePath(project.path);
 
@@ -861,18 +792,25 @@ export async function removeProjectWorktree(project: ProjectRef, worktree: Workt
   }
   markWorktreeRemoving(worktree.path);
   try {
+    let teardownCommand = options?.skipTeardown === true ? undefined : await resolveWorktreeTeardownCommand(project, worktree);
     if (deleteRemote && branchName && remoteName && options?.network) {
+      const teardownFirst = teardownCommand;
       await runBoundRemoteBranchDelete({
+        beforePlan: teardownFirst
+          ? async () => { await git.worktree.teardown(projectDirectory, { directory: worktree.path, teardownCommand: teardownFirst }); }
+          : undefined,
         branch: branchName,
         directory: projectDirectory,
         remoteName,
         sourceControl: options.network.sourceControl,
         git: options.network.git,
       });
+      teardownCommand = undefined;
     }
     const raw = await git.worktree.remove(projectDirectory, {
       directory: worktree.path,
       deleteLocalBranch,
+      teardownCommand,
     });
     if (!raw?.success) {
       throw new Error('Worktree removal failed');

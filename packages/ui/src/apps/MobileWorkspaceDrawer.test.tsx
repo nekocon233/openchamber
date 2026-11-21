@@ -332,7 +332,7 @@ test('MobileWorkspaceDrawer exposes standalone PR and CI tabs, retains visited p
                     currentTab = next;
                   },
                   openChangeRequest: () => {},
-                  closeWorkStatusSheet: () => {},
+                  closeWorkStatusSheet: () => {}, openPlan: () => {}, openReceivedPage: () => {},
                 }}
               >
                 <MobileWorkspaceDrawer

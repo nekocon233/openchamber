@@ -6,7 +6,7 @@ import express from 'express';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { registerAuthAndAccessRoutes, registerCommonRequestMiddleware } from '../opencode/core-routes.js';
+import { registerAuthAndAccessRoutes, registerCommonRequestMiddleware } from '../server-frame/core-routes.js';
 import { createFollowUpQueueServerRuntime } from './index.js';
 import { parseFollowUpQueueBody, registerFollowUpQueueRoutes } from './routes.js';
 

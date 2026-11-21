@@ -5,9 +5,6 @@ import { Icon } from '@/components/icon/Icon';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { PROJECT_ICON_MAP, resolveProjectColor, ProjectIconImage } from '@/lib/projectMeta';
 
-/** The project fields the icon needs — a structural subset of the sheet's
-    ProjectMeta, so both the sheet and the timeline list can pass their own
-    project objects without sharing a type. */
 export type MobileProjectIconProject = {
   id: string;
   icon?: string | null;
@@ -18,7 +15,6 @@ export type MobileProjectIconProject = {
 
 export const MobileProjectIcon: React.FC<{
   project: MobileProjectIconProject;
-  /** xs sits inside a 16px text line, md in a header's 32px slot. */
   size?: 'xs' | 'md';
 }> = ({ project, size = 'md' }) => {
   const { currentTheme } = useThemeSystem();
@@ -46,13 +42,10 @@ export const MobileProjectIcon: React.FC<{
   const imageBackground = project.iconBackground ? { backgroundColor: project.iconBackground } : undefined;
 
   if (size === 'md') {
-    // A header's 20px slot, which the rows under it align to. No tile: the
-    // glyph and an image with its own corners both take the slot's size, so
-    // both read at about the same weight next to the label.
     return (
-      <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+      <span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">
         {image ? (
-          <span className="flex size-5 items-center justify-center overflow-hidden rounded-md" style={imageBackground}>{image}</span>
+          <span className="flex size-6 items-center justify-center overflow-hidden rounded-md" style={imageBackground}>{image}</span>
         ) : fallbackIcon}
       </span>
     );

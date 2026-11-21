@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test, vi } from 'bun:test';
 import { Window, type HTMLElement as HappyHTMLElement } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
 
@@ -8,6 +8,14 @@ import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { buildNativeProvider } from '@/lib/native-agents/providers';
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from '@/lib/native-agents/test-utils/runtime';
 import type { CommandAutocompleteHandle } from './CommandAutocomplete';
+
+declare module 'bun:test' {
+  export const vi: {
+    useFakeTimers(): void;
+    useRealTimers(): void;
+    runAllTimers(): void;
+  };
+}
 
 let CommandAutocomplete: typeof import('./CommandAutocomplete')['CommandAutocomplete'];
 let SkillAutocomplete: typeof import('./SkillAutocomplete')['SkillAutocomplete'];
@@ -127,24 +135,33 @@ async function mountPicker(kind: 'command' | 'skill') {
 }
 
 for (const kind of ['command', 'skill'] as const) {
-  test(`${kind}: shows the selected row's scope and description and accepts Enter`, async () => {
+  test(`${kind}: the row reads name, description, then its scope; nothing pops up on selection`, async () => {
     const { press } = await mountPicker(kind);
     const item = row();
-    expect(Array.from(item.querySelectorAll('.uppercase')).map((badge) => badge.textContent)).toEqual(kind === 'command' ? ['command', 'project'] : ['project']);
+    expect(Array.from(item.querySelectorAll('.uppercase')).map((badge) => badge.textContent)).toEqual(['project']);
+    expect(item.querySelector('.font-normal')?.textContent).toBe('First details');
 
-    await act(async () => {
-      item.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 30, clientY: 30 }));
-      await new Promise((resolve) => setTimeout(resolve, 260));
-    });
-    await press('ArrowDown');
-    if (kind === 'command') {
-      expect(details()?.textContent).toBe('First details');
-    } else {
-      expect(item.querySelector('.font-normal')?.textContent).toBe('First details');
+    const originalSetTimeout = dom.setTimeout;
+    const originalClearTimeout = dom.clearTimeout;
+    vi.useFakeTimers();
+    dom.setTimeout = globalThis.setTimeout;
+    dom.clearTimeout = globalThis.clearTimeout;
+    try {
+      await act(async () => {
+        item.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 30, clientY: 30 }));
+      });
+      // Exhaust pending hover timers before checking that no tooltip can open.
+      await act(async () => { vi.runAllTimers(); });
+      await press('ArrowDown');
+      await act(async () => { vi.runAllTimers(); });
       expect(details()).toBeNull();
+      await press('Enter');
+      expect(selections).toEqual(['oc-scroll']);
+    } finally {
+      dom.setTimeout = originalSetTimeout;
+      dom.clearTimeout = originalClearTimeout;
+      vi.useRealTimers();
     }
-    await press('Enter');
-    expect(selections).toEqual(['oc-scroll']);
   });
 
   test(`${kind}: a list placed below the caret keeps the height its placement gave it`, async () => {

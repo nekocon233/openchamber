@@ -12,10 +12,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useUIStore } from '@/stores/useUIStore';
+import { HoverTooltip } from '@/components/ui/row-tooltip';
 import { useI18n } from '@/lib/i18n';
 import { useMarkdownPresentation } from './MarkdownPresentationContext';
 import { cn } from '@/lib/utils';
+import { ColumnResizeHandle } from '@/components/ui/ColumnResizeHandle';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
+import { loadColumnWidths, saveColumnWidths, type ColumnWidths } from '@/lib/columnWidthMemory';
 
 type TableFormat = 'csv' | 'tsv' | 'md';
 const copyFormats = ['csv', 'tsv', 'md'] as const;
@@ -24,23 +27,51 @@ const formatLabel = (format: TableFormat) => format === 'md' ? 'Markdown' : form
 const escapeCell = (text: string) => text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 const TableColumns = React.createContext<ReadonlyMap<Element, boolean>>(new Map());
 
+type TableResize = {
+  columnOf: ReadonlyMap<Element, number>;
+  onResize: (column: number, width: number) => void;
+  onResizeEnd: (column: number, width: number) => void;
+  onReset: (column: number) => void;
+};
+const TableResizing = React.createContext<TableResize | null>(null);
+
+const headingText = (node: Element['children'][number]): string => {
+  if (node.type === 'text') return node.value;
+  return node.type === 'element' ? node.children.map(headingText).join('') : '';
+};
+
+const tableHeadings = (table: Element | undefined): string => {
+  const head = table?.children.find((child): child is Element => child.type === 'element' && child.tagName === 'thead');
+  return head ? headingText(head) : '';
+};
+
 export function MarkdownTableCell({ node, style, ...props }: React.ComponentProps<'td'> & ExtraProps) {
   const columns = React.useContext(TableColumns);
   const capped = node ? columns.get(node) : undefined;
+  const resizing = React.useContext(TableResizing);
+  const { t } = useI18n();
   const Cell = node?.tagName === 'th' ? defaultComponents.th : defaultComponents.td;
   const cellStyle: React.CSSProperties & { '--oc-table-code-wrap': string } = {
     ...style, '--oc-table-code-wrap': capped ? 'normal' : 'nowrap',
   };
-  return <Cell {...props} node={node} style={cellStyle} />;
+  const column = node?.tagName === 'th' ? resizing?.columnOf.get(node) : undefined;
+  if (!resizing || column === undefined) return <Cell {...props} node={node} style={cellStyle} />;
+  return (
+    <Cell {...props} node={node} style={{ ...cellStyle, position: 'relative' }}>
+      {props.children}
+      <ColumnResizeHandle
+        label={t('filesView.artifact.table.resizeColumn', { column: String(column + 1) })}
+        onResize={(width) => resizing.onResize(column, width)}
+        onResizeEnd={(width) => resizing.onResizeEnd(column, width)}
+        onReset={() => resizing.onReset(column)}
+      />
+    </Cell>
+  );
 }
 
-// A wrapped column is never squeezed below this; a narrower one (row numbers,
-// short codes) keeps its own width.
 const MIN_COLUMN = 120;
-// A text column in a table that scrolls sideways wraps at this width.
 const WIDE_COLUMN = 280;
 
-// Keep short columns at their natural width and share only the remaining space.
 function fitColumns(natural: number[], available: number, wrap: boolean): number[] {
   const widths = natural.map((width) => Math.min(Math.max(MIN_COLUMN, available || 320), width));
   if (!wrap || available <= 0) return widths;
@@ -50,8 +81,6 @@ function fitColumns(natural: number[], available: number, wrap: boolean): number
     const share = remaining / open.length;
     const fitting = open.filter((index) => widths[index] <= share);
     if (!fitting.length) {
-      // Below the minimum share the table scrolls sideways anyway; squeezing a
-      // long text column to the minimum then only stacks it into a tall cell.
       const width = share < MIN_COLUMN ? WIDE_COLUMN : Math.floor(share);
       for (const index of open) widths[index] = Math.max(Math.min(MIN_COLUMN, natural[index]), Math.min(natural[index], width));
       break;
@@ -62,12 +91,6 @@ function fitColumns(natural: number[], available: number, wrap: boolean): number
   return widths;
 }
 
-/**
- * The widths hidden headings ask of their columns: a short one stays on one
- * line, a long one wraps between words but never splits its longest word.
- * Copies of the cells are measured next to the table, so code, bold and links
- * inside a heading keep their own styles.
- */
 function headingWidths(cells: HTMLTableCellElement[], host: HTMLElement): number[] {
   const holder = host.ownerDocument.createElement('div');
   holder.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden';
@@ -113,13 +136,12 @@ function serializeMarkdownTable(table: HTMLTableElement, format: TableFormat): s
   const data = { headers: rows[0] ?? [], rows: rows.slice(1) };
   if (format === 'csv') return tableDataToCSV(data);
   if (format === 'tsv') return tableDataToTSV(data);
-  // Cells already contain escaped Markdown links; do not escape them again.
   return [data.headers, data.headers.map(() => '---'), ...data.rows]
     .map((row) => `| ${row.join(' | ')} |`).join('\n');
 }
 
 export function MarkdownTable({ node, className, children, ...props }: React.ComponentProps<'table'> & ExtraProps) {
-  const { purpose, settled } = useMarkdownPresentation();
+  const { purpose, settled, tableWidthScope } = useMarkdownPresentation();
   const wrap = useUIStore((state) => state.tableCellWrap);
   const ref = React.useRef<HTMLTableElement>(null);
   const wrapper = React.useRef<HTMLDivElement>(null);
@@ -128,8 +150,6 @@ export function MarkdownTable({ node, className, children, ...props }: React.Com
   React.useLayoutEffect(() => {
     const table = ref.current;
     const container = wrapper.current?.parentElement;
-    // A streaming table grows on every update; measuring it each time forced
-    // a layout per update. It keeps its natural layout until the reply settles.
     if (!table || !container || !settled) return;
     const view = table.ownerDocument.defaultView;
     if (!view) return;
@@ -168,20 +188,43 @@ export function MarkdownTable({ node, className, children, ...props }: React.Com
     observer.observe(container);
     return () => observer.disconnect();
   }, [node, measured, settled]);
-  const widths = React.useMemo(
+  const tableId = tableWidthScope && !purpose ? `${tableWidthScope}#${tableHeadings(node)}` : null;
+  const [userWidths, setUserWidths] = React.useState<ColumnWidths>(() => (tableId ? loadColumnWidths(tableId) : {}));
+  const [dragged, setDragged] = React.useState<{ column: number; width: number } | null>(null);
+  const fitted = React.useMemo(
     () => measured ? fitColumns(measured.natural, measured.available, wrap) : null,
     [measured, wrap],
   );
+  const widths = React.useMemo(() => {
+    const shown = dragged ? { ...userWidths, [dragged.column]: dragged.width } : userWidths;
+    return fitted?.map((width, column) => shown[column] ?? width) ?? null;
+  }, [fitted, userWidths, dragged]);
+  const resizing = React.useMemo<TableResize | null>(() => {
+    if (!tableId || !fitted) return null;
+    const store = (next: ColumnWidths) => {
+      setUserWidths(next);
+      setDragged(null);
+      saveColumnWidths(tableId, next);
+    };
+    const head = node?.children.find((child): child is Element => child.type === 'element' && child.tagName === 'thead');
+    const row = head?.children.find((child): child is Element => child.type === 'element' && child.tagName === 'tr');
+    const cells = row?.children.filter((child): child is Element => child.type === 'element') ?? [];
+    return {
+      columnOf: new Map(cells.map((cell, column) => [cell, column])),
+      onResize: (column, width) => setDragged({ column, width }),
+      onResizeEnd: (column, width) => store({ ...userWidths, [column]: width }),
+      onReset: (column) => {
+        const { [column]: _removed, ...rest } = userWidths;
+        store(rest);
+      },
+    };
+  }, [tableId, fitted, node, userWidths]);
   const columns = widths?.map((width, index) => (
     <col key={index} style={{ width }} />
   ));
-  // Which columns are narrower than their content. Widths change on every
-  // frame of a chat resize, these flags rarely do.
   const cappedColumns = widths && measured
     ? widths.map((width, index) => (measured.natural[index] > width ? '1' : '0')).join('')
     : '';
-  // A new map re-renders every cell, so it changes only with the table's
-  // content or which columns are capped.
   const cellWrap = React.useMemo(() => {
     const result = new Map<Element, boolean>();
     for (const section of node?.children ?? []) {
@@ -222,25 +265,29 @@ export function MarkdownTable({ node, className, children, ...props }: React.Com
   };
 
   return (
-    <div ref={wrapper} data-streamdown="table-wrapper" data-table-wrap={wrap ? 'true' : 'false'} className="group flex flex-col">
+    <div ref={wrapper} dir={props.dir ?? 'ltr'} data-streamdown="table-wrapper" data-table-wrap={wrap ? 'true' : 'false'} className="group flex flex-col">
       {!purpose && (
         <div data-streamdown="table-controls" data-export-ignore className="flex items-center justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="xs"
-            className={wrap ? PRESSED_CLASS : undefined}
-            title={t(wrap ? 'markdownRenderer.table.actions.disableWrapTitle' : 'markdownRenderer.table.actions.enableWrapTitle')}
-            aria-pressed={wrap}
-            onClick={() => useUIStore.getState().setTableCellWrap(!wrap)}
-          >
-            <Icon name="text-wrap" className="size-3.5" />
-          </Button>
+          <HoverTooltip label={t(wrap ? 'markdownRenderer.table.actions.disableWrapTitle' : 'markdownRenderer.table.actions.enableWrapTitle')}>
+            <Button
+              variant="ghost"
+              size="xs"
+              className={wrap ? PRESSED_CLASS : undefined}
+              aria-label={t(wrap ? 'markdownRenderer.table.actions.disableWrapTitle' : 'markdownRenderer.table.actions.enableWrapTitle')}
+              aria-pressed={wrap}
+              onClick={() => useUIStore.getState().setTableCellWrap(!wrap)}
+            >
+              <Icon name="text-wrap" className="size-3.5" />
+            </Button>
+          </HoverTooltip>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="xs" title={t(copied ? 'markdownRenderer.code.actions.copiedTitle' : 'markdownRenderer.table.actions.copyTitle')}>
-                <Icon name={copied ? 'check' : 'file-copy'} className="size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
+            <HoverTooltip label={t(copied ? 'markdownRenderer.code.actions.copiedTitle' : 'markdownRenderer.table.actions.copyTitle')}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="xs" aria-label={t(copied ? 'markdownRenderer.code.actions.copiedTitle' : 'markdownRenderer.table.actions.copyTitle')}>
+                  <Icon name={copied ? 'check' : 'file-copy'} className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </HoverTooltip>
             <DropdownMenuContent align="end">
               {copyFormats.map((format) => (
                 <DropdownMenuItem key={format} onSelect={() => { void copy(format); }}>
@@ -250,11 +297,13 @@ export function MarkdownTable({ node, className, children, ...props }: React.Com
             </DropdownMenuContent>
           </DropdownMenu>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="xs" title={t('markdownRenderer.table.actions.downloadTitle')}>
-                <Icon name="download" className="size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
+            <HoverTooltip label={t('markdownRenderer.table.actions.downloadTitle')}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="xs" aria-label={t('markdownRenderer.table.actions.downloadTitle')}>
+                  <Icon name="download" className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </HoverTooltip>
             <DropdownMenuContent align="end">
               {downloadFormats.map((format) => (
                 <DropdownMenuItem key={format} onSelect={() => download(format)}>
@@ -271,7 +320,9 @@ export function MarkdownTable({ node, className, children, ...props }: React.Com
           style={widths ? { ...props.style, width: widths.reduce((sum, width) => sum + width, 0), tableLayout: 'fixed' } : props.style}
           className={cn('border-collapse', className)}>
           {columns && <colgroup>{columns}</colgroup>}
-          <TableColumns.Provider value={cellWrap}>{children}</TableColumns.Provider>
+          <TableResizing.Provider value={resizing}>
+            <TableColumns.Provider value={cellWrap}>{children}</TableColumns.Provider>
+          </TableResizing.Provider>
         </table>
       </ScrollableOverlay>
     </div>

@@ -54,6 +54,8 @@ type HostBridgeEffects = {
   shellsUnsubscribe: (subscriptionId: string) => void;
   shellOutput: (request: GuestShellOutputRequest) => Promise<GuestShellOutputResult>;
   shellStop: (request: { shellId: string }) => Promise<GuestShellStopResult>;
+  microphoneOpen: (sampleRate: number) => Promise<void>;
+  microphoneClose: () => void;
   storage: (request: GuestStorageRequest) => Promise<GuestStorageResult>;
   setStatusControls: (controls: GuestStatusControl[]) => void;
   openSession: (sessionId: string) => void;
@@ -87,17 +89,12 @@ type HostBridgeEffects = {
     | { ok: true; result: { status: import('@openchamber/sdk').ServiceStatus } }
     | { ok: false; code: HostRequestErrorCode; message: string }
   >;
-  /** One handler for read, write, list, and stat; the pane checks scope and grant, the server does the rest. */
   file: (request: GuestFileRequest) => Promise<GuestFileProxyResult>;
-  /** One-off Small Model text generation; the pane checks the `model` grant, the server picks and calls the model. */
   generate: (request: GenerateRequest) => Promise<GuestGenerateProxyResult>;
-  /** Rail badge for this guest; `null` clears. */
   setBadge: (count: number | null) => void;
-  /** Show a commit of the open project in the Diff view; the pane owns directory and runtime support. */
   openCommit: (sha: string) => Promise<GuestOpenCommitResult>;
-  /** Content height the guest asked for; only the Work Status section sizes its frame from it. */
   resize: (height: number) => void;
-  /** The guest answered a host `resolve` with this id. Not a request, so no `result` goes back. */
+  answerBlock: (text: string) => Promise<void>;
   resolveResult: (id: string, payload: ResolveResultPayload) => void;
   openPopover?: (request: GuestPopoverRequest) => void;
   closePopover?: (id: string, reason: 'closed' | 'escape' | undefined) => void;
@@ -279,11 +276,11 @@ export const answerGuestMessage = async (
     case 'shells-unsubscribe': effects.shellsUnsubscribe(message.payload.subscriptionId); return okResult(message.id);
     case 'shell-output': return okResult(message.id, await effects.shellOutput(message.payload));
     case 'shell-stop': return okResult(message.id, await effects.shellStop(message.payload));
+    case 'microphone-open': await effects.microphoneOpen(message.payload.sampleRate); return okResult(message.id, { opened: true });
+    case 'microphone-close': effects.microphoneClose(); return okResult(message.id);
     case 'storage': return okResult(message.id, await effects.storage(message.payload));
     case 'status-controls': effects.setStatusControls(message.payload.controls); return okResult(message.id);
     case 'open-session': effects.openSession(message.payload.sessionId); return okResult(message.id);
-    // No answer: the pane handles these itself. File editor traffic belongs to
-    // its file channel, not to a request/result pair.
     case 'hello':
     case 'action-result':
     case 'file-snapshot-result':
@@ -309,6 +306,11 @@ export const answerGuestMessage = async (
       effects.openBrowser(message.payload.url);
       return okResult(message.id);
     }
+    case 'block-answer':
+      return effects.answerBlock(message.payload.text).then(
+        () => okResult(message.id),
+        (error: Error) => errorResult(message.id, error.message, 'HOST_REJECTED'),
+      );
     case 'open-surface': {
       if (!isContextPanelMode(message.payload.surfaceId)) {
         return errorResult(message.id, 'Unknown surface.');

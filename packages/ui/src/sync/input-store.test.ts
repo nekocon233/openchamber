@@ -1,9 +1,20 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { strToU8, zipSync } from "fflate"
 import { useInputStore } from "./input-store"
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import type { RuntimeAPIs } from "@/lib/api/types"
 import { getChatDraftIdentityKey } from "@/lib/chatDraftPersistence"
+import { opencodeClient } from "@/lib/opencode/client"
+
+// A HEIC conversion that fails the way the vendored decoder does for Apple's
+// HDR gain-map photos.
+const decodeHeic = async (): Promise<Blob> => {
+  throw new Error("ERR_LIBHEIF format not supported")
+}
+
+mock.module("heic2any", () => ({
+  default: async () => decodeHeic(),
+}))
 
 class MockFileReader {
   result: string | ArrayBuffer | null = null
@@ -126,6 +137,46 @@ describe("input-store attachments", () => {
     expect(message.includes("@")).toBe(false)
     expect(pendingReaders).toHaveLength(0)
     expect(useInputStore.getState().attachedFiles).toEqual([])
+  })
+
+  testWithMockFileReader("saves a HEIC the decoder cannot read where OpenCode runs and attaches a note naming it", async () => {
+    const write = spyOn(opencodeClient, "writeOpenCodeTempFiles").mockImplementation(async (_directory, files) => (
+      files.map(({ filename }) => ({ filename, path: `/tmp/opencode/openchamber/abc/${filename}` }))
+    ))
+    try {
+      const adding = useInputStore.getState().addAttachedFile(new File(["heic-data"], "IMG_4015.heic", { type: "image/heic" }))
+      await waitForReaderCount(1)
+      resolveReader(pendingReaders[0], "data:text/plain;base64,bm90ZQ==")
+      expect(await adding).toBe(true)
+
+      // The original bytes, unconverted, under the original name.
+      const [, files] = write.mock.calls[0]
+      expect(files.map(({ filename }) => filename)).toEqual(["IMG_4015.heic"])
+      expect(new TextDecoder().decode(files[0].bytes)).toBe("heic-data")
+      const [file] = useInputStore.getState().attachedFiles
+      expect(file?.mimeType).toBe("text/plain")
+      expect(file?.filename).toBe("IMG_4015.heic")
+      expect(file?.agentPath).toBe("/tmp/opencode/openchamber/abc/IMG_4015.heic")
+      expect(await file?.file?.text()).toContain("/tmp/opencode/openchamber/abc/IMG_4015.heic")
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  testWithMockFileReader("names a HEIC the decoder cannot read when saving it where OpenCode runs fails too", async () => {
+    const write = spyOn(opencodeClient, "writeOpenCodeTempFiles").mockImplementation(async () => {
+      throw new Error("OpenCode is not reachable")
+    })
+    try {
+      await expect(
+        useInputStore.getState().addAttachedFile(new File(["heic-data"], "IMG_4015.heic", { type: "image/heic" })),
+      ).rejects.toThrow("IMG_4015.heic could not be converted from HEIC to JPEG")
+
+      expect(pendingReaders).toHaveLength(0)
+      expect(useInputStore.getState().attachedFiles).toEqual([])
+    } finally {
+      write.mockRestore()
+    }
   })
 
   test("refuses a VS Code file over 20 MB, which OpenCode would refuse on every send", () => {
@@ -252,6 +303,22 @@ describe("input-store attachments", () => {
     await addPromise
 
     expect(useInputStore.getState().attachedFiles.map((file) => file.filename)).toEqual(["restored.txt"])
+  })
+
+  testWithMockFileReader("a selection added again comes back as the same attachment, whatever its chip is named", async () => {
+    useInputStore.getState().clearAttachedFiles()
+    const file = new File(["hello"], "app/[slug]/page.tsx:12", { type: "text/plain" })
+    const first = useInputStore.getState().addVSCodeSelectionAttachment("/repo/app/[slug]/page.tsx", file)
+    resolveReader(pendingReaders[0], "data:text/plain;base64,aGVsbG8=")
+    await first
+    const [attached] = useInputStore.getState().attachedFiles
+    expect(attached?.filename).toBe("app/(slug)/page.tsx:12")
+
+    await useInputStore.getState().addVSCodeSelectionAttachment("/repo/app/[slug]/page.tsx", file)
+    const again = useInputStore.getState().attachedFiles
+    expect(again).toHaveLength(1)
+    expect(again[0]?.filename).toBe(attached?.filename)
+    expect(again[0]?.id).not.toBe(attached?.id)
   })
 
   testWithMockFileReader("does not attach a VS Code selection that finishes reading after attachments are cleared", async () => {

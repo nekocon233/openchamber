@@ -5,17 +5,17 @@ import { AppStartupOverlay } from '@/components/ui/AppStartupOverlay';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { AppLinkConfirmDialog } from '@/components/chat/AppLinkConfirmDialog';
 import { SnippetQuickCreateDialog } from '@/components/snippets/SnippetQuickCreateDialog';
-import { SharedTrustConfirmDialog } from '@/components/projects/SharedTrustConfirmDialog';
+import { GlobalQuestionDialogs } from '@/components/layout/GlobalQuestionDialogs';
 import { OpenCodeTrustDialog } from '@/components/projects/OpenCodeTrustDialog';
 import { FireworksProvider } from '@/contexts/FireworksContext';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from '@/components/ui';
-import { Button } from '@/components/ui/button';
 import { setStreamPerfMemoryDebugEnabled } from '@/stores/utils/streamDebug';
 import { setRequestsInFlightTrackingEnabled } from '@/stores/utils/requestsInFlight';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 // useEventStream removed — replaced by SyncProvider + SyncBridge
 import { useMenuActions } from '@/hooks/useMenuActions';
+import { useGuestInstallLinks } from '@/hooks/useGuestInstallLinks';
 import { useSessionStatusBootstrap } from '@/hooks/useSessionStatusBootstrap';
 import { useTraySync } from '@/hooks/useTraySync';
 import { useGlobalSessionsPolling } from '@/hooks/useGlobalSessionsPolling';
@@ -27,7 +27,9 @@ import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
 import { useBrowserProviderSync } from '@/hooks/useBrowserProviderSync';
 import { useSourceControlProviderSync } from '@/hooks/useSourceControlProviderSync';
 import { useTrackerProviderSync } from '@/hooks/useTrackerProviderSync';
+import { useQuotaProviderSync } from '@/hooks/useQuotaProviderSync';
 import { useGuestCatalogSync } from '@/hooks/useGuestCatalogSync';
+import { useGuestMarksSync } from '@/hooks/useGuestMarksSync';
 import { useLimitFailoverNotices } from '@/hooks/useLimitFailoverNotices';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRelayLimitToast } from '@/hooks/useRelayLimitToast';
@@ -64,6 +66,7 @@ import { ConfigUpdateOverlay } from '@/components/ui/ConfigUpdateOverlay';
 import { RuntimeAPIProvider } from '@/contexts/RuntimeAPIProvider';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { useUIStore } from '@/stores/useUIStore';
+import { useChatWidthAttribute } from '@/hooks/useChatWidthAttribute';
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
 import { refreshTrackers } from '@/stores/useTrackerAuthStore';
@@ -82,9 +85,7 @@ import { ProjectConfigErrorToast } from '@/components/projects/ProjectConfigErro
 import { markStartupTrace, startupTraceEnabled } from '@/lib/startupTrace';
 import { initializeSidebarStateSync } from '@/stores/useSidebarStateStore';
 import { openSessionFromRoute } from '@/lib/router/openSessionFromRoute';
-import { fetchStartupDiagnostics, getInitRecoveryDescriptionKey, type StartupDiagnostics } from '@/lib/startupDiagnostics';
-import { fetchConnectedServerVersion, isServerBeforeOpenCode2 } from '@/lib/serverCompatibility';
-import { OutdatedServerNotice } from '@/components/update/OutdatedServerNotice';
+import { StartupInitializationRecovery } from './StartupInitializationRecovery';
 
 // Lazy-loaded heavy views — loaded on demand to reduce initial bundle size.
 const OnboardingScreen = lazyWithChunkRecovery(() =>
@@ -113,106 +114,12 @@ const MemoryDebugPanelLoader: React.FC<{ onClose: () => void }> = ({ onClose }) 
   return MemoryDebugPanel ? <MemoryDebugPanel onClose={onClose} /> : null;
 };
 
-const StartupInitializationRecovery: React.FC<{
-  onRetry: () => void;
-  isRetrying: boolean;
-}> = ({ onRetry, isRetrying }) => {
-  const { t } = useI18n();
-  const [diagnostics, setDiagnostics] = React.useState<StartupDiagnostics | null>(null);
-
-  React.useEffect(() => {
-    const controller = new AbortController();
-    const runtimeKey = getRuntimeKey();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    void fetchStartupDiagnostics(controller.signal).then((result) => {
-      if (!controller.signal.aborted && getRuntimeKey() === runtimeKey) {
-        setDiagnostics(result);
-      }
-    }).catch(() => {
-      // Keep generic recovery when the server cannot supply current diagnostics.
-    }).finally(() => clearTimeout(timeout));
-    return () => {
-      controller.abort();
-      clearTimeout(timeout);
-    };
-  }, []);
-
-  // A server before 2.0 answers this app's requests with its web page, which
-  // surfaces as an unrelated load failure. Its own version says why.
-  const [outdatedServerVersion, setOutdatedServerVersion] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    const controller = new AbortController();
-    const runtimeKey = getRuntimeKey();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    void fetchConnectedServerVersion(controller.signal).then((version) => {
-      if (controller.signal.aborted || getRuntimeKey() !== runtimeKey) return;
-      setOutdatedServerVersion(version && isServerBeforeOpenCode2(version) ? version : null);
-    }).catch(() => undefined).finally(() => clearTimeout(timeout));
-    return () => {
-      controller.abort();
-      clearTimeout(timeout);
-    };
-  }, []);
-
-  const failure = useConfigStore((s) => s.lastInitFailure);
-  // Server diagnostics outrank the client's guess: they prove the server answered.
-  const failureMessage = diagnostics ? null : failure?.message ?? null;
-
-  if (outdatedServerVersion) {
-    return (
-      <div className="flex h-full flex-col items-center overflow-y-auto bg-background px-6 py-6 text-foreground">
-        <div className="my-auto flex w-full max-w-xl shrink-0 flex-col items-center gap-4 text-center">
-          <OutdatedServerNotice version={outdatedServerVersion} />
-          <Button type="button" variant="outline" onClick={onRetry} disabled={isRetrying}>
-            {isRetrying ? t('startup.initRecovery.retrying') : t('startup.initRecovery.retry')}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full flex-col items-center overflow-y-auto bg-background px-6 py-6 text-foreground">
-      <div className="my-auto flex w-full max-w-xl shrink-0 flex-col items-center gap-4 text-center">
-        <div className="flex flex-col gap-2">
-          <h1 className="typography-h1 text-foreground">{t('startup.initRecovery.title')}</h1>
-          <p className="typography-markdown text-muted-foreground">{t(getInitRecoveryDescriptionKey(diagnostics, failure))}</p>
-        </div>
-        {failureMessage && (
-          <dl className="w-full min-w-0 text-start" aria-live="polite">
-            <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.lastError')}</dt>
-            <dd className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--surface-muted)] px-3 py-2 font-mono typography-meta text-muted-foreground">{failureMessage}</dd>
-          </dl>
-        )}
-        {diagnostics && (
-          <dl className="w-full min-w-0 space-y-3 text-start" aria-live="polite">
-            {diagnostics.binary && (
-              <div>
-                <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.binary')}</dt>
-                <dd className="break-all font-mono typography-meta">{diagnostics.binary}</dd>
-              </div>
-            )}
-            {diagnostics.error && (
-              <div>
-                <dt className="typography-meta text-muted-foreground">{t('startup.initRecovery.error')}</dt>
-                <dd className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words font-mono typography-meta text-[var(--status-error)]">{diagnostics.error}</dd>
-              </div>
-            )}
-          </dl>
-        )}
-        <Button type="button" onClick={onRetry} disabled={isRetrying}>
-          {isRetrying ? t('startup.initRecovery.retrying') : t('startup.initRecovery.retry')}
-        </Button>
-      </div>
-    </div>
-  );
-};
-
 type AppProps = {
   apis: RuntimeAPIs;
 };
 
 function App({ apis }: AppProps) {
+  useGuestInstallLinks();
   React.useEffect(() => startDiagnosticCapture(), []);
   React.useEffect(() => {
     markStartupTrace('App:mounted');
@@ -243,7 +150,6 @@ function App({ apis }: AppProps) {
   const [initRetryEpoch, setInitRetryEpoch] = React.useState(0);
   const [runtimeEndpointEpoch, setRuntimeEndpointEpoch] = React.useState(0);
   const [manualInitRetrying, setManualInitRetrying] = React.useState(false);
-  const wideChatLayoutEnabled = useUIStore((state) => state.wideChatLayoutEnabled);
   const mobileKeyboardMode = useUIStore((state) => state.mobileKeyboardMode);
   const isDesktopRuntime = React.useMemo(() => isDesktopShell(), []);
   const [bootInjectionStatus, setBootInjectionStatus] = React.useState<BootInjectionStatus>(() => {
@@ -314,12 +220,7 @@ function App({ apis }: AppProps) {
     });
   }, []);
 
-  React.useEffect(() => {
-    document.documentElement.classList.toggle('wide-chat-layout', wideChatLayoutEnabled);
-    return () => {
-      document.documentElement.classList.remove('wide-chat-layout');
-    };
-  }, [wideChatLayoutEnabled]);
+  useChatWidthAttribute();
 
   React.useEffect(() => {
     registerRuntimeAPIs(apis);
@@ -598,7 +499,7 @@ function App({ apis }: AppProps) {
   React.useLayoutEffect(() => {
     const restore = lastSessionRestoreRef.current;
     if (restore.attempt) return;
-    restore.attempt = beginLastSessionRestore({ selectNow: !parseRoute().sessionId });
+    restore.attempt = beginLastSessionRestore({ selectNow: !parseRoute().sessionId, refresh: false });
   }, []);
   React.useEffect(() => {
     const restore = lastSessionRestoreRef.current;
@@ -698,7 +599,9 @@ function App({ apis }: AppProps) {
   useBrowserProviderSync();
   useSourceControlProviderSync(apis.sourceControl);
   useTrackerProviderSync(apis.trackers);
+  useQuotaProviderSync();
   useGuestCatalogSync();
+  useGuestMarksSync();
   useLimitFailoverNotices();
   useRoutingSync();
   useEnterprisePolicySync();
@@ -908,11 +811,13 @@ function App({ apis }: AppProps) {
                   <OpenCodeUpdateToast />
                   <ProjectConfigErrorToast />
                   <MainLayout />
-                  {isDesktopRuntime ? <AppStartupOverlay ready={bootOutcomeKnown && bootViewIsMain} /> : null}
+                  {/* Unmounted, not faded: the shell under it is ready, and a
+                      fade only delays the moment it is seen. */}
+                  {isDesktopRuntime && !(bootOutcomeKnown && bootViewIsMain) ? <AppStartupOverlay ready={false} /> : null}
                   <Toaster />
                   <AppLinkConfirmDialog />
                   <SnippetQuickCreateDialog />
-                  <SharedTrustConfirmDialog />
+                  <GlobalQuestionDialogs />
                   <OpenCodeTrustDialog />
                   <ConfigUpdateOverlay />
                   <AboutDialogWrapper />

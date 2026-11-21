@@ -1,9 +1,14 @@
 // Private entry for managed agents. Reuse the public memory command's policy,
 // auth and output adapter without requiring an executable on the agent's PATH.
-import { parseArgs } from '../../../bin/lib/cli-args.js';
-import { memoryCommand } from '../../../bin/lib/commands-memory.js';
-import { printJson } from '../../../bin/cli-output.js';
-import { EXIT_CODE, TunnelCliError } from '../../../bin/lib/cli-errors.js';
+import { existsSync } from 'node:fs';
+
+const sourceLoader = new URL('../../../scripts/register-server-sources.mjs', import.meta.url);
+if (!process.versions.bun && existsSync(sourceLoader)) await import(sourceLoader.href);
+
+const { parseArgs } = await import('../../../bin/lib/cli-args.js');
+const { memoryCommand } = await import('../../../bin/lib/commands-memory.js');
+const { printJson } = await import('../../../bin/cli-output.js');
+const { EXIT_CODE, TunnelCliError } = await import('../../../bin/lib/cli-errors.js');
 
 try {
   const parsed = parseArgs(process.argv.slice(2));

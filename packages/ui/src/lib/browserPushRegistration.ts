@@ -1,5 +1,5 @@
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import type { PushAPI, PushSubscribePayload } from '@/lib/api/types';
+import type { PushAPI, PushSubscribePayload } from '@/lib/api/push';
 import { getClientPlatform } from '@/lib/platform';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { getSafeStorage } from '@/stores/utils/safeStorage';

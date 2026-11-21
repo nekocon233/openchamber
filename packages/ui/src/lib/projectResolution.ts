@@ -106,14 +106,9 @@ export const resolveProjectForSessionDirectory = (
   projects: ProjectEntry[],
   availableWorktreesByProject: Map<string, WorktreeMetadata[]>,
   directory: string | null,
-  /**
-   * The host project of the space `directory` lies in, when the caller subscribed to it (a
-   * render that must follow the space list arriving); read from the spaces store otherwise.
-   */
-  _spaceProjectDirectory: string | null = spaceProjectDirectoryOf(directory),
+  spaceProjectDirectory: string | null = spaceProjectDirectoryOf(directory),
 ): ProjectEntry | null => {
-  // A project registered at exactly this directory owns it, even a managed
-  // worktree the registry has not published yet.
+  if (spaceProjectDirectory) return resolveProjectForDirectory(projects, spaceProjectDirectory);
   const exactProject = resolveExactProjectForDirectory(projects, directory);
   if (exactProject) return exactProject;
 

@@ -11,6 +11,8 @@ const BUILT_IN_CONTEXT_PANEL_MODES = [
   'notes',
   'terminal',
   'workflows',
+  'subagents',
+  'pages',
 ] as const;
 
 type BuiltInContextPanelMode = (typeof BUILT_IN_CONTEXT_PANEL_MODES)[number];

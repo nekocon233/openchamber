@@ -102,12 +102,12 @@ const randomUuid = (): string => {
  * Codex record it directly; other backends reconcile it through their server
  * projection, keeping the optimistic message and history in the same namespace.
  */
-export const createNativeUserMessageId = (backend: NativeBackend, sessionId?: string): string => {
+export const createNativeUserMessageId = (backend: NativeBackend, sessionId?: string, uuid = randomUuid()): string => {
   if (backend === 'deepseek') {
     if (!sessionId?.startsWith(SESSION_PREFIX.deepseek)) throw new Error('A DeepSeek Harness message needs its session identity');
-    return `ndh_u_${sessionId.slice(4, 28)}_${randomUuid()}`;
+    return `ndh_u_${sessionId.slice(4, 28)}_${uuid}`;
   }
-  return `${SESSION_PREFIX[backend]}u_${randomUuid()}`;
+  return `${SESSION_PREFIX[backend]}u_${uuid}`;
 };
 
 export const createUnifiedUserMessageId = (): string => `ncv_u_${randomUuid()}`;
