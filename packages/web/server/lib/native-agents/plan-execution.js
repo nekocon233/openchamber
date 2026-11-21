@@ -169,8 +169,9 @@ export const createNativePlanExecution = ({
 
   return {
     execute,
-    async restore(directory) {
+    async restore(directory, sessionIds) {
       for (const entry of await registry.listSessions({ directory })) {
+        if (sessionIds && !sessionIds.has(entry.sessionId)) continue;
         let state = entry.planExecution;
         if (state?.phase === 'unavailable') { failed(directory, entry.sessionId, unavailable()); continue; }
         if (!state || state.phase === 'settled' || active.has(entry.sessionId)) continue;

@@ -243,9 +243,10 @@ export const createAntigravityDecisions = ({ registry, questions, interactions, 
       });
     },
 
-    async restore(directory) {
+    async restore(directory, sessionIds) {
       if (closed) return;
-      const sessions = await registry.listSessions({ backend: 'antigravity', directory });
+      const sessions = (await registry.listSessions({ backend: 'antigravity', directory }))
+        .filter((entry) => !sessionIds || sessionIds.has(entry.sessionId));
       await Promise.all(sessions.map((session) => serial(session.sessionId, async () => {
         if (closed) return;
         const current = await registry.getSession(session.sessionId);
