@@ -254,7 +254,7 @@ Antigravity displays forwarded child reports as assistant text marked
 `nativeSubagentMessage`. Turn boundaries, activity windows and usage count
 only the parent conversation's model steps.
 
-The header and speed row show the same turn's average speed. It divides output
+The collapsed header shows the latest completed turn's average speed as soon as its records are available. The speed row shows the same value when expanded. It divides output
 plus reasoning tokens by the turn's model time. Model time runs from the user
 message through the last completed step, excluding blocking tool waits and gaps
 longer than 5 minutes between finished steps. Cache hit rate divides the turn's
@@ -288,12 +288,14 @@ portal outside the panel's scroller. Tooltips explain the measurement in every l
 compact input/output arrows; its tooltip gives full counts and explains that
 input excludes cached tokens and output includes reasoning across all steps.
 
-Live records subscriptions stop while collapsed, busy, retrying, or awaiting
-status authority. Explicit idle events or a successful directory status snapshot
+The section reads loaded records while idle. A collapsed heading skips text-only
+deltas and updates when message counts, timings or tool state change. Live
+records subscriptions stop while busy, retrying or awaiting status authority. Explicit idle events or a successful directory status snapshot
 allow reactive computation. One component-owned committed result keeps the
 headline and rows stable during the next active turn. When a section opens during
 that turn without a retained result, it samples the already-loaded visible
-records once. A later history-loader publication can supply delayed history.
+records once. A later history-loader publication can supply delayed history. If busy arrives
+before a new prompt, the arrival of its user message also refreshes the cold sample.
 Both paths exclude the entire running user-bounded turn, including completed
 tool steps, from the selected turn and the averages. Streaming message and part
 updates do not resample or aggregate that history, and the section fetches no
