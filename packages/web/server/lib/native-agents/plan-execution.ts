@@ -114,7 +114,7 @@ export interface NativePlanExecutionOptions {
 
 export interface NativePlanExecution {
   execute: (context: PlanExecutionContext, outcome: QuestionRepliedOutcome, actions: PlanExecutionActions) => Promise<PlanExecutionResult>;
-  restore: (directory: string) => Promise<void>;
+  restore: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<void>;
   beforePrompt: (sessionId: string, messageId: string) => Promise<void>;
   settled: (request: QuestionRequest, outcome: QuestionOutcome) => Promise<void>;
   cancel: (sessionId: string) => Promise<boolean>;
@@ -308,8 +308,9 @@ export const createNativePlanExecution = ({
 
   return {
     execute,
-    async restore(directory) {
+    async restore(directory, sessionIds) {
       for (const entry of await registry.listSessions({ directory })) {
+        if (sessionIds && !sessionIds.has(entry.sessionId)) continue;
         let state = entry.planExecution;
         if (state?.phase === 'unavailable') { failed(directory, entry.sessionId, unavailable()); continue; }
         if (!state || state.phase === 'settled' || active.has(entry.sessionId)) continue;

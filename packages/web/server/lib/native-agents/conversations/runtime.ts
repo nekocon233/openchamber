@@ -260,7 +260,7 @@ export interface ConversationNativeRuntime {
   ) => Promise<ConversationNativeMessagePage>;
   statuses: (directory: string) => Promise<Record<string, { type: string }>>;
   backgroundTasks: () => Promise<Record<string, { tasks: Array<{ id: string; type: string; description: string }> }>>;
-  questions: (directory: string) => Promise<QuestionRequest[]>;
+  questions: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<QuestionRequest[]>;
   replyQuestion: (requestId: string, answers: string[][], execution?: PlanExecutionChoice) => Promise<PlanExecutionResult | void> | void;
   rejectQuestion: (requestId: string) => Promise<PlanExecutionResult | void> | void;
   abort: (sessionId: string) => Promise<boolean>;
@@ -592,21 +592,19 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
   };
 
   const refreshActivity = async (manifest: ConversationManifest): Promise<void> => {
+    const active = activeOf(manifest);
+    if (!active) return;
+    const sessionIds = new Set([active.sessionId]);
+    for (const [id, root] of childRoots) if (root === active.sessionId) sessionIds.add(id);
     const [statuses, tasks, questions] = await Promise.all([
-      native.statuses(manifest.directory), native.backgroundTasks(), native.questions(manifest.directory),
+      native.statuses(manifest.directory), native.backgroundTasks(), native.questions(manifest.directory, sessionIds),
     ]);
-    for (const segment of manifest.segments) {
-      const status = statuses[segment.sessionId];
-      if (status && status.type !== 'idle') foreground.add(segment.sessionId);
-      else foreground.delete(segment.sessionId);
-      background.set(segment.sessionId, tasks[segment.sessionId]?.tasks ?? []);
-      waiting.set(segment.sessionId, new Set(questions.filter((question) => question.sessionID === segment.sessionId).map((question) => question.id)));
-    }
-    for (const id of childRoots.keys()) {
-      background.set(id, tasks[id]?.tasks ?? []);
+    for (const id of sessionIds) {
       const status = statuses[id];
       if (status && status.type !== 'idle') foreground.add(id);
       else foreground.delete(id);
+      background.set(id, tasks[id]?.tasks ?? []);
+      waiting.set(id, new Set(questions.filter((question) => question.sessionID === id).map((question) => question.id)));
     }
   };
 

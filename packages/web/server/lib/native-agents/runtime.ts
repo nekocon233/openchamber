@@ -1457,10 +1457,10 @@ export const createNativeAgentsRuntime = ({
       return claudeLive.stopTask(sessionId, directory, taskId, generation);
     },
 
-    async questions(directory: string) {
-      await antigravityDecisions.restore(directory);
-      await planExecution?.restore(directory);
-      return questions.list(directory);
+    async questions(directory: string, sessionIds?: ReadonlySet<string>) {
+      await antigravityDecisions.restore(directory, sessionIds);
+      await planExecution?.restore(directory, sessionIds);
+      return questions.list(directory).filter((question) => !sessionIds || sessionIds.has(question.sessionID));
     },
 
     hasPendingPlanDecision(sessionId: string): boolean {
