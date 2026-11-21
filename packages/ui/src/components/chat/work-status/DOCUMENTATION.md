@@ -345,15 +345,15 @@ keeps its activity unknown even when the directory snapshot is idle. Live native
 
 ### Subagent rows
 
-Subagent status uses the Tasks section's leading icons: blue for busy/retrying,
-green for idle, and a neutral clock while status is unknown. A successful status
-snapshot of the panel's directory also establishes idle for omitted children,
-skipping sessions whose status was invalidated. That snapshot is the server's
-list of running sessions (`getActiveSessionStatuses`): the host's covers every
-host directory, a space's covers only that space. So it covers a child in any
-directory on the same side of that boundary, including one that moved to
-another worktree (`session_move`); comparing the directories themselves left
-such a child on the clock forever once the page reloaded after it finished.
+Subagent status uses a blue mark for busy or retrying, green for idle, and a
+neutral clock while status is unknown. The animated running indicators setting
+replaces the blue mark with the shared-clock spinner. A successful status
+snapshot of the panel's directory also establishes idle for omitted children
+within its scope, skipping sessions whose status was invalidated. The OpenCode
+running list (`getActiveSessionStatuses`) covers the host or one space, so it
+also covers a child that moved to another worktree within that scope. Native
+status reads cover the requested directory. Only a successful native status
+read can establish idle for a native child omitted from the snapshot.
 The global status store fills the gap for children the snapshot does not cover:
 a child it holds as busy runs, and one it saw settle is idle (or failed).
 Permission requests and questions take precedence with a warning icon and text.

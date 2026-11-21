@@ -1459,6 +1459,9 @@ and leaves that partition's completeness unknown.
 Antigravity child metadata with `activityKnown: false` keeps its activity
 unknown. Live-session list equality includes this field even when timestamps
 are unchanged, so a native activity update reaches the work-status rows.
+Bootstrap and authoritative recovery publish native status coverage separately
+from OpenCode coverage. Work Status uses that coverage to decide whether an
+omitted native child is idle. A failed native read preserves held statuses.
 Antigravity's catalog lists one entry per model family with its published
 efforts. Optional native catalog `aliases` become domain-model `nativeAliases`;
 old servers may omit them. The model controls resolve saved concrete slugs to
