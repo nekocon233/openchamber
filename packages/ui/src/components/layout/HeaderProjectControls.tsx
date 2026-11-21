@@ -10,7 +10,7 @@ import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useObserveProjectActionRuns, useProjectActions } from './projectActionsRunnerContext';
 import { ProjectActionRunIndicator } from './ProjectActionRunIndicator';
-import { resolveProjectActionIconName } from '@/lib/projectActions';
+import { resolveProjectActionIconName, showsProjectActionRunShortcut } from '@/lib/projectActions';
 import { OpenInAppButton } from '@/components/desktop/OpenInAppButton';
 import { useProjectActionsContext } from '@/hooks/useProjectActionsContext';
 
@@ -30,7 +30,7 @@ const HeaderProjectActionComponent: React.FC<{ buttonClassName: string }> = ({ b
     return state.getDirectoryState(shownRun.directory)?.tabs.find((tab) => tab.id === shownRun.tabId)?.previewUrl ?? null;
   });
 
-  if (!runner || !shown) {
+  if (!runner || !shown || (!shownRun && !showsProjectActionRunShortcut(shown.id))) {
     return null;
   }
 

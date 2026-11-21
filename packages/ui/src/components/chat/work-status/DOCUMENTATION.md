@@ -944,10 +944,11 @@ so a press never ends in silence.
 
 ### Project actions
 
-The panel shows no project action; the header button runs or stops the shown
-one. The project's own actions come first and auto-discovery last, so with
-nothing picked the button offers the first configured action, or
-auto-discovery when there is none. The pick is stored per runtime and project
+The header button and the Project section of Work Status run or stop the
+shown action. The project's actions come first and auto-discovery last.
+The repository's DevHMR action and auto-discovery have no run shortcut while
+idle. Both are available from the action chooser and command palette. The
+pick is stored per runtime and project
 (`lib/projectActionSelection.ts`) and survives remounts and restarts; a pick
 that no longer names an action falls back to the first one. A running action
 takes the button over an idle pick, and pressing it acts on the action it
@@ -962,7 +963,7 @@ Chat resolves to none. A draft waiting for a new space has no actions until the
 space runs, then runs them in the space (`useDraftSpaceTarget`). Three views read that runner through
 `projectActionsRunnerContext`:
 
-- the header's button (`HeaderProjectControls`): the shown action's
+- the header and Work Status shortcuts: the shown action's
   run state as one icon, the preview globe while it serves a page, the action
   list on right click. It observes the run listing while mounted,
   so a run another client started never shows as Run;

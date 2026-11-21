@@ -52,6 +52,12 @@ type ProjectActionIconKey =
 
 export const AUTO_DISCOVER_ACTION_ID = '__openchamber_auto_discover_preview__';
 
+const OPENCHAMBER_DEV_HMR_ACTION_ID = '5525a5ee-9c03-44d1-a401-1e4b9397765c';
+
+export const showsProjectActionRunShortcut = (actionId: string): boolean => (
+  actionId !== AUTO_DISCOVER_ACTION_ID && actionId !== OPENCHAMBER_DEV_HMR_ACTION_ID
+);
+
 export const PROJECT_ACTION_ICONS: Array<{
   key: ProjectActionIconKey;
   label: string;

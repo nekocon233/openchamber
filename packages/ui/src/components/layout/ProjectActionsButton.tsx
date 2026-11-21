@@ -12,7 +12,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useI18n } from '@/lib/i18n';
 import { useObserveProjectActionRuns, useProjectActions } from './projectActionsRunnerContext';
-import { AUTO_DISCOVER_ACTION_ID, resolveProjectActionIconName } from '@/lib/projectActions';
+import { AUTO_DISCOVER_ACTION_ID, resolveProjectActionIconName, showsProjectActionRunShortcut } from '@/lib/projectActions';
 import { ProjectActionRunIndicator } from './ProjectActionRunIndicator';
 
 /**
@@ -32,7 +32,7 @@ const ProjectActionsButtonComponent = () => {
     return state.getDirectoryState(shownRun.directory)?.tabs.find((tab) => tab.id === shownRun.tabId)?.previewUrl ?? null;
   });
 
-  if (!runner || !shown) {
+  if (!runner || !shown || (!shownRun && !showsProjectActionRunShortcut(shown.id))) {
     return null;
   }
 

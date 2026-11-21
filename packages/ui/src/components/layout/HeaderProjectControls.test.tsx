@@ -301,50 +301,55 @@ describe('HeaderProjectAction lifecycle', () => {
     expect(items.slice(-3)).toEqual(['Dev', 'Build', 'Auto-discover dev server']);
   });
 
-  test('auto-discovery is the default when the project has no actions', async () => {
+  test('a project with no configured actions has no auto-discovery run shortcut', async () => {
     mockedDeviceInfo.isMobile = false;
     mockedActionsState.actions = [];
     await renderButton();
 
-    expect(primaryLabel()).toContain('Auto-discover dev server');
+    expect(runButton()).toBeNull();
   });
 
-  test('auto-discovery does not run an untrusted shared dev action when trust is skipped', async () => {
+  test('the shared DevHMR action has no idle run shortcut', async () => {
     mockedDeviceInfo.isMobile = false;
-    mockedActionsState.actions = [{ id: 'dev', name: 'Dev server', command: 'bun run dev', source: 'shared' }];
-    detectedDevServer.command = 'bun run dev';
-    detectedDevServer.actionId = 'dev';
+    mockedActionsState.actions = [{
+      id: '5525a5ee-9c03-44d1-a401-1e4b9397765c',
+      name: 'DevHMR',
+      command: 'bun run dev',
+      source: 'shared',
+    }];
     await renderButton();
 
-    await act(async () => {
-      menuItem('Auto-discover dev server')?.click();
-      await Promise.resolve();
-    });
-
-    expect(getSharedTrustConfirmationSnapshot()?.actions).toEqual([
-      { id: 'dev', name: 'Dev server', command: 'bun run dev' },
-    ]);
-    expect(createCalls).toHaveLength(0);
-
-    await act(async () => {
-      settleSharedTrustConfirmation('skip');
-      await Promise.resolve();
-    });
-    expect(createCalls).toHaveLength(0);
-
-    await act(async () => {
-      menuItem('Auto-discover dev server')?.click();
-      await Promise.resolve();
-    });
-    expect(getSharedTrustConfirmationSnapshot()?.actions).toHaveLength(1);
-    await act(async () => {
-      settleSharedTrustConfirmation('trust');
-      await Promise.resolve();
-    });
-    const created = createCalls[0];
-    if (created?.mode !== 'command') throw new Error('expected command terminal');
-    expect(created.command).toBe('bun run dev');
+    expect(runButton()).toBeNull();
   });
+
+  for (const [decision, commands] of [
+    ['skip', []],
+    ['trust', ['bun run dev']],
+  ] as const) {
+    test(`auto-discovery respects ${decision} for an untrusted shared action`, async () => {
+      mockedDeviceInfo.isMobile = false;
+      mockedActionsState.actions = [{ id: 'dev', name: 'Dev server', command: 'bun run dev', source: 'shared' }];
+      detectedDevServer.command = 'bun run dev';
+      detectedDevServer.actionId = 'dev';
+      await renderButton();
+
+      await act(async () => {
+        menuItem('Auto-discover dev server')?.click();
+        await Promise.resolve();
+      });
+
+      expect(getSharedTrustConfirmationSnapshot()?.actions).toEqual([
+        { id: 'dev', name: 'Dev server', command: 'bun run dev' },
+      ]);
+      expect(createCalls).toHaveLength(0);
+
+      await act(async () => {
+        settleSharedTrustConfirmation(decision);
+        await Promise.resolve();
+      });
+      expect(createCalls.map((created) => created.mode === 'command' ? created.command : undefined)).toEqual(commands);
+    });
+  }
 
   test('auto-discovery in a worktree session reads the project\'s setup and trust', async () => {
     mockedDeviceInfo.isMobile = false;
@@ -367,7 +372,7 @@ describe('HeaderProjectAction lifecycle', () => {
     });
   });
 
-  test('the picked action is still selected after the button mounts again', async () => {
+  test('a saved auto-discovery pick keeps its run shortcut hidden after remount', async () => {
     mockedDeviceInfo.isMobile = false;
     mockedActionsState.actions = [
       { id: 'dev', name: 'Dev', command: 'bun run dev' },
@@ -383,7 +388,7 @@ describe('HeaderProjectAction lifecycle', () => {
     root = createRoot(host);
     await renderButton();
 
-    expect(primaryLabel()).toContain('Auto-discover dev server');
+    expect(runButton()).toBeNull();
   });
 
   test('adopting a saved URL action does not auto-open a different output URL', async () => {
@@ -612,20 +617,15 @@ describe('HeaderProjectAction lifecycle', () => {
 
   test('auto-discover without a preview hint settles on an announced localhost URL in context preview only', async () => {
     mockedDeviceInfo.isMobile = false;
-    mockedActionsState.actions = [];
     detectedDevServer.command = 'bun run dev';
     await renderButton();
 
-    const primaryButton = runButton();
-    if (!primaryButton) {
-      throw new Error('expected primary button');
-    }
-
     await act(async () => {
-      primaryButton.dispatchEvent(new Event('click', { bubbles: true }));
+      menuItem('Auto-discover dev server')?.click();
       await Promise.resolve();
     });
 
+    expect(primaryLabel()).toBe('Stop Auto-discover dev server');
     const autoDiscoverTab = useTerminalStore.getState().getDirectoryState('/repo')?.tabs.find((tab) => (
       tab.purpose.type === 'project-action' && tab.purpose.actionId === '__openchamber_auto_discover_preview__'
     ));
@@ -645,22 +645,21 @@ describe('HeaderProjectAction lifecycle', () => {
     expect(openExternalCalls).toEqual([]);
     await runWindowTimeouts(15_000);
     expect(openContextPanelTabCalls).toEqual([]);
+
+    await act(async () => {
+      emitToSession(firstSessionId(), { type: 'exit', sequence: 2, exitCode: 0, signal: null });
+    });
+    expect(runButton()).toBeNull();
   });
 
   test('auto-discover opens its terminal when no preview URL appears before the fallback timeout', async () => {
     mockedDeviceInfo.isMobile = false;
-    mockedActionsState.actions = [];
     detectedDevServer.command = 'bun run dev';
     effectiveDirectory = '/repo-worktree';
     await renderButton({ projectPath: '/repo', directory: '/repo' });
 
-    const primaryButton = runButton();
-    if (!primaryButton) {
-      throw new Error('expected primary button');
-    }
-
     await act(async () => {
-      primaryButton.dispatchEvent(new Event('click', { bubbles: true }));
+      menuItem('Auto-discover dev server')?.click();
       await Promise.resolve();
     });
 
@@ -672,18 +671,12 @@ describe('HeaderProjectAction lifecycle', () => {
 
   test('unmount closes active subscriptions and cancels pending preview timeouts', async () => {
     mockedDeviceInfo.isMobile = false;
-    mockedActionsState.actions = [];
     detectedDevServer.command = 'bun run dev';
     effectiveDirectory = '/repo-worktree';
     await renderButton({ projectPath: '/repo', directory: '/repo' });
 
-    const primaryButton = runButton();
-    if (!primaryButton) {
-      throw new Error('expected primary button');
-    }
-
     await act(async () => {
-      primaryButton.dispatchEvent(new Event('click', { bubbles: true }));
+      menuItem('Auto-discover dev server')?.click();
       await Promise.resolve();
     });
 

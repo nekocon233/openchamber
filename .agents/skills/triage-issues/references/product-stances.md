@@ -46,6 +46,7 @@ Sections: Runtimes and backends, Platform scope, Localization, Composer, Session
 - The desktop tool rail uses equal spacing and a single order for built-in and extension buttons.
 - Session lists omit the built-in Projects heading in every grouping. Project rows and named custom groups are visible in their chosen order.
 - The conversation header's session picker shows either the list or its section settings in one popup. The editor rail puts Sessions immediately above Configure panels.
+- The repository's DevHMR action and auto-discovery have no idle run shortcut. The project actions chooser keeps both.
 - In work rows show the project as an icon; the header and Work Status name it. Users give projects distinct icons.
 - Cmd+P shows no session status dot; a separate overview view is the plan. No manual unread mark.
 - The agent's todo list is not editable from the UI until OpenCode has an API for the current list.
