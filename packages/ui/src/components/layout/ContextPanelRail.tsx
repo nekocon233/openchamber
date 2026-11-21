@@ -431,8 +431,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
       aria-label={t('contextRail.aria.rail')}
       className="flex h-full min-h-0 w-11 flex-shrink-0 flex-col items-center gap-2 bg-background pb-2"
     >
-      {atStart ? <SessionsRailToggle tooltipSide={workspaceSide} /> : null}
-      {directoryKey ? <>
+      {directoryKey ? (
       <div data-context-tools="" className="relative flex min-h-0 w-full flex-1 flex-col">
       <ScrollShadow
         surface="var(--background)"
@@ -496,6 +495,9 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
       </ScrollShadow>
       <ScrollShadowBands surface="var(--background)" size={RAIL_SCROLL_FADE_PX} />
       </div>
+      ) : <div className="flex-1" />}
+      {atStart ? <SessionsRailToggle tooltipSide={workspaceSide} /> : null}
+      {directoryKey ? (
       <Tooltip delayDuration={RAIL_TOOLTIP_DELAY_MS}>
         <TooltipTrigger asChild>
           <button
@@ -511,7 +513,7 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
           {t('contextRail.configure.open')}
         </TooltipContent>
       </Tooltip>
-      </> : null}
+      ) : null}
       <AppActions tooltipSide={workspaceSide} />
       <ContextRailSurfacesDialog open={isSurfacesDialogOpen} onOpenChange={setIsSurfacesDialogOpen} />
     </nav>

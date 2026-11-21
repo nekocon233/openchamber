@@ -90,6 +90,8 @@ export const MobileSessionList: React.FC<SessionProjectListProps> = ({ model, vi
         return <MobileZoneHeader row={row} onToggle={() => toggleActivityZone(row, { model, actions })} />;
       case 'caption':
         return <MobileProjectsCaption row={row} onToggle={() => toggleProjectsCaption(row, { model })} />;
+      case 'projects-drop-target':
+        return null;
       case 'project-header': {
         const project = row.section.project;
         return <MobileProjectHeader

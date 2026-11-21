@@ -40,6 +40,7 @@ type Props = {
   headerActionIconClass: string;
   headerActionButtonClass: string;
   listControlsSlot?: HTMLElement | null;
+  inlineSectionsOwner?: string;
   closeSessionSearch: () => void;
   sessionSearchInputRef: React.RefObject<HTMLInputElement | null>;
   sessionSearchQuery: string;
@@ -69,17 +70,17 @@ export function SidebarHeader(props: Props): React.ReactNode {
   const { t } = useI18n();
   const headerRef = React.useRef<HTMLDivElement | null>(null);
   const sectionsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const sectionsManagerOwner = React.useId();
+  const headerId = React.useId();
+  const sectionsManagerOwner = props.inlineSectionsOwner ?? headerId;
   const sectionsManagerOpen = useSidebarSectionsUiStore((state) => state.managerOwner === sectionsManagerOwner);
   const canManageSections = props.showSectionControls && !props.hideDirectoryControls;
   const closeManager = React.useCallback(() => closeSectionsManager(sectionsManagerOwner), [sectionsManagerOwner]);
   const bindHeader = React.useCallback((element: HTMLDivElement | null) => {
     headerRef.current = element;
-    if (element === null) closeManager();
-  }, [closeManager]);
+    if (element === null && props.inlineSectionsOwner === undefined) closeManager();
+  }, [closeManager, props.inlineSectionsOwner]);
   const sidebarSections = useSessionDisplayStore((state) => state.sections);
-  const hideProjectsCaption = useSessionDisplayStore((state) => state.hiddenSections.includes('projects'));
-  const SectionsManager = useOnDemandComponent(canManageSections && sectionsManagerOpen, loadSectionsManager, closeManager);
+  const SectionsManager = useOnDemandComponent(canManageSections && sectionsManagerOpen && props.inlineSectionsOwner === undefined, loadSectionsManager, closeManager);
   const {
     hideDirectoryControls,
     showProjectDisplayControls,
@@ -212,7 +213,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
       </DropdownMenuItem>
     </>);
   }
-  if (showSectionControls && hideProjectsCaption) {
+  if (showSectionControls) {
     displayMenuSections.push(
       <DropdownMenuItem onClick={() => sessionEvents.requestDirectoryDialog()} className="flex items-center gap-2">
         <Icon name="add" className="h-4 w-4" />
@@ -287,7 +288,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
               <TooltipContent side="bottom" sideOffset={4}><p>{t('sessions.sidebar.sections.customize')}</p></TooltipContent>
             </Tooltip>
           ) : null}
-          {showSectionControls && SectionsManager ? <SectionsManager open={sectionsManagerOpen} onClose={closeManager} anchor={headerRef} trigger={sectionsTriggerRef} pages={showPagesSection} /> : null}
+          {showSectionControls && !props.inlineSectionsOwner && SectionsManager ? <SectionsManager open={sectionsManagerOpen} onClose={closeManager} anchor={headerRef} trigger={sectionsTriggerRef} pages={showPagesSection} /> : null}
 
           <DropdownMenu>
             <Tooltip>

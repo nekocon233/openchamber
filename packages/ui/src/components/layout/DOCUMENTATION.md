@@ -19,6 +19,13 @@ client). VS Code does not mount `ContextPanel`, so it has no such menu.
 
 `ContextPanel` owns the open-file strip in each workspace zone. Its editor mounts `FilesView` in editor-only mode, which omits that view's own tab row. The file strip enables `SortableTabsStrip`'s `scrollWithWheel` option, so a regular vertical mouse wheel reaches tabs past either edge without changing the open file or showing a scrollbar. Other context panel tab modes keep their existing wheel behavior.
 
+## Conversation navigation
+
+The conversation header's session picker keeps one popup. Customize sections
+replaces the session list in that popup, and Back restores the list. The
+editor rail puts its sidebar toggle above Configure panels, outside the
+scrolling, reorderable tools.
+
 ## Header session tabs
 
 `SessionTabsStrip.tsx` is the header's horizontal working set of sessions, in

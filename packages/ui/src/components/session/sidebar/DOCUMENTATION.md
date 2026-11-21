@@ -717,19 +717,13 @@ the same Mark all as read.
 - Zone collapse state lives in `useSessionProjectViewState` next to project
   collapse and is saved in local storage (`oc.sessions.activityCollapse`). The
   display menu's Collapse all / Expand all set every project and the zones
-  (`SIDEBAR_ACTIVITY_KEYS`: Pages, Chats, Pinned, In work and the list by time)
-  together. Session folders keep their own collapse state. Zone and project
-  headers are sticky. The projects sit under a "Projects"
-  caption (a `caption` row, `projectsCaption`) styled as a zone's label, so
-  every section has a caption and a project is an item of its list: its label
-  is the row's size, medium weight, beside its icon, and the indent of its
-  sessions sets it apart from them. A project a size up and bold, with
-  captioned zones above it, read as a heading of another level (maintainer,
-  2026-10-28). The caption shows only with something listed above the
-  projects, never in single-project mode. The caption folds like a zone: closed, it
-  hides every project (`PROJECTS_CAPTION_COLLAPSE_KEY` in the zones' saved
-  collapse set); Expand all opens it, Collapse all leaves it as it is and
-  folds the projects one by one. One-line rows (sessions, works, drafts,
+  (Pages, Chats, Pinned and In work) together. Session folders keep their own
+  collapse state. Zone and project headers are sticky. The built-in Projects
+  block has no heading in either grouping. Project rows use their own name
+  beside the icon, and custom groups use their saved names. Existing collapse
+  keys for the old Projects heading do not hide any work. Add project is in
+  the desktop Display mode menu and in the phone's session list toolbar.
+  One-line rows (sessions, works, drafts,
   runs) take 5px of vertical padding (a 30px row) and two-line rows 6px, so the one-line
   list reads denser (maintainer, 2026-10-28).
   A zone's label is a bare muted word at the row's size, with no icon, and
@@ -1707,9 +1701,8 @@ The fold waits until the drag has measured where the header was picked up, or
 the copy would start from the folded place; the held header stays where it is
 on screen as the list folds, and where it was let go as the list opens
 (`heldRowRef`), or where it was when let go in its own place. While sections
-fold, Projects keeps its caption even with nothing above it, so a section can
-be dropped above it. A project in a group of projects sorts the group's own
-order, kept in the section, whatever the projects' sort; Projects sorts by
+fold, a line marks the Projects block as a drop target. A project in a group
+of projects sorts the group's own order, kept in the section, whatever the projects' sort; Projects sorts by
 hand only when sorted manually. Session rows only drop into folders: their copy
 follows the pointer, and nothing makes room.
 

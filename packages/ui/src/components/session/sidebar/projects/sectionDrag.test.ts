@@ -3,7 +3,7 @@ import type { SessionSidebarActivityKey, SessionSidebarRow } from '../sessionSid
 import { sectionIdOfRow } from './sectionDrag';
 
 const activity = (activityKey: SessionSidebarActivityKey): SessionSidebarRow => ({ kind: 'activity-header', key: `activity:${activityKey}:header`, estimateSize: 34, activityKey, collapsed: false });
-const caption = (key: 'projects' | `section:${string}`): SessionSidebarRow => ({ kind: 'caption', key: `caption:${key}`, estimateSize: 34, caption: key, collapsed: false });
+const caption = (key: `section:${string}`): SessionSidebarRow => ({ kind: 'caption', key: `caption:${key}`, estimateSize: 34, caption: key, label: 'Clients', collapsed: false });
 
 describe('sectionIdOfRow', () => {
   test('a caption names its section by the id the user list keeps', () => {
@@ -11,7 +11,7 @@ describe('sectionIdOfRow', () => {
     expect(sectionIdOfRow(activity('work'))).toBe('work');
     expect(sectionIdOfRow(activity('section:s1'))).toBe('s1');
     expect(sectionIdOfRow(caption('section:g1'))).toBe('g1');
-    expect(sectionIdOfRow(caption('projects'))).toBe('projects');
+    expect(sectionIdOfRow({ kind: 'projects-drop-target', key: 'projects:drop-target', estimateSize: 34 })).toBe('projects');
   });
 
   test('the list by time is the Projects section', () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { getDeferredSafeStorage } from '@/stores/utils/safeStorage';
 import { z } from 'zod';
-import { PROJECTS_CAPTION_COLLAPSE_KEY, SIDEBAR_ACTIVITY_KEYS, sidebarSectionActivityKey } from '../sessionSidebarRowModel';
+import { SIDEBAR_ACTIVITY_KEYS, sidebarSectionActivityKey } from '../sessionSidebarRowModel';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 
 const PROJECT_COLLAPSE_STORAGE_KEY = 'oc.sessions.projectCollapse';
@@ -130,7 +130,6 @@ export const useSessionProjectViewState = ({
       const next = new Set(current);
       for (const key of SIDEBAR_ACTIVITY_KEYS) next.delete(key);
       for (const key of current) if (key.startsWith('section:')) next.delete(key);
-      next.delete(PROJECTS_CAPTION_COLLAPSE_KEY);
       return next;
     });
     setCollapsedProjects(() => {
