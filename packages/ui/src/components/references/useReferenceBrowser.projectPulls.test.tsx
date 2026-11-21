@@ -49,8 +49,9 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       const query = url.searchParams.get('query');
       if (query === 'old') await new Promise<void>((resolve) => { releaseOld = resolve; });
       const owner = url.searchParams.get('scope') === 'network' ? 'upstream' : 'acme';
+      const otherPullNumber = owner === 'acme' && url.searchParams.get('people') === 'any' ? 4 : 2;
       const items = query === 'terminal' ? [{ ...pull(92, owner), state: 'merged' }, { ...pull(93, owner), state: 'closed' }]
-        : query ? [pull(query === 'old' ? 90 : 91, owner)] : url.searchParams.has('cursor') ? [pull(3, owner)] : [pull(1, owner), pull(2, owner)];
+        : query ? [pull(query === 'old' ? 90 : 91, owner)] : url.searchParams.has('cursor') ? [pull(3, owner)] : [pull(1, owner), pull(otherPullNumber, owner)];
       return Response.json({ connected: true, scope: oldServer ? undefined : url.searchParams.get('scope'), repo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app' }, items,
         cursor: query || url.searchParams.has('cursor') ? null : 'next', hasMore: !query && !url.searchParams.has('cursor'), total: query ? 1200 : 3 });
     }
@@ -68,12 +69,17 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
   const { I18nProvider } = await import('@/lib/i18n');
   const { createWebAPIs } = await import('../../../../web/src/api/index');
+  const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
+  const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { useReferenceBrowser } = await import('./useReferenceBrowser');
   const { invalidateProjectPullLists } = await import('./referenceSources');
   const { getRuntimeKey } = await import('@/lib/runtime-switch');
   const { revalidateReferences } = await import('./referenceCache');
   const { referencePickerItemKey } = await import('./referencePickerItems');
+  const provider = githubLikeDescriptor();
+  const descriptor = { ...provider, features: { ...provider.features, referenceSearch: true, referenceDetail: true, listStatuses: true } };
+  useSourceControlProviderRegistry.setState({ ordered: [descriptor], byId: new Map([[descriptor.id, descriptor]]), status: 'ready', holdsList: true });
   useSourceControlAuthStore.setState({ entries: {
     [getSourceControlAuthKey({ provider: 'github', instance: 'github.com' })]: { status: CONNECTED, isLoading: false, hasChecked: true },
   } });
@@ -105,7 +111,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   try {
     await render();
     await until(() => current().list.status === 'ready');
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine', labels: [] });
     expect(listRequests()).toHaveLength(1);
     expect(listRequests()[0]?.searchParams.get('kind')).toBe('pull');
     expect(listRequests()[0]?.searchParams.get('state')).toBe('open');
@@ -126,7 +132,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(current().items).toHaveLength(2);
 
     await act(async () => boardBrowser().selectRepositoryFilter({ state: 'open', people: 'created' }));
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine', labels: [] });
     failNextPage = true;
     await act(async () => current().list.loadMore());
     await until(() => Boolean(current().list.error));
@@ -168,17 +174,19 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     await act(async () => current().closeMobilePreview());
 
     await act(async () => current().selectRepositoryFilter({ state: 'closed', people: 'any' }));
-    await until(() => listRequests().some(url => url.searchParams.get('people') === 'any'));
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any' });
+    await until(() => numbers().includes(4));
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
+    await act(async () => current().selectRepositoryFilter({ people: 'assigned' }));
+    expect(current().repositoryFilter.people).toBe('any');
     await act(async () => current().selectRepositoryFilter({ people: 'mine' }));
-    await until(() => listRequests().filter(url => url.searchParams.get('people') === 'mine').length >= 2);
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine' });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine', labels: [] });
+    await until(() => numbers().includes(2) && !numbers().includes(4));
     await act(async () => current().selectRepositoryKind('issue'));
     expect(current().repositoryKind).toBe('pull');
     await render(false); await render(true);
     expect(current().repositoryFilter.people).toBe('mine');
     await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any' });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
     expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
 
     await act(async () => current().setQuery('terminal'));
