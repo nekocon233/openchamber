@@ -4715,7 +4715,12 @@ export function useUserMessageHistory(sessionID: string, directory?: string): Tr
 export function useSessionMessageRecords(
   sessionID: string,
   directory?: string,
-  options?: { enabled?: boolean; suspendPartUpdates?: boolean; suspendPartUpdatesForMessageId?: string | null },
+  options?: {
+    enabled?: boolean
+    suspendPartUpdates?: boolean
+    suspendPartUpdatesForMessageId?: string | null
+    ignorePartChanges?: ((before: readonly Part[], after: readonly Part[]) => boolean) | undefined
+  },
 ) {
   const store = useDirectoryStore(directory)
   const snapshotRef = useRef<SessionMessageRecordsSnapshot>({
@@ -4768,19 +4773,21 @@ export function useSessionMessageRecords(
     return nextSnapshot.list
   }, [options?.enabled, options?.suspendPartUpdates, options?.suspendPartUpdatesForMessageId, sessionID, store])
 
+  const ignorePartChanges = options?.ignorePartChanges
   const subscribe = useCallback((notify: () => void) => {
     if (!sessionID || options?.enabled === false) return () => undefined
     const unsubscribeMessages = subscribeDirectorySessionMessages(store, sessionID, (change) => {
       const suspendPartUpdates = Boolean(options?.suspendPartUpdates)
       const suspendedPartUpdatesMessageID = options?.suspendPartUpdatesForMessageId ?? undefined
-      if (!change.messagesChanged && !change.reset && suspendPartUpdates && change.partMessageIDs.length > 0) {
+      if (!change.messagesChanged && !change.reset && (suspendPartUpdates || ignorePartChanges) && change.partMessageIDs.length > 0) {
         const state = store.getState()
         const snapshot = snapshotRef.current.sessionID === sessionID ? snapshotRef.current : undefined
         const allChangesSuspended = change.partMessageIDs.every((messageID) => {
           if (suspendedPartUpdatesMessageID && messageID !== suspendedPartUpdatesMessageID) return false
           const previousParts = snapshot?.byId.get(messageID)?.parts
+          if (ignorePartChanges?.(previousParts ?? EMPTY_PARTS, state.part[messageID] ?? EMPTY_PARTS)) return true
           return Boolean(
-            previousParts
+            suspendPartUpdates && previousParts
             && !hasTaskSessionIdentityChange(previousParts, state.part[messageID]),
           )
         })
@@ -4799,7 +4806,7 @@ export function useSessionMessageRecords(
       unsubscribeMessages()
       unsubscribeSession()
     }
-  }, [options?.enabled, options?.suspendPartUpdates, options?.suspendPartUpdatesForMessageId, sessionID, store])
+  }, [options?.enabled, ignorePartChanges, options?.suspendPartUpdates, options?.suspendPartUpdatesForMessageId, sessionID, store])
 
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
