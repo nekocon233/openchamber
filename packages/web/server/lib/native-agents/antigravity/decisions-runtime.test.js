@@ -172,6 +172,40 @@ describe('Antigravity decisions through the native runtime', () => {
     fs.renameSync(`${index}.unavailable`, index);
     expect((await harness.runtime.questions(harness.directory))[0].id).toBe(question.id);
   });
+  it('keeps another unified conversation ready when a pending decision transcript is missing', async () => {
+    const h = await setup({ unified: true });
+    const peer = await h.runtime.createSession({
+      backend: 'antigravity', kind: 'unified', directory: h.directory, selection: h.selection,
+    });
+    const sendToPeer = async () => {
+      const messageID = `ncv_u_${randomUUID()}`;
+      await h.runtime.prompt(peer.id, {
+        ...h.selection, agent: 'build', directory: h.directory, messageID, parts: [{ type: 'text', text: 'Hello' }],
+      });
+      await h.idle();
+      return messageID;
+    };
+    await sendToPeer();
+    const question = await h.waiting('decision-plan');
+    const affected = await h.runtime.getSession(h.session.id, h.directory);
+    const source = affected.metadata.openchamber.native.sourceSessionID.slice('nag_'.length);
+    const logs = path.join(path.dirname(h.directory), 'home', '.gemini', 'antigravity-cli', 'brain', source, '.system_generated', 'logs');
+    await h.restart();
+    fs.renameSync(logs, `${logs}.unavailable`);
+
+    await expect(h.runtime.getSession(peer.id, h.directory)).resolves.toMatchObject({
+      metadata: { openchamber: { native: { switchReady: true } } },
+    });
+    const messageID = await sendToPeer();
+    const history = await h.runtime.loadMessages(peer.id, h.directory, { limit: 50 });
+    expect(history.records.some(({ info }) => info.role === 'user' && info.id === messageID)).toBe(true);
+    await expect(h.runtime.getSession(h.session.id, h.directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE' });
+    expect(h.runtime.hasPendingPlanDecision(h.session.id)).toBe(true);
+
+    fs.renameSync(`${logs}.unavailable`, logs);
+    expect((await h.runtime.questions(h.directory)).map(({ id }) => id)).toContain(question.id);
+    expect((await h.runtime.getSession(h.session.id, h.directory)).metadata.openchamber.native.switchReady).toBe(false);
+  });
   it.each(['plan', 'build'])('preserves a skipped native ask and answers through the same conversation in %s mode', async (agent) => {
     const harness = await setup();
     const { session, directory, selection, requests, idle, history, events } = harness;

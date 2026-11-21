@@ -1444,10 +1444,10 @@ export const createNativeAgentsRuntime = ({
     },
 
     /** Questions native sessions of a directory are waiting on. */
-    async questions(directory) {
-      await antigravityDecisions.restore(directory);
-      await planExecution.restore(directory);
-      return questions.list(directory);
+    async questions(directory, sessionIds) {
+      await antigravityDecisions.restore(directory, sessionIds);
+      await planExecution.restore(directory, sessionIds);
+      return questions.list(directory).filter((question) => !sessionIds || sessionIds.has(question.sessionID));
     },
 
     /** An automatic goal continuation must not supersede a plan decision. */

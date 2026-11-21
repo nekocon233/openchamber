@@ -93,7 +93,9 @@ handoff state and readiness. Its selection `revision`, persistent
 `PATCH /api/native/sessions/:id/selection` accepts a directory, selection and
 expected selection revision. Selecting another model changes no running turn.
 The next send checks live foreground activity, background work, children and
-questions before switching. Claude and Antigravity idle processes close before
+questions before switching. A conversation restores pending questions for its active
+source and its children. A missing decision transcript blocks its owner and leaves
+other conversations in the same directory able to send. Claude and Antigravity idle processes close before
 a new backend starts. Queued sends capture their configuration and use
 `preserveSelection` so delivery cannot replace a later composer choice. The
 UI rechecks server readiness before claiming queued work. The proposing source owns the plan decision. Approval may capture an execution

@@ -195,19 +195,19 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     });
   };
   const refreshActivity = async (manifest) => {
+    const active = activeOf(manifest);
+    if (!active) return;
+    const sessionIds = new Set([active.sessionId]);
+    for (const [id, root] of childRoots) if (root === active.sessionId) sessionIds.add(id);
     const [statuses, tasks, questions] = await Promise.all([
-      native.statuses(manifest.directory), native.backgroundTasks(), native.questions(manifest.directory),
+      native.statuses(manifest.directory), native.backgroundTasks(), native.questions(manifest.directory, sessionIds),
     ]);
-    for (const segment of manifest.segments) {
-      if (statuses[segment.sessionId] && statuses[segment.sessionId].type !== 'idle') foreground.add(segment.sessionId);
-      else foreground.delete(segment.sessionId);
-      background.set(segment.sessionId, tasks[segment.sessionId]?.tasks ?? []);
-      waiting.set(segment.sessionId, new Set(questions.filter((question) => question.sessionID === segment.sessionId).map((question) => question.id)));
-    }
-    for (const id of childRoots.keys()) {
-      background.set(id, tasks[id]?.tasks ?? []);
-      if (statuses[id] && statuses[id].type !== 'idle') foreground.add(id);
+    for (const id of sessionIds) {
+      const status = statuses[id];
+      if (status && status.type !== 'idle') foreground.add(id);
       else foreground.delete(id);
+      background.set(id, tasks[id]?.tasks ?? []);
+      waiting.set(id, new Set(questions.filter((question) => question.sessionID === id).map((question) => question.id)));
     }
   };
   const assertQuiet = async (manifest, approval = null) => {
