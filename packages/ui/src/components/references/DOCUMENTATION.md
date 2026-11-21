@@ -189,10 +189,10 @@ file-type exclusions. Picker and board previews use the provider totals.
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
   open PRs only, with Mine and All categories in
   that order. The saved project category is restored, defaulting to Mine, and
-  legacy saved `reviewRequested` or `created` selections migrate to Mine. Category filters stay separate from
-  the picker and board; the panel does not preload issues or expose their state
-  filter. It asks for `scope=repository`; existing
-  callers keep `network`. Scope joins the list cache key. A hidden panel reads
+  legacy saved `reviewRequested` or `created` selections migrate to Mine.
+  The panel validates Mine and All separately from the picker and board. It
+  does not preload issues or expose their state filter. It requests
+  `scope=repository`. Existing callers keep `network`. Scope joins the list cache key. A hidden panel reads
   its cached list without fetching or revalidating; an explicit selection
   opens details, so the first row does not fetch a preview by itself. The
   selected PR is also retained as the opened item: revalidating the first page

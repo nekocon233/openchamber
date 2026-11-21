@@ -265,13 +265,15 @@ export function useReferenceBrowser({
         setHighlightedKey(null);
     };
     const selectRepositoryFilter = (patch: Partial<RepositoryReferenceFilter>) => {
-        const filter = normalizedRepositoryFilter({ ...repositoryFilter, ...patch }, repositoryKind);
         if (projectPulls) {
-            setProjectPeople(filter.people === 'any' ? 'any' : 'mine');
+            const people = patch.people;
+            if (people !== 'mine' && people !== 'any') return;
+            setProjectPeople(people);
             setLoadedCount(0);
             setHighlightedKey(null);
             return;
         }
+        const filter = normalizedRepositoryFilter({ ...repositoryFilter, ...patch }, repositoryKind);
         lastRepositoryFilter.set(repositoryKind, filter);
         const key = filterMemory.key;
         if (key) {
