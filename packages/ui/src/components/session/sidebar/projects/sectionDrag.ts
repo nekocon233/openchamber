@@ -5,6 +5,7 @@ export const SECTION_SORT_GROUP = 'sections';
 export const sectionDragId = (sectionId: string): string => `section-drag:${sectionId}`;
 
 export const sectionIdOfRow = (row: SessionSidebarRow): string | null => {
+  if (row.kind === 'projects-drop-target') return 'projects';
   const key = row.kind === 'activity-header' ? row.activityKey : row.kind === 'caption' ? row.caption : null;
   if (key === null) return null;
   if (key === 'timeline') return 'projects';

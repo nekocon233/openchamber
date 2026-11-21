@@ -282,21 +282,12 @@ function SessionProjectScrollerComponent({ model, view, actions }: SessionProjec
     setStickyIdentity((current) => current === nextIdentity ? current : nextIdentity);
   }, [model.rowModel.stickyHeaders]);
 
-  const projectSortGroupById = React.useMemo(() => {
-    const groups = new Map<string, string>();
-    let caption = PROJECTS_SORT_GROUP;
-    for (const row of model.rowModel.rows) {
-      if (row.kind === 'caption') caption = row.caption;
-      else if (row.kind === 'project-header') groups.set(row.section.project.id, caption);
-    }
-    return groups;
-  }, [model.rowModel.rows]);
   const savedSectionIds = React.useMemo(() => new Set(savedSections.map((entry) => entry.id)), [savedSections]);
   const sectionsSortable = !view.hasSessionSearchQuery && !editingSection && model.state.editingId === null && !model.singleProjectMode;
   const sortableSection = React.useCallback((row: SessionSidebarRow, header: React.ReactNode): React.ReactNode => {
     const sectionId = sectionIdOfRow(row);
     if (sectionId === null || !savedSectionIds.has(sectionId)) return header;
-    return <SortableSidebarSection sectionId={sectionId} rowKey={row.key} disabled={!sectionsSortable}>{header}</SortableSidebarSection>;
+    return <SortableSidebarSection sectionId={sectionId} rowKey={row.key} disabled={!sectionsSortable} dropOnly={row.kind === 'projects-drop-target'}>{header}</SortableSidebarSection>;
   }, [savedSectionIds, sectionsSortable]);
 
   const renderStatus = React.useCallback((row: Extract<SessionSidebarRow, { kind: 'status' }>) => {
@@ -365,7 +356,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: SessionProjec
     if (row.kind === 'project-header') {
       const project = row.section.project;
       const label = getProjectLabel(project, view.homeDirectory);
-      const sortGroup = projectSortGroupById.get(project.id) ?? PROJECTS_SORT_GROUP;
+      const sortGroup = row.projectGroupKey ?? PROJECTS_SORT_GROUP;
       return <SortableProjectItem
         id={project.id}
         sortGroup={sortGroup}
@@ -548,13 +539,15 @@ function SessionProjectScrollerComponent({ model, view, actions }: SessionProjec
       );
     }
     if (row.kind === 'status') return renderStatus(row);
+    if (row.kind === 'projects-drop-target') {
+      return sortableSection(row, <div className="flex h-6 items-center"><div className="w-full border-t border-border" /></div>);
+    }
     if (row.kind === 'caption') {
       return sortableSection(row, <SessionSidebarCaption
         label={row.label}
         preview={row.preview === true}
         collapsed={row.collapsed}
         alwaysShowActions={view.alwaysShowActions}
-        addsProjects={row.caption === 'projects'}
         onToggle={() => toggleProjectsCaption(row, { model })}
       />);
     }
@@ -563,7 +556,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: SessionProjec
     return <div className="py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: rowTextInset }}>
       {row.emptyKind === 'section' ? t('sessions.sidebar.sections.empty') : t('sessions.sidebar.group.empty.noArchivedSessions')}
     </div>;
-  }, [actions, deleteFolder, files, model, openProjectFolder, openProjectOnBoard, pageById, projectPickerOptions, projectSortGroupById, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, sortableSection, spacesPageAvailable, t, toggleFolderCollapse, view]);
+  }, [actions, deleteFolder, files, model, openProjectFolder, openProjectOnBoard, pageById, projectPickerOptions, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, sortableSection, spacesPageAvailable, t, toggleFolderCollapse, view]);
 
   const sortableIds = React.useMemo(() => {
     const projects: string[] = [];

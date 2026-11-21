@@ -51,7 +51,6 @@ const DEFAULT_BLOCKS: readonly SessionSidebarBlock[] = [{ kind: 'chats' }, { kin
 export const SIDEBAR_ACTIVITY_KEYS: readonly SessionSidebarActivityKey[] = ['pages', 'chats', 'pinned', 'work', 'timeline'];
 const PINNED_ZONE_KEY = 'activity:pinned';
 export const isPinnedZoneRowKey = (rowKey: string): boolean => rowKey.startsWith(`${PINNED_ZONE_KEY}:`);
-export const PROJECTS_CAPTION_COLLAPSE_KEY = 'projects';
 
 export type SessionSidebarRenderContext = 'project' | 'timeline-mixed' | 'mixed-compact' | 'tree-chat';
 
@@ -72,8 +71,9 @@ type RowBase = { key: string; estimateSize: number; treeGuides?: readonly Sessio
 
 export type SessionSidebarRow =
   | (RowBase & { kind: 'activity-header'; activityKey: SessionSidebarActivityKey; collapsed: boolean; label?: string; preview?: boolean; loading?: boolean })
-  | (RowBase & { kind: 'project-header'; section: ProjectSection; collapsed: boolean })
-  | (RowBase & { kind: 'caption'; caption: 'projects' | `section:${string}`; collapsed: boolean; label?: string; preview?: boolean })
+  | (RowBase & { kind: 'project-header'; section: ProjectSection; projectGroupKey?: `section:${string}`; collapsed: boolean })
+  | (RowBase & { kind: 'caption'; caption: `section:${string}`; collapsed: boolean; label: string; preview?: boolean })
+  | (RowBase & { kind: 'projects-drop-target' })
   | (RowBase & { kind: 'group-header'; group: SessionGroup; groupKey: string; projectId: string | null; collapsed: boolean; empty: boolean; allSessions: readonly Session[]; depth: number; mixed: boolean; detailed: boolean })
   | (RowBase & { kind: 'folder-header'; depth: number; group: SessionGroup; folder: SessionFolder; displayName: string; scopeKey: string; scopeDirectory: string | null; ownerKey: string | null; nodes: readonly SessionNode[]; activityNodes: readonly SessionNode[]; projectId: string | null; archived: boolean; collapsed: boolean; empty: boolean; deleteSessions: readonly Session[]; subFolderCount: number; memberCount: number; dropEnabled: boolean; mixed: boolean })
   | (RowBase & { kind: 'session'; node: SessionNode; blockingBadgeSessionScopes?: readonly BlockingBadgeSessionScope[]; depth: number; ownsWork: boolean; projectId: string | null; ownerProjectId: string | null; groupDirectory: string | null; ownerKey: string | null; selectionScopeKey: string | null; archived: boolean; renderContext: SessionSidebarRenderContext; secondaryMeta: SessionSidebarActivityItem['secondaryMeta']; detailed?: boolean; expanded?: boolean; repeat?: boolean })
@@ -157,8 +157,7 @@ export type SessionSidebarRowModelArgs = {
   singleProjectId: string | null;
   showOnlyMainWorkspace: boolean;
   hideDirectoryControls: boolean;
-  projectsCaption?: boolean;
-  projectsCaptionAtTop?: boolean;
+  projectsDropTarget?: boolean;
   sessionBatchSize?: number;
   runIndex?: MultiRunIndex;
   blocks?: readonly SessionSidebarBlock[];
@@ -1041,27 +1040,20 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
 
   const appendProjectSections = (
     projectSections: readonly ProjectSection[],
-    caption: { key: 'projects' | `section:${string}`; label?: string; preview?: boolean; always: boolean },
+    caption?: { key: `section:${string}`; label: string; preview: boolean },
   ): void => {
-    let captioned = !caption.always && (!args.projectsCaption || args.singleProjectMode || args.showOnlyMainWorkspace || (rows.length === 0 && !args.projectsCaptionAtTop));
-    if (caption.always && projectSections.length === 0) {
-      push({ kind: 'caption', key: `caption:${caption.key}`, estimateSize: SECTION_HEADER_ESTIMATE, caption: caption.key, collapsed: false, label: caption.label, preview: caption.preview });
-      push({ kind: 'empty', key: `caption:${caption.key}:empty`, estimateSize: STATUS_ESTIMATE, emptyKind: 'section' });
-      return;
+    if (caption) {
+      const collapsed = projectSections.length > 0 && args.collapsedActivities.has(caption.key);
+      push({ kind: 'caption', key: `caption:${caption.key}`, estimateSize: SECTION_HEADER_ESTIMATE, caption: caption.key, collapsed, label: caption.label, preview: caption.preview });
+      if (projectSections.length === 0) push({ kind: 'empty', key: `caption:${caption.key}:empty`, estimateSize: STATUS_ESTIMATE, emptyKind: 'section' });
+      if (collapsed) return;
     }
     for (const section of projectSections) {
       const descriptors = buildGroupRenderDescriptors(section, { mainWorkspaceOnly: args.showOnlyMainWorkspace });
       const projectCollapsed = !args.singleProjectMode && !args.showOnlyMainWorkspace && args.collapsedProjects.has(section.project.id);
-      if (!captioned) {
-        captioned = true;
-        const collapseKey = caption.key === 'projects' ? PROJECTS_CAPTION_COLLAPSE_KEY : caption.key;
-        const captionCollapsed = args.collapsedActivities.has(collapseKey);
-        push({ kind: 'caption', key: `caption:${caption.key}`, estimateSize: SECTION_HEADER_ESTIMATE, caption: caption.key, collapsed: captionCollapsed, label: caption.label, preview: caption.preview });
-        if (captionCollapsed) break;
-      }
       if (!args.showOnlyMainWorkspace) {
         const rowIndex = rows.length;
-        push({ kind: 'project-header', key: `project:${section.project.id}:header`, estimateSize: SECTION_HEADER_ESTIMATE, section, collapsed: projectCollapsed });
+        push({ kind: 'project-header', key: `project:${section.project.id}:header`, estimateSize: SECTION_HEADER_ESTIMATE, section, projectGroupKey: caption?.key, collapsed: projectCollapsed });
         stickyHeaders.push(Object.freeze({ rowIndex, kind: 'project', id: section.project.id }));
       }
       if (projectCollapsed) continue;
@@ -1086,10 +1078,14 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     const byId = new Map(args.sections.map((section) => [section.project.id, section]));
     const projectSections = block.projectIds.flatMap((id) => byId.get(id) ?? []);
     if (projectSections.length === 0 && block.hideWhenEmpty && !block.preview) return;
-    appendProjectSections(projectSections, { key: sidebarSectionActivityKey(block.id), label: block.name, preview: block.preview, always: true });
+    appendProjectSections(projectSections, { key: sidebarSectionActivityKey(block.id), label: block.name, preview: block.preview });
   };
 
   const appendProjects = (block: Extract<SessionSidebarBlock, { kind: 'projects' }>): void => {
+    if (args.projectsDropTarget && !args.singleProjectMode && !args.showOnlyMainWorkspace) {
+      push({ kind: 'projects-drop-target', key: 'projects:drop-target', estimateSize: SECTION_HEADER_ESTIMATE });
+      return;
+    }
     const excluded = block.excludedProjectIds;
     const timeEntries = args.singleProjectMode ? null : args.timeEntries ?? null;
     if (timeEntries) {
@@ -1100,32 +1096,26 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
           && getSessionFolderScopes(rootGroup).some(({ scopeKey }) => (args.foldersMap[scopeKey] ?? EMPTY_FOLDERS).length > 0);
         return hasFolders ? [{ section, rootGroup }] : [];
       });
-      const hasContent = entries.length > 0 || foldered.length > 0;
-      const collapsed = hasContent && args.projectsCaption !== false && appendActivityHeader('timeline');
-      if (hasContent && !collapsed) {
-        for (const { section, rootGroup } of foldered) {
-          const filedWorktrees = collectFiledWorktrees(buildGroupRenderDescriptors(section, { mainWorkspaceOnly: false }));
-          appendGroup(rootGroup, `${section.project.id}:${rootGroup.id}`, section.project.id, true, undefined, {
-            keyPrefix: 'activity:timeline:', depth: 0, mixed: args.sections.length > 1, foldersOnly: true,
-          }, filedWorktrees);
-        }
-        appendWorkEntries(entries, 'activity:timeline', 'activity:timeline');
+      for (const { section, rootGroup } of foldered) {
+        const filedWorktrees = collectFiledWorktrees(buildGroupRenderDescriptors(section, { mainWorkspaceOnly: false }));
+        appendGroup(rootGroup, `${section.project.id}:${rootGroup.id}`, section.project.id, true, undefined, {
+          keyPrefix: 'activity:timeline:', depth: 0, mixed: args.sections.length > 1, foldersOnly: true,
+        }, filedWorktrees);
       }
-      if (!collapsed) {
-        const listedProjects = new Set(timeEntries.map((entry) => entry.kind === 'session' ? entry.item.projectId : entry.projectId));
-        const shown = new Set<string>();
-        for (const section of args.sections) {
-          if (listedProjects.has(section.project.id) || excluded?.has(section.project.id)) continue;
-          const mainGroup = section.groups.find((group) => group.isMain);
-          if (!mainGroup) continue;
-          const groupKey = `${section.project.id}:${mainGroup.id}`;
-          const status = args.groupStatusByKey.get(groupKey);
-          if (!status || status.state === 'ready') continue;
-          const identity = status.state === 'loading' ? 'loading' : `${status.state}:${status.directory ?? ''}`;
-          if (shown.has(identity)) continue;
-          shown.add(identity);
-          push({ kind: 'status', key: `activity:timeline:status:${groupKey}`, estimateSize: STATUS_ESTIMATE, status, group: mainGroup, groupKey, flat: true });
-        }
+      appendWorkEntries(entries, 'activity:timeline', 'activity:timeline');
+      const listedProjects = new Set(timeEntries.map((entry) => entry.kind === 'session' ? entry.item.projectId : entry.projectId));
+      const shown = new Set<string>();
+      for (const section of args.sections) {
+        if (listedProjects.has(section.project.id) || excluded?.has(section.project.id)) continue;
+        const mainGroup = section.groups.find((group) => group.isMain);
+        if (!mainGroup) continue;
+        const groupKey = `${section.project.id}:${mainGroup.id}`;
+        const status = args.groupStatusByKey.get(groupKey);
+        if (!status || status.state === 'ready') continue;
+        const identity = status.state === 'loading' ? 'loading' : `${status.state}:${status.directory ?? ''}`;
+        if (shown.has(identity)) continue;
+        shown.add(identity);
+        push({ kind: 'status', key: `activity:timeline:status:${groupKey}`, estimateSize: STATUS_ESTIMATE, status, group: mainGroup, groupKey, flat: true });
       }
       return;
     }
@@ -1136,7 +1126,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
       const active = projectSections.find((section) => section.project.id === args.activeProjectId) ?? projectSections[0];
       projectSections = active ? [active] : [];
     }
-    appendProjectSections(projectSections, { key: 'projects', always: false });
+    appendProjectSections(projectSections);
   };
 
   const appendFlatSearch = (): void => {

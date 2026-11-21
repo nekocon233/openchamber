@@ -2,7 +2,7 @@ import { requestDirectoryAccess } from '@/lib/desktop';
 import { formatDirectoryName } from '@/lib/utils';
 import { refreshGlobalSessions } from '@/stores/useGlobalSessionsStore';
 import type { useChildStoreManager } from '@/sync/sync-context';
-import { PROJECTS_CAPTION_COLLAPSE_KEY, type SessionSidebarRow } from '../sessionSidebarRowModel';
+import type { SessionSidebarRow } from '../sessionSidebarRowModel';
 import { formatProjectLabel } from '../utils';
 import type { SessionProjectListProps } from './SessionProjectScroller';
 import type { ProjectSection } from './sessionProjectRender';
@@ -37,7 +37,7 @@ export const toggleProjectsCaption = (
   row: Extract<SessionSidebarRow, { kind: 'caption' }>,
   { model }: Pick<SessionProjectListProps, 'model'>,
 ): void => {
-  const key = row.caption === 'projects' ? PROJECTS_CAPTION_COLLAPSE_KEY : row.caption;
+  const key = row.caption;
   model.state.setCollapsedActivityKeys((current) => {
     const next = new Set(current);
     if (next.has(key)) next.delete(key); else next.add(key);

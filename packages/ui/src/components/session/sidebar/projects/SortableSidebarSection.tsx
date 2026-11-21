@@ -9,11 +9,12 @@ export const SortableSidebarSection: React.FC<{
   sectionId: string;
   rowKey: string;
   disabled: boolean;
+  dropOnly?: boolean;
   children: React.ReactNode;
-}> = ({ sectionId, rowKey, disabled, children }) => {
+}> = ({ sectionId, rowKey, disabled, dropOnly = false, children }) => {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, node, transform, transition, isDragging } = useSortable({
     id: sectionDragId(sectionId),
-    disabled,
+    disabled: dropOnly ? { draggable: true, droppable: disabled } : disabled,
     data: { type: 'section', sortGroup: SECTION_SORT_GROUP, sectionId, rowKey, element: () => node.current },
     transition: ROW_SORT_TRANSITION,
   });
@@ -24,9 +25,10 @@ export const SortableSidebarSection: React.FC<{
   return <div
     ref={setRef}
     style={{ transform: CSS.Translate.toString(transform), transition }}
-    className={cn('focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50', !disabled && 'cursor-grab active:cursor-grabbing', isDragging && 'opacity-0')}
-    {...attributes}
-    {...listeners}
+    className={cn('focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50', !disabled && !dropOnly && 'cursor-grab active:cursor-grabbing', isDragging && 'opacity-0')}
+    aria-hidden={dropOnly || undefined}
+    {...(dropOnly ? undefined : attributes)}
+    {...(dropOnly ? undefined : listeners)}
   >
     {children}
   </div>;

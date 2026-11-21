@@ -107,9 +107,9 @@ with its named pin lists. How the rows are drawn stays with the row model
   the built-in ones through the show toggles they always had
   (`sidebarShowChatsSection`, `sidebarShowPinnedSection`, `sidebarShowWorkSection`),
   which older clients still read. Projects always contributes its rows.
-  The reserved `projects` entry in `sidebarHiddenSections` hides its caption
-  in either list arrangement. A section drag can still expose the caption as a
-  drop target.
+  Projects can be moved in the manager like any other section. Its heading
+  is absent in both groupings. Older clients can still read and write their
+  stored `projects` entry in `sidebarHiddenSections`.
 - Sections, pin lists and hidden sections belong to the instance they came
   from (`sectionsOwner` in the display store, stamped by every write). The local
   copy is a startup cache: switching to another instance, or starting on one,
@@ -205,9 +205,10 @@ over it keep their glass.
 
 The panel keeps keyboard focus while visibility changes reflow the session list.
 Outside presses, Escape and the close control dismiss it.
-The header that opens the panel owns its popup and clears the draft when it
-leaves. The main sidebar and the conversation's session picker can coexist
-with the same section settings and independent popup lifetimes.
+The main sidebar opens a panel next to its header. The conversation's session
+picker swaps its list for the same settings inside the existing popup. The
+hidden list keeps calculating draft matches. Back returns to the same list
+and search. Each opener clears its own draft when the popup closes.
 
 ### Why Pin to replaces the Pin item
 

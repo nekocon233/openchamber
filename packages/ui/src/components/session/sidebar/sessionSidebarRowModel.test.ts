@@ -254,7 +254,6 @@ describe('buildSessionSidebarRowModel', () => {
     const input = args([project([group([node('waiting'), node('other')])])]);
     input.workEntries = sessionWorks([timelineItem('other')]);
     input.movedSessionIds = new Set(['waiting']);
-    input.projectsCaption = true;
     input.blocks = [
       { kind: 'custom', id: 's1', name: 'Waiting on me', entries: sessionWorks([timelineItem('waiting')]), hideWhenEmpty: true, preview: false },
       { kind: 'work' },
@@ -269,7 +268,7 @@ describe('buildSessionSidebarRowModel', () => {
             : []
     ));
 
-    expect(order).toEqual(['section:s1=Waiting on me', 'mixed-compact:waiting', 'work', 'mixed-compact:other', 'caption:projects', 'project:other']);
+    expect(order).toEqual(['section:s1=Waiting on me', 'mixed-compact:waiting', 'work', 'mixed-compact:other', 'project:other']);
   });
 
   describe('the reveal limit in zones', () => {
@@ -368,7 +367,6 @@ describe('buildSessionSidebarRowModel', () => {
   test('a group of projects lists its projects under its caption, and Projects lists the rest', () => {
     const projectB: ProjectSection = { project: { id: 'project-b', normalizedPath: '/other' }, groups: [group([node('b')], { directory: '/other', folderScopeKey: '/other' })] };
     const input = args([project([group([node('a')])]), projectB]);
-    input.projectsCaption = true;
     input.blocks = [
       { kind: 'project-group', id: 'g1', name: 'Clients', projectIds: ['project-b'], hideWhenEmpty: false, preview: false },
       { kind: 'projects', excludedProjectIds: new Set(['project-b']) },
@@ -376,11 +374,11 @@ describe('buildSessionSidebarRowModel', () => {
 
     const order = buildSessionSidebarRowModel(input).rows.flatMap((row) => (
       row.kind === 'caption' ? [`caption:${row.label ?? row.caption}`]
-        : row.kind === 'project-header' ? [`project:${row.section.project.id}`]
+        : row.kind === 'project-header' ? [`project:${row.section.project.id}:${row.projectGroupKey ?? 'projects'}`]
           : []
     ));
 
-    expect(order).toEqual(['caption:Clients', 'project:project-b', 'caption:projects', 'project:project-a']);
+    expect(order).toEqual(['caption:Clients', 'project:project-b:section:g1', 'project:project-a:projects']);
   });
 
   test('a session in work stays in its folder', () => {
@@ -885,7 +883,7 @@ describe('buildSessionSidebarRowModel', () => {
       expect(new Set(model.rows.map((row) => row.key)).size).toBe(model.rows.length);
     });
 
-    test('the list by time lists the works of every project in one zone, without project headers', () => {
+    test('the list by time keeps every work visible even when old settings folded the Projects heading', () => {
       const work = worktree([node('a1')]);
       const second: ProjectSection = { project: { id: 'project-b', normalizedPath: '/other' }, groups: [group([], { directory: '/other' })] };
       const input = args([project([group([node('root')]), work]), second]);
@@ -896,14 +894,12 @@ describe('buildSessionSidebarRowModel', () => {
         { kind: 'group', groupKey: 'project-a:worktree:/wt', projectId: 'project-a', group: work },
         { kind: 'session', item: timelineItem('root') },
       ];
+      input.collapsedActivities = new Set(['timeline']);
 
       expect(listedOf(buildSessionSidebarRowModel(input).rows)).toEqual([
         'zone:pinned', 'mixed-compact:pinned@0', 'zone:work', 'mixed-compact:working@0',
-        'zone:timeline', 'mixed-compact:b1@0', 'work:worktree:/wt@0:mixed', 'project:a1@1', 'mixed-compact:root@0',
+        'mixed-compact:b1@0', 'work:worktree:/wt@0:mixed', 'project:a1@1', 'mixed-compact:root@0',
       ]);
-
-      input.collapsedActivities = new Set(['timeline']);
-      expect(listedOf(buildSessionSidebarRowModel(input).rows).slice(-1)).toEqual(['zone:timeline']);
     });
 
     test('the list by time shows one line while sessions load and one per failed directory', () => {

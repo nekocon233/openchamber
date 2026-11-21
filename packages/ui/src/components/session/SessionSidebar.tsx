@@ -76,6 +76,7 @@ interface SessionSidebarProps {
   hideDirectoryControls?: boolean;
   showOnlyMainWorkspace?: boolean;
   listControlsSlot?: HTMLElement | null;
+  inlineSectionsOwner?: string;
   phone?: {
     searchQuery: string;
     searchScope: SearchScope;
@@ -97,6 +98,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   hideDirectoryControls = false,
   showOnlyMainWorkspace = false,
   listControlsSlot = null,
+  inlineSectionsOwner,
   phone,
   renderSharedDialogs = true,
 }) => {
@@ -724,6 +726,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         headerActionIconClass={headerActionIconClass}
         headerActionButtonClass={headerActionButtonClass}
         listControlsSlot={listControlsSlot}
+        inlineSectionsOwner={inlineSectionsOwner}
         closeSessionSearch={resetSessionSearch}
         sessionSearchInputRef={sessionSearchInputRef}
         sessionSearchQuery={sessionSearchText}

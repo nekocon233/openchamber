@@ -133,7 +133,6 @@ export const SidebarSectionsManager: React.FC<{
   pages: boolean;
 }> = ({ open, onClose, anchor, trigger, pages }) => {
   const { t } = useI18n();
-  const draft = useSidebarSectionsUiStore((state) => open ? state.draft : null);
   return (
     <Popover.Root
       open={open}
@@ -160,7 +159,7 @@ export const SidebarSectionsManager: React.FC<{
             className={cn(SECTIONS_PANEL_CLASS, 'flex max-h-[min(40rem,calc(100vh-4rem))] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden')}
             finalFocus={trigger}
           >
-            {draft ? <SectionEditor key={draft.id} draft={draft} /> : <SectionList pages={pages} />}
+            <SidebarSectionsContent pages={pages} active={open} />
             <Popover.Close className="sr-only" tabIndex={-1}>{t('dialog.common.actions.close')}</Popover.Close>
           </Popover.Popup>
         </Popover.Positioner>
@@ -171,7 +170,12 @@ export const SidebarSectionsManager: React.FC<{
 
 const SECTION_PRESETS = ['recent', 'waiting', 'running', 'prs', 'stalled', 'today'] as const satisfies readonly SidebarSectionTemplate[];
 
-const SectionList: React.FC<{ pages: boolean }> = ({ pages }) => {
+export const SidebarSectionsContent: React.FC<{ pages: boolean; active?: boolean; onBack?: () => void }> = ({ pages, active = true, onBack }) => {
+  const draft = useSidebarSectionsUiStore((state) => active ? state.draft : null);
+  return draft ? <SectionEditor key={draft.id} draft={draft} /> : <SectionList pages={pages} onBack={onBack} />;
+};
+
+const SectionList: React.FC<{ pages: boolean; onBack?: () => void }> = ({ pages, onBack }) => {
   const { t } = useI18n();
   const sections = useSessionDisplayStore((state) => state.sections);
   const pinLists = useSessionDisplayStore((state) => state.pinLists);
@@ -187,7 +191,12 @@ const SectionList: React.FC<{ pages: boolean }> = ({ pages }) => {
   return (
     <ScrollableOverlay outerClassName="min-h-0" className="flex flex-col gap-3 p-3" disableHorizontal>
       <div className="flex items-center justify-between gap-2">
-        <span className="typography-ui-label font-medium text-foreground">{t('sessions.sidebar.sections.title')}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {onBack ? <Button variant="ghost" size="icon" className="size-6" aria-label={t('header.actions.backAria')} onClick={onBack}>
+            <Icon name="arrow-left-s" className="size-4" />
+          </Button> : null}
+          <span className="truncate typography-ui-label font-medium text-foreground">{t('sessions.sidebar.sections.title')}</span>
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="xs" disabled={!canAddSidebarSection(sections)}>
@@ -274,10 +283,9 @@ const SectionRow: React.FC<{ entry: SidebarSectionEntry }> = ({ entry }) => {
   const keepWorkInPlace = useSessionDisplayStore((state) => state.keepWorkInPlace);
   const keepPinnedInPlace = useSessionDisplayStore((state) => state.keepPinnedInPlace);
   const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
-  const name = entry.kind === 'custom' ? entry.name
-    : t(entry.id === 'projects' ? 'sessions.sidebar.sections.projectsHeading' : BUILTIN_TITLE_KEY[entry.id]);
+  const name = entry.kind === 'custom' ? entry.name : t(BUILTIN_TITLE_KEY[entry.id]);
   let visibility: { shown: boolean; set: (shown: boolean) => void } | null = null;
-  if (entry.kind === 'custom' || entry.id === 'pages' || entry.id === 'projects') {
+  if (entry.kind === 'custom' || entry.id === 'pages') {
     visibility = { shown: !hiddenSections.includes(entry.id), set: (shown) => setSidebarSectionHidden(entry.id, !shown) };
   } else if (entry.id === 'chats') {
     visibility = { shown: showChats, set: (shown) => { useSessionDisplayStore.getState().setShowChatsSection(shown); void updateDesktopSettings({ sidebarShowChatsSection: shown }); } };

@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { dropdownMenuPopupClass } from '@/components/ui/dropdown-menu.styles';
 import { SessionSidebar } from '@/components/session/SessionSidebar';
+import { closeSectionsManager, useSidebarSectionsUiStore } from '@/components/session/sidebar/sections/sectionActions';
+import { useOnDemandComponent } from '@/hooks/useOnDemandComponent';
 import { Icon } from '@/components/icon/Icon';
 import { cn } from '@/lib/utils';
 import { isIMECompositionEvent } from '@/lib/ime';
@@ -13,12 +15,24 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
 const ICON_BUTTON_CLASS = 'w-6 px-0 has-[>svg]:px-0 text-muted-foreground hover:bg-transparent hover:text-foreground';
+const loadSectionsContent = () => import('@/components/session/sidebar/sections/SidebarSectionsManager').then((module) => module.SidebarSectionsContent);
 
 /** Session navigation belongs to the conversation header in both desktop layouts. */
 export const ChatSessionActions: React.FC = () => {
   const { t } = useI18n();
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
-  const closeSessions = React.useCallback(() => setSessionsOpen(false), []);
+  const sectionsOwner = React.useId();
+  const sectionsOpen = useSidebarSectionsUiStore((state) => state.managerOwner === sectionsOwner);
+  const closeSections = React.useCallback(() => closeSectionsManager(sectionsOwner), [sectionsOwner]);
+  const bindActions = React.useCallback((node: HTMLDivElement | null) => {
+    if (node === null) closeSections();
+  }, [closeSections]);
+  const onSessionsOpenChange = React.useCallback((open: boolean) => {
+    if (!open) closeSections();
+    setSessionsOpen(open);
+  }, [closeSections]);
+  const closeSessions = React.useCallback(() => onSessionsOpenChange(false), [onSessionsOpenChange]);
+  const SectionsContent = useOnDemandComponent(sessionsOpen && sectionsOpen, loadSectionsContent, closeSections);
   React.useLayoutEffect(() => {
     if (sessionsOpen) return shortcutRegistry.suspend();
   }, [sessionsOpen]);
@@ -27,8 +41,8 @@ export const ChatSessionActions: React.FC = () => {
     useSessionUIStore.getState().openNewSessionDraft();
   }, []);
 
-  return <div data-chat-session-actions="" className="app-region-no-drag flex shrink-0 items-center gap-2">
-    <Popover.Root open={sessionsOpen} onOpenChange={setSessionsOpen}>
+  return <div ref={bindActions} data-chat-session-actions="" className="app-region-no-drag flex shrink-0 items-center gap-2">
+    <Popover.Root open={sessionsOpen} onOpenChange={onSessionsOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <Popover.Trigger
@@ -49,7 +63,7 @@ export const ChatSessionActions: React.FC = () => {
           <Popover.Popup
             data-session-picker=""
             role="dialog"
-            aria-label={t('header.actions.openSessionsAria')}
+            aria-label={t(sectionsOpen ? 'sessions.sidebar.sections.title' : 'header.actions.openSessionsAria')}
             className={cn(dropdownMenuPopupClass, 'flex h-[min(36rem,75dvh)] w-[360px] max-w-[calc(100vw-1rem)] flex-col overflow-hidden p-0')}
             onKeyDownCapture={event => {
               if (event.key !== 'Escape' || event.defaultPrevented || isIMECompositionEvent(event)) return;
@@ -60,7 +74,12 @@ export const ChatSessionActions: React.FC = () => {
               closeSessions();
             }}
           >
-            {sessionsOpen ? <SessionSidebar isVisible allowReselect onSessionSelected={closeSessions} renderSharedDialogs={false} /> : null}
+            {sessionsOpen ? <>
+              <div hidden={sectionsOpen && SectionsContent !== null} className="min-h-0 flex-1">
+                <SessionSidebar isVisible allowReselect onSessionSelected={closeSessions} renderSharedDialogs={false} inlineSectionsOwner={sectionsOwner} />
+              </div>
+              {sectionsOpen && SectionsContent ? <SectionsContent pages onBack={closeSections} /> : null}
+            </> : null}
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>

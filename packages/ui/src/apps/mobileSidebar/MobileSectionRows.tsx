@@ -60,10 +60,7 @@ export const MobileZoneHeader: React.FC<{
 export const MobileProjectsCaption: React.FC<{
   row: Extract<SessionSidebarRow, { kind: 'caption' }>;
   onToggle: () => void;
-}> = ({ row, onToggle }) => {
-  const { t } = useI18n();
-  return <MobileCaption label={row.label ?? t('sessions.sidebar.activity.projectsTitle')} collapsed={row.collapsed} onToggle={onToggle} />;
-};
+}> = ({ row, onToggle }) => <MobileCaption label={row.label} collapsed={row.collapsed} onToggle={onToggle} />;
 
 const HeaderIconButton: React.FC<{ icon: 'add' | 'git-branch'; label: string; onClick: () => void }> = ({ icon, label, onClick }) => (
   <button

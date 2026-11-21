@@ -75,29 +75,18 @@ describe('SessionSidebarRows section spacing', () => {
     }
   });
 
-  test('the desktop captions the projects when zones list above them, with no gap between caption and project', () => {
-    const captioned = buildSessionSidebarRowModel({ ...input(true), projectsCaption: true }).rows;
-    const caption = captioned.findIndex((row) => row.kind === 'caption');
-    expect(caption).toBeGreaterThan(0);
-    expect(captioned[caption + 1]?.kind).toBe('project-header');
-    expect(sectionSpacingAfter(captioned[caption], captioned[caption + 1])).toBeUndefined();
-    expect(sectionSpacingAfter(captioned[caption - 1], captioned[caption])).toBe('pb-4');
-    expect(buildSessionSidebarRowModel(input(true)).rows.some((row) => row.kind === 'caption')).toBe(false);
+  test('while reordering sections the projects block becomes a drop target with no heading', () => {
+    const rows = buildSessionSidebarRowModel({ ...input(true), projectsDropTarget: true }).rows;
+    expect(rows.at(-1)?.kind).toBe('projects-drop-target');
+    expect(rows.some((row) => row.kind === 'caption' || row.kind === 'project-header')).toBe(false);
   });
 
-  test('closing the Projects caption folds every project away', () => {
-    const closed = buildSessionSidebarRowModel({ ...input(true), projectsCaption: true, collapsedActivities: new Set(['projects']) }).rows;
-    expect(closed.at(-1)?.kind).toBe('caption');
-    expect(closed.some((row) => row.kind === 'project-header')).toBe(false);
-  });
-
-  test('hiding the Projects caption leaves the project rows visible', () => {
+  test('an old collapsed Projects heading leaves project rows visible', () => {
     const rows = buildSessionSidebarRowModel({
       ...input(true),
-      projectsCaption: false,
       collapsedActivities: new Set(['projects']),
     }).rows;
-    expect(rows.some((row) => row.kind === 'caption' && row.caption === 'projects')).toBe(false);
+    expect(rows.some((row) => row.kind === 'caption' || row.kind === 'projects-drop-target')).toBe(false);
     expect(rows.some((row) => row.kind === 'project-header')).toBe(true);
     expect(rows.some((row) => row.kind === 'session' && row.renderContext === 'project')).toBe(true);
   });
