@@ -139,11 +139,13 @@ wallet amount.
 UI reads also ask the same loopback gateway for its retained Magpie history
 so a monthly allowance can show its full recorded cycle. History uses the
 provider, real account name and window name with the pool prefix applied once.
-Keep the latest recorded cycle and preserve both ends when reducing
-it to 96 points, and attach pace eligibility only to a point that matches the
-snapshot at Magpie's one-second and two-decimal precision. A saved card with no
-reset time can still show the latest recorded segment, including readings
-newer than the card and that segment's own cycle bounds.
+Keep the latest recorded cycle and preserve both ends when reducing it to
+96 points. The final point uses the snapshot's original time and percentage.
+It replaces a matching history point at Magpie's one-second and two-decimal
+precision. A later snapshot joins the chart when its reset time matches the
+confirmed cycle and the reading is within that cycle. A saved card with no reset time can still show the latest
+recorded segment, including readings newer than the card and that segment's
+own cycle bounds.
 An observed refill inside the advertised cycle leaves the new baseline unknown. Ambiguous and remote
 account matches have no chart because history has no remote-source identity.
 A failed history read gives percentage windows an explicit unavailable state

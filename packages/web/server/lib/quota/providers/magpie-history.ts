@@ -67,20 +67,18 @@ export function magpieTrendFor(
   { sampledAt, remaining, resetAt }: { sampledAt: number | null; remaining: number; resetAt: number | null },
 ): MagpieTrend | undefined {
   const reset = resetAt === null ? undefined : wholeSecond(resetAt);
-  const hasSnapshotTiming = sampledAt !== null && reset !== undefined;
+  const snapshot = sampledAt !== null && reset !== undefined
+    ? { at: sampledAt, left: remaining, resetsAt: reset }
+    : undefined;
   let end = points.length - 1;
-  if (hasSnapshotTiming) {
-    while ((points[end]?.at ?? -Infinity) > sampledAt) end -= 1;
+  if (snapshot) {
+    while ((points[end]?.at ?? -Infinity) > snapshot.at) end -= 1;
   }
   const latest = points[end];
   if (!latest) return undefined;
-  const matchesSnapshot = hasSnapshotTiming && latest.at === wholeSecond(sampledAt) &&
-    latest.resetsAt === reset && Math.abs(latest.left - remaining) <= 0.005001;
-
-  if (hasSnapshotTiming && !matchesSnapshot) {
-    const snapshot = { at: sampledAt, left: remaining, resetsAt: reset };
-    if (startsAnotherCycle(latest, snapshot)) return undefined;
-  }
+  const matchesSnapshot = snapshot !== undefined && latest.at === wholeSecond(snapshot.at) &&
+    latest.resetsAt === snapshot.resetsAt && Math.abs(latest.left - snapshot.left) <= 0.005001;
+  if (snapshot && !matchesSnapshot && startsAnotherCycle(latest, snapshot)) return undefined;
 
   const reportedCycle = latest.start !== undefined && latest.resetsAt !== undefined &&
     latest.start <= latest.at && latest.at < latest.resetsAt
@@ -95,9 +93,16 @@ export function magpieTrendFor(
     previous = points[first - 1];
   }
   const cycle = reportedCycle && (!previous || previous.at < reportedCycle.start) ? reportedCycle : undefined;
-  const count = Math.min(end - first + 1, MAX_TREND_POINTS);
+  const followsHistory = snapshot && cycle && cycle.reset === snapshot.resetsAt &&
+    snapshot.at < cycle.reset && latest.at < wholeSecond(snapshot.at);
+  const snapshotPoint = snapshot && (matchesSnapshot || followsHistory)
+    ? { at: snapshot.at, left: snapshot.left }
+    : undefined;
+  const lastHistoryIndex = matchesSnapshot ? end - 1 : end;
+  const count = Math.min(lastHistoryIndex - first + 1, snapshotPoint ? MAX_TREND_POINTS - 1 : MAX_TREND_POINTS);
   const samples = Array.from({ length: count }, (_, index) =>
-    points[count === 1 ? end : first + Math.round(index * (end - first) / (count - 1))]);
+    points[count === 1 ? lastHistoryIndex : first + Math.round(index * (lastHistoryIndex - first) / (count - 1))]);
   const selected = samples.flatMap(point => point ? [{ at: point.at, left: point.left }] : []);
-  return { points: selected, cycle, matchesSnapshot };
+  if (snapshotPoint) selected.push(snapshotPoint);
+  return { points: selected, cycle, matchesSnapshot: snapshotPoint !== undefined };
 }
