@@ -859,9 +859,9 @@ expanded list is capped at eight rows and scrolls independently.
 
 ## Collapsed Usage headline
 
-Collapsed, the Usage section shows one quota rather than a mode word: the
-**shortest window reported by the provider the composer is pointed at**. A
-5-hour bucket answers "will the next turn land"; a monthly one does not.
+Collapsed, the Usage section shows the shortest visible quota window for the
+composer's provider. Work Status filters five-hour allowances before it
+selects model rows or the collapsed headline.
 
 Selection rules live in `usageHeadline.ts` and are pinned by
 `usageHeadline.test.ts`:

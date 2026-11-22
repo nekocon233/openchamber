@@ -5,7 +5,7 @@ import { WorkStatusTouchContext } from '@/components/chat/work-status/touchConte
 import { GlassRedrawGuard } from '@/components/ui/glass-redraw-guard';
 import { dropdownMenuPopupClass } from '@/components/ui/dropdown-menu.styles';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
-import { magpieReferenceLeft } from '@/lib/quota/magpie';
+import { magpiePaceDifference, magpieReferenceLeft } from '@/lib/quota/magpie';
 import { formatDateTimeForPreference } from '@/lib/timeFormat';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/useUIStore';
@@ -32,7 +32,7 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
   const x = (at: number) => INSET + (CHART_WIDTH - 2 * INSET) * (at - start) / (end - start);
   const y = (left: number) => INSET + (CHART_HEIGHT - 2 * INSET) * (100 - left) / 100;
 
-  const numbers = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumFractionDigits: 1 });
+  const numbers = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumSignificantDigits: 3 });
   const percentages = new Intl.NumberFormat(getCurrentIntlLocale(), { style: 'percent', maximumFractionDigits: 1 });
   const percent = (left: number) => percentages.format(left / 100);
   const stamp = (at: number) => formatDateTimeForPreference(at, timeFormat, {
@@ -42,7 +42,7 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
   const reading = reference === null
     ? t('chat.workStatus.magpie.trend.reading', { at: stamp(sample.at), actual: percent(sample.left) })
     : t('chat.workStatus.magpie.trend.comparison', { at: stamp(sample.at), actual: percent(sample.left), reference: percent(reference) });
-  const difference = reference === null ? null : Math.round((reference - sample.left) * 10) / 10;
+  const difference = reference === null ? null : magpiePaceDifference(reference, sample.left);
   const summary = difference === null
     ? t('chat.workStatus.magpie.trend.unknownCycle')
     : difference === 0 ? t('chat.workStatus.magpie.trend.onPace') : t(

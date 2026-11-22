@@ -20,8 +20,11 @@ external response parsing and source identity.
 - The collapsed usage headline never selects a Magpie account: the gateway
   chooses that account only when it routes a request.
 
-- Work Status shows pace only for a matching snapshot before its reset.
-  Low remaining balances keep their quota tone in either display mode.
+- Work Status hides five-hour provider, model and account windows. Quota
+  visibility uses the reported duration, a matching recorded cycle or the raw
+  window name. Refresh demand follows configured providers.
+- Every signed difference from even pace has a label for a matching snapshot
+  before its reset. Low balances keep their quota tone in either display mode.
 - The plot follows time from left to right and reads recorded remaining
   percentages independently of the selected display mode.
 

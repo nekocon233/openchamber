@@ -20,9 +20,12 @@ export function magpieReferenceLeft(cycle: NonNullable<MagpieQuotaTrend['cycle']
   return 100 * (cycle.reset - at) / (cycle.reset - cycle.start);
 }
 
+export const magpiePaceDifference = (reference: number, left: number): number =>
+  Number((reference - left).toFixed(10));
+
 export function magpieQuotaPace(trend: MagpieQuotaTrend | null | undefined, now: number): number | null {
   const cycle = trend?.cycle;
   const latest = trend?.points.at(-1);
   if (!cycle || !latest || !trend?.matchesSnapshot || now >= cycle.reset) return null;
-  return Number((magpieReferenceLeft(cycle, latest.at) - latest.left).toFixed(10));
+  return magpiePaceDifference(magpieReferenceLeft(cycle, latest.at), latest.left);
 }
