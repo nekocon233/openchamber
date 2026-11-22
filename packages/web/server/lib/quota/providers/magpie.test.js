@@ -66,8 +66,52 @@ describe('Magpie allowance boundary', () => {
     expect(gemini).toMatchObject({ matchesSnapshot: true, cycle: { start: Date.parse(start), reset: Date.parse(resetsAt) } });
     expect(gemini.points).toHaveLength(96);
     expect(gemini.points[0]).toEqual({ at: firstAt, left: 100 });
-    expect(gemini.points.at(-1)).toEqual({ at: Date.parse('2026-11-21T13:00:00Z'), left: 40 });
-    expect(windows['Claude & GPT · 5 hours'].magpieTrend).toMatchObject({ matchesSnapshot: false, points: [{ left: 98 }] });
+    expect(gemini.points.at(-1)).toEqual({ at: Date.parse(readAt), left: 40 });
+    expect(windows['Claude & GPT · 5 hours'].magpieTrend).toMatchObject({
+      matchesSnapshot: true,
+      points: [
+        { at: Date.parse('2026-11-21T12:00:00Z'), left: 98 },
+        { at: Date.parse(readAt), left: 98 },
+      ],
+    });
+  });
+
+  it('uses a later AGY quota snapshot for pace within the same recorded week', async () => {
+    const start = '2026-11-21T00:00:00Z';
+    const resetsAt = '2026-11-28T00:00:00Z';
+    const readAt = '2026-11-21T03:00:00.126Z';
+    const firstAt = Date.parse('2026-11-21T00:15:00Z');
+    const history = Array.from({ length: 120 }, (_, index) => ({
+      at: new Date(firstAt + index * 60_000).toISOString(), left: 100 - index * 0.05, start, resetsAt,
+    }));
+    history.push({ at: '2026-11-21T04:00:00Z', left: 92, start, resetsAt });
+    const { read } = await setup([card({
+      provider: 'agy-cli', user: 'sample', readAt, windows: [
+        { pool: 'Gemini', name: 'Gemini · 7 days', remaining: 93.6017, resetsAt },
+        { pool: 'Claude & GPT', name: '7 days', remaining: 98, resetsAt: '2026-11-28T00:01:00Z' },
+      ],
+    })], 3425, [{
+      provider: 'agy-cli', user: 'sample', lines: [
+        { name: 'Gemini · 7 days', points: history },
+        { name: 'Claude & GPT · 7 days', points: [
+          { at: '2026-11-21T02:00:00Z', left: 98, start, resetsAt },
+        ] },
+      ],
+    }]);
+    const windows = (await read()).usage.accounts[0].windows;
+    const latestWeek = windows['Gemini · 7 days'].magpieTrend;
+    expect(latestWeek.matchesSnapshot).toBe(true);
+    expect(latestWeek.points).toHaveLength(96);
+    expect(latestWeek.points[0]).toEqual({ at: firstAt, left: 100 });
+    expect(latestWeek.points.at(-1)).toEqual({ at: Date.parse(readAt), left: 93.6017 });
+    expect(windows['Claude & GPT · 7 days'].magpieTrend).toMatchObject({
+      matchesSnapshot: false,
+      points: [{ at: Date.parse('2026-11-21T02:00:00Z'), left: 98 }],
+    });
+
+    history.splice(-1, 0, { at: '2026-11-21T03:00:00Z', left: 93.6, start, resetsAt });
+    const recorded = (await read()).usage.accounts[0].windows['Gemini · 7 days'].magpieTrend;
+    expect(recorded).toEqual(latestWeek);
   });
 
   it('shows later AGY history when its saved snapshot has no reset time', async () => {
