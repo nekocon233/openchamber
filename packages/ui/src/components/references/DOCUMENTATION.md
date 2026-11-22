@@ -187,8 +187,8 @@ through `ReferencePreview.pullFileStats`. The project view owns the reads and
 file-type exclusions. Picker and board previews use the provider totals.
 
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
-  open PRs only, with Mine and All categories in
-  that order. The saved project category is restored, defaulting to Mine, and
+  open PRs in Mine and open, closed, and merged PRs in All.
+  The saved project category is restored, defaulting to Mine, and
   legacy saved `reviewRequested` or `created` selections migrate to Mine.
   The panel validates Mine and All separately from the picker and board. It
   does not preload issues or expose their state filter. It requests
@@ -203,8 +203,8 @@ file-type exclusions. Picker and board previews use the provider totals.
   `openContextPanelTab`, so repeated clicks do not toggle it closed. A one-shot
   request names the hosting workspace and the source directory separately;
   the latter supplies the account and repository for the exact URL lookup and
-  every detail or action. Closed and merged PRs can be previewed directly
-  without widening the normal open-only list. The original list and branch
+  every detail or action. Links to closed and merged PRs open their preview
+  from either category. The original list and branch
   views remain retained underneath the linked preview. Chips honor the chat
   link preference; their mobile, mini-chat, VS Code and modifier-click behavior
   remains external. Explicit host links remain external on every surface.
@@ -213,9 +213,9 @@ file-type exclusions. Picker and board previews use the provider totals.
   Cross-directory comparisons use the source binding and restore the original
   conversation or draft before revealing its retained PR pane.
 - Each GitHub row in the project PR list shows its check result and count.
-  Closed or merged results from a direct lookup or advanced query are excluded
-  by the browser state owner before rows and checks consume them. Status batches supply these
-  results without loading each PR's detail. Loading, failed reads, unavailable
+  Mine filters closed and merged results from direct lookups and advanced
+  queries before rendering rows or reading checks. All includes those results
+  in the same status batches as open PRs. Loading, failed reads, unavailable
   results and a successful empty check list have separate labels. Queued checks
   are distinguished when all pending checks are queued. Other list consumers
   continue reading statuses only for open PRs and retain their compact rows.
@@ -228,8 +228,8 @@ file-type exclusions. Picker and board previews use the provider totals.
   request updates that snapshot without fetching again. A failed batch stays
   failed until a list refresh, revalidation or return retries it; successful
   batches remain cached.
-- Repository PR pages without search or a people filter use GitHub's repository
-  connection and can traverse every matching open PR. Searches use the existing
+- The unfiltered All list uses GitHub's repository connection to page through
+  the entire PR history. Searches use the existing
   search API. Lists retain the returned total so the panel can explain its
   1,000-result search limit and ask for a narrower search. A query cannot expand
   the repository scope, and a PR number never resolves to an issue in this mode.

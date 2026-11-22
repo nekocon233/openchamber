@@ -13,10 +13,10 @@ const CONNECTED: SourceControlAuthStatus = {
   accounts: [{ id: ACCOUNT_ID, credentialId: ACCOUNT_ID, credentialRevision: 1, providerUserId: 'github.com#7',
     providerUserStatus: 'available', user: USER, current: true, source: 'oauth', status: 'valid' }],
 };
-const pull = (number: number, owner = 'acme'): GitHubPullReference => ({
+const pull = (number: number, owner = 'acme', state?: GitHubPullReference['state']): GitHubPullReference => ({
   kind: 'pull', number, title: `PR ${number}`, url: `https://github.com/${owner}/app/pull/${number}`,
   body: '', bodyTruncated: false, createdAt: null, updatedAt: null, author: null, labels: [], commentCount: 0,
-  sourceRepo: { owner, repo: 'app', source: 'origin' }, state: owner === 'upstream' ? number === 2 ? 'merged' : 'closed' : 'open', draft: false,
+  sourceRepo: { owner, repo: 'app', source: 'origin' }, state: state ?? (owner === 'upstream' ? number === 2 ? 'merged' : 'closed' : 'open'), draft: false,
   head: `branch-${number}`, base: 'main', headSha: `sha-${number}`, headRepo: null,
 });
 
@@ -50,8 +50,12 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       if (query === 'old') await new Promise<void>((resolve) => { releaseOld = resolve; });
       const owner = url.searchParams.get('scope') === 'network' ? 'upstream' : 'acme';
       const otherPullNumber = owner === 'acme' && url.searchParams.get('people') === 'any' ? 4 : 2;
-      const items = query === 'terminal' ? [{ ...pull(92, owner), state: 'merged' }, { ...pull(93, owner), state: 'closed' }]
-        : query ? [pull(query === 'old' ? 90 : 91, owner)] : url.searchParams.has('cursor') ? [pull(3, owner)] : [pull(1, owner), pull(otherPullNumber, owner)];
+      const allStates = url.searchParams.get('state') === 'all';
+      const page = url.searchParams.has('cursor')
+        ? [pull(3, owner, allStates ? 'closed' : undefined)]
+        : [pull(1, owner), pull(otherPullNumber, owner, allStates ? 'merged' : undefined)];
+      const items = query === 'terminal' ? [pull(92, owner, 'merged'), pull(93, owner, 'closed')]
+        : query ? [pull(query === 'old' ? 90 : 91, owner)] : page;
       return Response.json({ connected: true, scope: oldServer ? undefined : url.searchParams.get('scope'), repo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app' }, items,
         cursor: query || url.searchParams.has('cursor') ? null : 'next', hasMore: !query && !url.searchParams.has('cursor'), total: query ? 1200 : 3 });
     }
@@ -107,6 +111,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   };
   const listRequests = () => requests.filter((url) => url.pathname.endsWith('/references') && url.searchParams.get('scope') === 'repository');
   const numbers = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.number] : []);
+  const states = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.state] : []);
 
   try {
     await render();
@@ -174,8 +179,12 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     await act(async () => current().closeMobilePreview());
 
     await act(async () => current().selectRepositoryFilter({ state: 'closed', people: 'any' }));
+    expect(current().repositoryFilter).toEqual({ state: 'all', people: 'any', labels: [] });
     await until(() => numbers().includes(4));
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
+    expect(states()).toEqual(['open', 'merged']);
+    await act(async () => current().list.loadMore());
+    await until(() => !current().list.hasMore && current().items.length === 3);
+    expect(states()).toEqual(['open', 'merged', 'closed']);
     await act(async () => current().selectRepositoryFilter({ people: 'assigned' }));
     expect(current().repositoryFilter.people).toBe('any');
     await act(async () => current().selectRepositoryFilter({ people: 'mine' }));
@@ -185,14 +194,19 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(current().repositoryKind).toBe('pull');
     await render(false); await render(true);
     expect(current().repositoryFilter.people).toBe('mine');
-    await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
-    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
-    expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
 
     await act(async () => current().setQuery('terminal'));
     await until(() => current().list.items.some(item => 'number' in item && item.number === 92));
     expect(current().items).toEqual([]);
     expect(requests.filter(url => url.pathname.endsWith('/references/status')).some(url => /#9[23]/.test(url.searchParams.get('pulls') ?? ''))).toBe(false);
+
+    await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
+    expect(current().repositoryFilter).toEqual({ state: 'all', people: 'any', labels: [] });
+    await until(() => numbers()[0] === 92);
+    expect(states()).toEqual(['merged', 'closed']);
+    await until(() => [pull(92, 'acme', 'merged'), pull(93, 'acme', 'closed')]
+      .every(reference => current().pullStatusOf(reference).status === 'ready'));
+    expect(listRequests().every(url => url.searchParams.get('state') === (url.searchParams.get('people') === 'any' ? 'all' : 'open'))).toBe(true);
 
     await act(async () => current().setQuery('old'));
     await until(() => releaseOld !== undefined);
