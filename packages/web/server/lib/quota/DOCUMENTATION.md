@@ -136,9 +136,20 @@ windows have no percentage; counted allowances carry their numeric remaining
 and used amounts with the unit. A shared balance is a reference, not another
 wallet amount.
 
-Concurrent operations share a pending refresh per local configuration directory.
-A manual refresh supersedes a pending cache read; later cache reads join the
-refresh. Read and manual deadlines are 5 and 38 seconds, including bodies.
+UI reads also ask the same loopback gateway for its retained Magpie history
+so a monthly allowance can show its full recorded cycle. The history uses provider, real account name, and pool-qualified
+window name. Keep the latest recorded cycle, preserve both ends when reducing
+it to 96 points, and attach pace eligibility only to a point that matches the
+snapshot at Magpie's one-second and two-decimal precision. An observed refill
+inside the advertised cycle leaves the new baseline unknown. Ambiguous and remote
+account matches have no chart because history has no remote-source identity.
+A failed history read gives percentage windows an explicit unavailable state
+and leaves the allowances usable. The agent usage tool reads snapshots.
+
+Concurrent reads of the same report type share a pending request per local
+configuration directory. A manual refresh supersedes a pending UI cache read;
+later UI cache reads join the refresh. Read and manual deadlines are 5 and 38
+seconds, including bodies. Optional history waits at most 750 milliseconds.
 Whole-request failures are explicit failed results. The UI retains the same
 runtime's previous snapshot on such failures, while a successful empty report
 clears it. Magpie owns upstream freshness, account removal and vendor backoff.

@@ -47,6 +47,12 @@ export type UsageWindowValue =
   | { kind: 'unlimited' }
   | { kind: 'spend'; spent: number; limit: number | null };
 
+export interface MagpieQuotaTrend {
+  points: { at: number; left: number }[];
+  cycle?: { start: number; reset: number };
+  matchesSnapshot: boolean;
+}
+
 export interface UsageWindow {
   usedPercent: number | null;
   remainingPercent: number | null;
@@ -59,6 +65,7 @@ export interface UsageWindow {
   value?: UsageWindowValue;
   creditsUsed?: number;
   giftReset?: UsageWindowGiftReset | null;
+  magpieTrend?: MagpieQuotaTrend | null;
 }
 
 export interface UsageWindows {

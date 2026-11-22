@@ -44,6 +44,9 @@ serve arrives as an extension id. Permission types are owned by
   on its usage page.
 - `accountLabel` names the sign-in the numbers came from when that is not the
   sign-in OpenChamber chats as.
+- A Magpie window can carry recorded trend points and known cycle bounds.
+  `magpieTrend: null` means the history read failed. An absent trend means the
+  server supplied no matching history.
 
 ### Worktree metadata
 

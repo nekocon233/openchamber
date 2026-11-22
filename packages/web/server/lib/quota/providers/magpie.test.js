@@ -6,24 +6,30 @@ import { createMagpieQuotaReader } from './magpie.js';
 
 const directories = [];
 afterEach(async () => { vi.useRealTimers(); await Promise.all(directories.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true }))); });
-const setup = async (cards = [], port = 3425) => {
+const setup = async (cards = [], port = 3425, history = []) => {
   const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'magpie-quota-'));
   directories.push(configDir);
   await fs.writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ port }));
-  const fetchImpl = vi.fn(async () => Response.json({ object: 'list', data: cards }));
+  const fetchImpl = vi.fn(async url => Response.json({
+    object: 'list',
+    data: new URL(url).pathname.endsWith('/history') ? history : cards,
+  }));
   return { configDir, fetchImpl, read: createMagpieQuotaReader({ configDir, fetchImpl }) };
 };
 const card = (extra = {}) => ({ provider: 'custom', name: 'Custom vendor', kind: 'plan', windows: [], ...extra });
 
 describe('Magpie allowance boundary', () => {
-  it('reads only the saved report, honoring the local gateway port and every account/window', async () => {
+  it('reads saved allowance and history data through the configured loopback gateway', async () => {
     const { read, fetchImpl } = await setup([
       card({ user: 'one', windows: [{ name: '5 hours', used: 20, remaining: 80 }, { name: '7 days', used: 75, remaining: 25, resetsAt: '2026-12-01T00:00:00Z' }] }),
       card({ user: 'two', windows: [{ name: 'credits', amount: 5, limit: 25, unit: 'credits', used: 20 }] }),
       card({ provider: 'wallet', kind: 'balance', balance: '¥0.00' }),
     ], 4444);
     const result = await read();
-    expect(fetchImpl.mock.calls.map(([url, init]) => [url, init.method])).toEqual([['http://127.0.0.1:4444/v1/magpie/quotas?kept=1', 'GET']]);
+    expect(fetchImpl.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
+      ['http://127.0.0.1:4444/v1/magpie/quotas?kept=1', 'GET'],
+      ['http://127.0.0.1:4444/v1/magpie/quotas/history?days=45', 'GET'],
+    ]);
     expect(result).toMatchObject({ providerId: 'magpie', ok: true, configured: true });
     const accounts = result.usage.accounts;
     expect(accounts).toHaveLength(3);
@@ -32,6 +38,81 @@ describe('Magpie allowance boundary', () => {
     expect(accounts[0].windows['7 days'].resetAt).toBe(Date.parse('2026-12-01T00:00:00Z'));
     expect(accounts[1].windows.credits.value).toEqual({ kind: 'remaining', amount: 20, used: 5, unit: 'credits' });
     expect(accounts[2].windows.credits_balance.valueLabel).toBe('¥0.00');
+  });
+
+  it('joins each pool to its own recorded cycle and keeps both ends when limiting the points', async () => {
+    const start = '2026-11-21T10:00:00Z';
+    const resetsAt = '2026-11-21T15:00:00Z';
+    const readAt = '2026-11-21T13:00:00.126Z';
+    const firstAt = Date.parse('2026-11-21T11:00:00Z');
+    const points = Array.from({ length: 121 }, (_, index) => ({
+      at: new Date(firstAt + index * 60_000).toISOString(), start, resetsAt, left: 100 - index * 0.5,
+    }));
+    const { read } = await setup([card({ user: 'SAMPLE', readAt, windows: [
+      { name: '5 hours', pool: 'Gemini', remaining: 40, resetsAt: '2026-11-21T15:00:00.054Z' },
+      { name: '5 hours', pool: 'Claude & GPT', remaining: 98, resetsAt },
+    ] })], 3425, [{
+      provider: 'custom', user: 'sample', lines: [
+        { name: 'Gemini · 5 hours', points: [
+          { at: '2026-11-21T09:59:00Z', start: '2026-11-21T05:00:00Z', resetsAt: start, left: 1 },
+          ...points,
+          { at: '2026-11-21T13:10:00Z', start, resetsAt, left: 38 },
+        ] },
+        { name: 'Claude & GPT · 5 hours', points: [{ at: '2026-11-21T12:00:00Z', start, resetsAt, left: 98 }] },
+      ],
+    }]);
+    const { windows } = (await read()).usage.accounts[0];
+    const gemini = windows['Gemini · 5 hours'].magpieTrend;
+    expect(gemini).toMatchObject({ matchesSnapshot: true, cycle: { start: Date.parse(start), reset: Date.parse(resetsAt) } });
+    expect(gemini.points).toHaveLength(96);
+    expect(gemini.points[0]).toEqual({ at: firstAt, left: 100 });
+    expect(gemini.points.at(-1)).toEqual({ at: Date.parse('2026-11-21T13:00:00Z'), left: 40 });
+    expect(windows['Claude & GPT · 5 hours'].magpieTrend).toMatchObject({ matchesSnapshot: false, points: [{ left: 98 }] });
+  });
+
+  it('shows the readings after a refill with an unchanged deadline and omits the uncertain baseline', async () => {
+    const start = '2026-11-21T10:00:00Z';
+    const resetsAt = '2026-11-21T15:00:00Z';
+    const readAt = '2026-11-21T13:15:00Z';
+    const { read } = await setup([card({ user: 'sample', readAt, windows: [
+      { name: '5 hours', remaining: 98, resetsAt },
+    ] })], 3425, [{
+      provider: 'custom', user: 'sample', lines: [{ name: '5 hours', points: [
+        { at: '2026-11-21T12:59:00Z', start, resetsAt, left: 10 },
+        { at: '2026-11-21T13:00:00Z', start, resetsAt, left: 100 },
+        { at: readAt, start, resetsAt, left: 98 },
+      ] }],
+    }]);
+    const trend = (await read()).usage.accounts[0].windows['5 hours'].magpieTrend;
+    expect(trend.cycle).toBeUndefined();
+    expect(trend.points.map(point => point.left)).toEqual([100, 98]);
+  });
+
+  it('keeps the allowance when its history stalls and omits history from snapshot-only reads', async () => {
+    const { configDir } = await setup();
+    let historySignal;
+    const cards = [card({ windows: [{ name: '5 hours', used: 15 }] })];
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (new URL(url).pathname.endsWith('/history')) {
+        historySignal = init.signal;
+        return new Response(new ReadableStream({ start() {} }));
+      }
+      return Response.json({ object: 'list', data: cards });
+    });
+    const read = createMagpieQuotaReader({ configDir, fetchImpl, timeoutMs: 5_000 });
+    vi.useFakeTimers();
+    const result = read();
+    await vi.waitFor(() => expect(historySignal).toBeDefined());
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await result).toMatchObject({ ok: true, usage: { accounts: [{ windows: {
+      '5 hours': { remainingPercent: 85, magpieTrend: null },
+    } }] } });
+    expect(historySignal.aborted).toBe(true);
+
+    fetchImpl.mockClear();
+    const snapshotOnly = await read({ history: false });
+    expect(snapshotOnly.usage.accounts[0].windows['5 hours'].magpieTrend).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it('keeps unlimited, text and wallet windows distinct from percentages and shared balances', async () => {
@@ -87,7 +168,7 @@ describe('Magpie allowance boundary', () => {
     const results = await Promise.all([first, second, cached]);
     expect(results.every(result => result.ok)).toBe(true);
     expect(fetchImpl.mock.calls.map(([url, init]) => [new URL(url).pathname, init.method])).toEqual([
-      ['/v1/magpie/quotas/refresh', 'POST'], ['/v1/magpie/quotas', 'GET'],
+      ['/v1/magpie/quotas/refresh', 'POST'], ['/v1/magpie/quotas', 'GET'], ['/v1/magpie/quotas/history', 'GET'],
     ]);
   });
 

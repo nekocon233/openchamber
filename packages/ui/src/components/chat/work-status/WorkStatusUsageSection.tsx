@@ -117,7 +117,11 @@ export const WorkStatusUsageSection: React.FC<{ visible?: boolean }> = ({ visibl
             )}
             tooltip={group.status && group.rows.length === 0 ? group.status : undefined}
           />
-          {group.accounts && <MagpieUsage accounts={group.accounts} compact />}
+          {group.accounts && <MagpieUsage
+            accounts={group.accounts}
+            compact
+            trends={visible ? (group.status ? 'stale' : 'current') : undefined}
+          />}
           {group.rows.map((row) => {
             const displayPercent = displayMode === 'remaining'
               ? row.window.remainingPercent

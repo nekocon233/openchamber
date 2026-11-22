@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { buildResult, toUsageWindow } from '../utils/formatters.js';
 import type { ProviderUsage, QuotaResult, QuotaResultInput, UsageWindow } from '../utils/contracts.js';
 import { errorCodeOf } from '../../shared/object-guards.js';
+import { magpieHistoryKey, magpieTrendFor, magpieHistorySchema, type MagpieHistory, type MagpieTrend } from './magpie-history.js';
 
 export type MagpieWindowValue =
   | { kind: 'unlimited' }
@@ -13,6 +14,7 @@ export type MagpieWindowValue =
 
 export interface MagpieUsageWindow extends UsageWindow {
   value?: MagpieWindowValue;
+  magpieTrend?: MagpieTrend | null;
 }
 
 export interface MagpieAccount {
@@ -40,7 +42,7 @@ export interface MagpieQuotaReaderOptions {
   timeoutMs?: number | undefined;
 }
 
-export type MagpieQuotaReader = (options?: { refresh?: boolean }) => Promise<MagpieQuotaResult>;
+export type MagpieQuotaReader = (options?: { refresh?: boolean; history?: boolean }) => Promise<MagpieQuotaResult>;
 
 const envelope = z.object({ object: z.literal('list'), data: z.array(z.unknown()) });
 const cardSchema = z.object({
@@ -54,7 +56,7 @@ const cardSchema = z.object({
 const windowSchema = z.object({
   name: z.string().min(1), used: z.number().finite().optional(), remaining: z.number().finite().optional(),
   resetsAt: z.string().optional(), unlimited: z.boolean().optional(), text: z.boolean().optional(),
-  display: z.string().optional(), balance: z.number().finite().optional(),
+  pool: z.string().optional(), display: z.string().optional(), balance: z.number().finite().optional(),
   amount: z.number().finite().optional(), limit: z.number().finite().optional(), unit: z.string().optional(),
 });
 
@@ -64,11 +66,21 @@ const timestamp = (value: string | undefined): number | null => (
 const percent = (value: number | undefined): number | null => (
   value === undefined ? null : Math.min(100, Math.max(0, value))
 );
-function accountsFrom(payload: Parameters<typeof envelope.parse>[0]): MagpieAccount[] {
-  return envelope.parse(payload).data.map((raw, index): MagpieAccount => {
-    const parsed = cardSchema.safeParse(raw);
+const lineName = ({ pool, name }: z.infer<typeof windowSchema>) => pool ? `${pool} · ${name}` : name;
+
+function accountsFrom(payload: z.infer<typeof envelope>, history: MagpieHistory | null | undefined): MagpieAccount[] {
+  const cards = payload.data.map(raw => cardSchema.safeParse(raw));
+  const historyKeys = new Map<string, number>();
+  if (history) {
+    for (const card of cards) {
+      if (!card.success) continue;
+      const key = magpieHistoryKey(card.data.provider, card.data.user);
+      historyKeys.set(key, (historyKeys.get(key) ?? 0) + 1);
+    }
+  }
+  return cards.map((parsed, index): MagpieAccount => {
     if (!parsed.success) {
-      const identity = z.object({ provider: z.string(), name: z.string().optional() }).safeParse(raw);
+      const identity = z.object({ provider: z.string(), name: z.string().optional() }).safeParse(payload.data[index]);
       return {
         id: `invalid-${index}`,
         providerId: identity.success ? identity.data.provider : '',
@@ -84,7 +96,10 @@ function accountsFrom(payload: Parameters<typeof envelope.parse>[0]): MagpieAcco
     const id = createHash('sha256').update(JSON.stringify([
       card.provider, card.kind, card.user || card.alias || card.seat || card.name, card.from || '',
     ])).digest('hex').slice(0, 24);
-    const windows: Record<string, MagpieUsageWindow> = {};
+    const sampledAt = timestamp(card.readAt || card.asOf);
+    const historyKey = magpieHistoryKey(card.provider, card.user);
+    const accountHistory = !card.from && historyKeys.get(historyKey) === 1 ? history?.get(historyKey) : undefined;
+    const windows = new Map<string, MagpieUsageWindow>();
     let error = card.error || null;
     for (const [windowIndex, rawWindow] of card.windows.entries()) {
       const parsedWindow = windowSchema.safeParse(rawWindow);
@@ -94,10 +109,11 @@ function accountsFrom(payload: Parameters<typeof envelope.parse>[0]): MagpieAcco
       const remaining = isPercent
         ? percent(source.remaining ?? (source.used === undefined ? undefined : 100 - source.used))
         : null;
+      const resetAt = timestamp(source.resetsAt);
       const window: MagpieUsageWindow = toUsageWindow({
         usedPercent: remaining === null ? null : 100 - remaining,
         windowSeconds: null,
-        resetAt: timestamp(source.resetsAt),
+        resetAt,
         valueLabel: source.text ? source.display || null : null,
       });
       if (source.unlimited) {
@@ -108,12 +124,23 @@ function accountsFrom(payload: Parameters<typeof envelope.parse>[0]): MagpieAcco
         const used = Math.max(0, source.amount ?? 0);
         window.value = { kind: 'remaining', amount: Math.max(0, source.limit - used), used, unit: source.unit || '' };
       }
-      const key = Object.hasOwn(windows, source.name) ? `${source.name} · ${windowIndex + 1}` : source.name;
-      windows[key] = window;
+      const name = lineName(source);
+      const points = accountHistory?.get(name);
+      if (remaining !== null && points) {
+        const trend = magpieTrendFor(points, { sampledAt, remaining, resetAt });
+        if (trend) window.magpieTrend = trend;
+      } else if (remaining !== null && history === null) {
+        window.magpieTrend = null;
+      }
+      const duplicate = windows.get(name);
+      if (duplicate) delete duplicate.magpieTrend;
+      const key = duplicate ? `${name} · ${windowIndex + 1}` : name;
+      if (duplicate) delete window.magpieTrend;
+      windows.set(key, window);
     }
     const sharedBalance = card.sharedBalance && card.sharedBalance !== card.user ? card.sharedBalance : null;
     if (card.balance && !sharedBalance) {
-      windows.credits_balance = toUsageWindow({ usedPercent: null, windowSeconds: null, resetAt: null, valueLabel: card.balance });
+      windows.set('credits_balance', toUsageWindow({ usedPercent: null, windowSeconds: null, resetAt: null, valueLabel: card.balance }));
     }
     return {
       id,
@@ -121,8 +148,8 @@ function accountsFrom(payload: Parameters<typeof envelope.parse>[0]): MagpieAcco
       providerName: card.name || card.provider,
       accountLabel: card.alias || card.user || card.seat || null,
       planLabel: card.plan || null,
-      windows,
-      sampledAt: timestamp(card.readAt || card.asOf),
+      windows: Object.fromEntries(windows),
+      sampledAt,
       error,
       sharedBalance: sharedBalance ?? undefined,
     };
@@ -152,9 +179,10 @@ export const isMagpieQuotaConfigured = async () => Boolean(await localEndpoint(d
 
 export function createMagpieQuotaReader({ fetchImpl = fetch, configDir, timeoutMs }: MagpieQuotaReaderOptions = {}): MagpieQuotaReader {
   const pending = new Map<string, { refresh: boolean; promise: Promise<MagpieQuotaResult> }>();
-  return ({ refresh = false } = {}) => {
+  return ({ refresh = false, history = true } = {}) => {
     const directory = configDir ?? defaultConfigDirectory();
-    const existing = pending.get(directory);
+    const key = JSON.stringify([directory, history]);
+    const existing = pending.get(key);
     if (existing && (!refresh || existing.refresh)) return existing.promise;
     const promise: Promise<MagpieQuotaResult> = (async () => {
       const result = (
@@ -177,32 +205,54 @@ export function createMagpieQuotaReader({ fetchImpl = fetch, configDir, timeoutM
       const request = async <Result>(
         url: string,
         method: 'GET' | 'POST',
-        decode: (payload: Parameters<typeof envelope.parse>[0]) => Result,
+        schema: z.ZodType<Result>,
+        signal = controller.signal,
       ): Promise<Result> => {
         const response = await fetchImpl(endpoint + url, {
           method,
           headers: { Accept: 'application/json' },
-          signal: controller.signal,
+          signal,
           redirect: 'error',
         });
         if (response.status === 401 || response.status === 403) throw new Error('MAGPIE_FORBIDDEN');
         if (!response.ok) throw new Error('MAGPIE_REQUEST_FAILED');
         try {
-          return decode(await response.json());
+          return schema.parse(await response.json());
         } catch {
           throw new Error('MAGPIE_INVALID_RESPONSE');
         }
       };
       try {
-        const operation = async (): Promise<MagpieQuotaResult> => {
-          if (refresh) await request('/v1/magpie/quotas/refresh', 'POST', () => undefined);
-          const accounts = await request('/v1/magpie/quotas?kept=1', 'GET', accountsFrom);
-          return result({ ok: true, usage: { windows: {}, accounts } });
+        const readSnapshot = async () => {
+          if (refresh) await request('/v1/magpie/quotas/refresh', 'POST', z.unknown());
+          return request('/v1/magpie/quotas?kept=1', 'GET', envelope);
         };
         const aborted = new Promise<never>((_, reject) => {
           controller.signal.addEventListener('abort', () => reject(new Error('MAGPIE_TIMEOUT')), { once: true });
         });
-        return await Promise.race([operation(), aborted]);
+        const report = await Promise.race([readSnapshot(), aborted]);
+        let trends: MagpieHistory | null | undefined;
+        if (history && report.data.length > 0) {
+          const historyController = new AbortController();
+          let historyTimer: ReturnType<typeof setTimeout> | undefined;
+          const historyDeadline = new Promise<null>(resolve => {
+            historyTimer = setTimeout(() => {
+              historyController.abort();
+              resolve(null);
+            }, 750);
+          });
+          try {
+            trends = await Promise.race([
+              request('/v1/magpie/quotas/history?days=45', 'GET', magpieHistorySchema,
+                AbortSignal.any([controller.signal, historyController.signal])),
+              historyDeadline,
+              aborted,
+            ]).catch(() => null);
+          } finally {
+            clearTimeout(historyTimer);
+          }
+        }
+        return result({ ok: true, usage: { windows: {}, accounts: accountsFrom(report, trends) } });
       } catch (error: unknown) {
         const code = error instanceof Error && error.message.startsWith('MAGPIE_') ? error.message : 'MAGPIE_UNAVAILABLE';
         return result({ ok: false, error: controller.signal.aborted ? 'MAGPIE_TIMEOUT' : code });
@@ -211,8 +261,8 @@ export function createMagpieQuotaReader({ fetchImpl = fetch, configDir, timeoutM
       }
     })();
     const entry = { refresh, promise };
-    pending.set(directory, entry);
-    return promise.finally(() => { if (pending.get(directory) === entry) pending.delete(directory); });
+    pending.set(key, entry);
+    return promise.finally(() => { if (pending.get(key) === entry) pending.delete(key); });
   };
 }
 
