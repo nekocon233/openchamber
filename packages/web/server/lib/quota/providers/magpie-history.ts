@@ -66,17 +66,18 @@ export function magpieTrendFor(
   points: HistoryPoint[],
   { sampledAt, remaining, resetAt }: { sampledAt: number | null; remaining: number; resetAt: number | null },
 ): MagpieTrend | undefined {
+  const reset = resetAt === null ? undefined : wholeSecond(resetAt);
+  const hasSnapshotTiming = sampledAt !== null && reset !== undefined;
   let end = points.length - 1;
-  if (sampledAt !== null) {
+  if (hasSnapshotTiming) {
     while ((points[end]?.at ?? -Infinity) > sampledAt) end -= 1;
   }
   const latest = points[end];
   if (!latest) return undefined;
-  const reset = resetAt === null ? undefined : wholeSecond(resetAt);
-  const matchesSnapshot = sampledAt !== null && latest.at === wholeSecond(sampledAt) &&
+  const matchesSnapshot = hasSnapshotTiming && latest.at === wholeSecond(sampledAt) &&
     latest.resetsAt === reset && Math.abs(latest.left - remaining) <= 0.005001;
 
-  if (sampledAt !== null && !matchesSnapshot) {
+  if (hasSnapshotTiming && !matchesSnapshot) {
     const snapshot = { at: sampledAt, left: remaining, resetsAt: reset };
     if (startsAnotherCycle(latest, snapshot)) return undefined;
   }

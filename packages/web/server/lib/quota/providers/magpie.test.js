@@ -70,6 +70,31 @@ describe('Magpie allowance boundary', () => {
     expect(windows['Claude & GPT · 5 hours'].magpieTrend).toMatchObject({ matchesSnapshot: false, points: [{ left: 98 }] });
   });
 
+  it('shows later AGY history when its saved snapshot has no reset time', async () => {
+    const start = '2026-11-21T10:00:00Z';
+    const resetsAt = '2026-11-21T15:00:00Z';
+    const firstAt = '2026-11-21T10:15:00Z';
+    const lastAt = '2026-11-21T11:15:00Z';
+    const { read } = await setup([card({
+      provider: 'agy-cli', user: 'sample', readAt: '2026-11-20T13:00:00Z',
+      windows: [{ pool: 'Gemini', name: '5 hours', remaining: 100 }],
+    })], 3425, [{
+      provider: 'agy-cli', user: 'sample', lines: [{ name: 'Gemini · 5 hours', points: [
+        { at: '2026-11-20T12:50:00Z', left: 44, resetsAt: '2026-11-20T15:00:00Z' },
+        { at: firstAt, left: 99, start, resetsAt },
+        { at: lastAt, left: 93, start, resetsAt },
+      ] }],
+    }]);
+    const window = (await read()).usage.accounts[0].windows['Gemini · 5 hours'];
+    expect(window.remainingPercent).toBe(100);
+    expect(window.resetAt).toBeNull();
+    expect(window.magpieTrend).toEqual({
+      points: [{ at: Date.parse(firstAt), left: 99 }, { at: Date.parse(lastAt), left: 93 }],
+      cycle: { start: Date.parse(start), reset: Date.parse(resetsAt) },
+      matchesSnapshot: false,
+    });
+  });
+
   it('shows the readings after a refill with an unchanged deadline and omits the uncertain baseline', async () => {
     const start = '2026-11-21T10:00:00Z';
     const resetsAt = '2026-11-21T15:00:00Z';
