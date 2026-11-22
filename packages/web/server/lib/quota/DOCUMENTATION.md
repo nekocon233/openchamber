@@ -140,8 +140,10 @@ UI reads also ask the same loopback gateway for its retained Magpie history
 so a monthly allowance can show its full recorded cycle. The history uses provider, real account name, and pool-qualified
 window name. Keep the latest recorded cycle, preserve both ends when reducing
 it to 96 points, and attach pace eligibility only to a point that matches the
-snapshot at Magpie's one-second and two-decimal precision. An observed refill
-inside the advertised cycle leaves the new baseline unknown. Ambiguous and remote
+snapshot at Magpie's one-second and two-decimal precision. A saved card with no
+reset time can still show the latest recorded segment, including readings
+newer than the card and that segment's own cycle bounds.
+An observed refill inside the advertised cycle leaves the new baseline unknown. Ambiguous and remote
 account matches have no chart because history has no remote-source identity.
 A failed history read gives percentage windows an explicit unavailable state
 and leaves the allowances usable. The agent usage tool reads snapshots.
