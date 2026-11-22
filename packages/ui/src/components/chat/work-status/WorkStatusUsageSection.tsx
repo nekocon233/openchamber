@@ -23,7 +23,7 @@ import { usageValueTone } from './usageValueTone';
 
 export const WorkStatusUsageSection: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const { t } = useI18n();
-  const groups = useUsageProviderGroups();
+  const { groups, hasQuotaProviders } = useUsageProviderGroups();
   const displayMode = useQuotaStore((state) => state.displayMode);
   const isLoading = useQuotaStore((state) => state.isLoading);
   const loadedRuntimeKey = useQuotaStore((state) => state.loadedRuntimeKey);
@@ -35,7 +35,7 @@ export const WorkStatusUsageSection: React.FC<{ visible?: boolean }> = ({ visibl
   const currentModelId = useConfigStore((state) => state.currentModelId);
   const currentProviderId = useConfigStore((state) => state.currentProviderId);
 
-  useQuotaAutoRefresh(visible && (groups.length > 0 || loadedRuntimeKey === null));
+  useQuotaAutoRefresh(visible && (hasQuotaProviders || loadedRuntimeKey === null));
   React.useEffect(() => {
     if (visible && initialized) void runBackgroundNetworkTask(() => ensureLoaded());
   }, [ensureLoaded, initialized, visible]);
@@ -45,9 +45,9 @@ export const WorkStatusUsageSection: React.FC<{ visible?: boolean }> = ({ visibl
     preloadProviderLogos(groups.map((group) => group.providerId).filter((id) => !isExtensionQuotaProviderId(id)));
   }, [groups]);
 
-  useReportWorkStatusPresence('usage', groups.length > 0);
+  useReportWorkStatusPresence('usage', hasQuotaProviders);
 
-  if (groups.length === 0) return null;
+  if (!hasQuotaProviders) return null;
 
   const modeLabel = displayMode === 'remaining'
     ? t('header.services.remaining')

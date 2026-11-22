@@ -50,7 +50,7 @@ describe('Magpie allowance boundary', () => {
     }));
     const { read } = await setup([card({ user: 'SAMPLE', readAt, windows: [
       { name: '5 hours', pool: 'Gemini', remaining: 40, resetsAt: '2026-11-21T15:00:00.054Z' },
-      { name: '5 hours', pool: 'Claude & GPT', remaining: 98, resetsAt },
+      { name: 'Claude & GPT · 5 hours', pool: 'Claude & GPT', remaining: 98, resetsAt },
     ] })], 3425, [{
       provider: 'custom', user: 'sample', lines: [
         { name: 'Gemini · 5 hours', points: [

@@ -137,8 +137,9 @@ and used amounts with the unit. A shared balance is a reference, not another
 wallet amount.
 
 UI reads also ask the same loopback gateway for its retained Magpie history
-so a monthly allowance can show its full recorded cycle. The history uses provider, real account name, and pool-qualified
-window name. Keep the latest recorded cycle, preserve both ends when reducing
+so a monthly allowance can show its full recorded cycle. History uses the
+provider, real account name and window name with the pool prefix applied once.
+Keep the latest recorded cycle and preserve both ends when reducing
 it to 96 points, and attach pace eligibility only to a point that matches the
 snapshot at Magpie's one-second and two-decimal precision. A saved card with no
 reset time can still show the latest recorded segment, including readings

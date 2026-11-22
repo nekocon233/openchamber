@@ -42,9 +42,9 @@ export const MagpieUsage = ({ accounts, compact = false, trends }: {
         const tone = used !== null && used >= 80 ? 'error' : used !== null && used >= 50 ? 'warning' : 'default';
         const trend = trends ? window.magpieTrend : undefined;
         const pace = trends === 'current' && !account.error ? magpieQuotaPace(trend, now) : null;
-        const paceLabel = pace !== null && window.remainingPercent !== 0
-          ? pace >= 10 ? t('chat.workStatus.magpie.pace.fast') : pace <= -10 ? t('chat.workStatus.magpie.pace.slow') : null
-          : null;
+        const paceLabel = pace === null || pace === 0
+          ? null
+          : t(pace > 0 ? 'chat.workStatus.magpie.pace.fast' : 'chat.workStatus.magpie.pace.slow');
         const windowLabel = trends
           ? label.split(' · ').map(part => formatWindowLabel(part === '5 hours' ? '5h' : part === '7 days' ? '7d' : part)).join(' · ')
           : formatWindowLabel(label);

@@ -66,7 +66,11 @@ const timestamp = (value: string | undefined): number | null => (
 const percent = (value: number | undefined): number | null => (
   value === undefined ? null : Math.min(100, Math.max(0, value))
 );
-const lineName = ({ pool, name }: z.infer<typeof windowSchema>) => pool ? `${pool} · ${name}` : name;
+const lineName = ({ pool, name }: z.infer<typeof windowSchema>) => {
+  if (!pool) return name;
+  const prefix = `${pool} · `;
+  return name.startsWith(prefix) ? name : prefix + name;
+};
 
 function accountsFrom(payload: z.infer<typeof envelope>, history: MagpieHistory | null | undefined): MagpieAccount[] {
   const cards = payload.data.map(raw => cardSchema.safeParse(raw));
