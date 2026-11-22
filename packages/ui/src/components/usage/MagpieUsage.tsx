@@ -2,7 +2,7 @@ import type { QuotaAccount } from '@/types/quota';
 import { useDeadlineClock } from '@/hooks/useDurationTicker';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
-import { formatMagpieError, magpieQuotaPace } from '@/lib/quota/magpie';
+import { formatMagpieError, magpieQuotaPace, magpieWorkStatusTrend } from '@/lib/quota/magpie';
 import { Icon } from '@/components/icon/Icon';
 import { MagpieQuotaTrendPopover } from './MagpieQuotaTrendPopover';
 import { formatQuotaResetLabel, formatQuotaResetShort, formatQuotaWindowValueLabel, formatWindowLabel } from '@/lib/quota';
@@ -23,8 +23,10 @@ export const MagpieUsage = ({ accounts, compact = false, trends }: {
   const displayMode = useQuotaStore(state => state.displayMode);
   const timeFormat = useUIStore(state => state.timeFormatPreference);
   const deadlines = trends === 'current' ? accounts.flatMap(account => (
-    account.error ? [] : Object.values(account.windows).flatMap(({ magpieTrend }) =>
-      magpieTrend?.matchesSnapshot && magpieTrend.cycle ? [magpieTrend.cycle.reset] : [])
+    account.error ? [] : Object.entries(account.windows).flatMap(([name, window]) => {
+      const trend = magpieWorkStatusTrend(name, window);
+      return trend?.matchesSnapshot && trend.cycle ? [trend.cycle.reset] : [];
+    })
   )) : [];
   const now = useDeadlineClock(deadlines);
   const rows = accounts.map(account => {
@@ -40,7 +42,7 @@ export const MagpieUsage = ({ accounts, compact = false, trends }: {
         const reset = trends ? formatQuotaResetShort(window.resetAt, null, timeFormat) : resetFull;
         const used = window.usedPercent;
         const tone = used !== null && used >= 80 ? 'error' : used !== null && used >= 50 ? 'warning' : 'default';
-        const trend = trends ? window.magpieTrend : undefined;
+        const trend = trends ? magpieWorkStatusTrend(label, window) : undefined;
         const pace = trends === 'current' && !account.error ? magpieQuotaPace(trend, now) : null;
         const paceLabel = pace === null || pace === 0
           ? null

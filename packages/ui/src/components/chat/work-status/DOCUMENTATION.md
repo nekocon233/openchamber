@@ -860,8 +860,7 @@ expanded list is capped at eight rows and scrolls independently.
 ## Collapsed Usage headline
 
 Collapsed, the Usage section shows the shortest visible quota window for the
-composer's provider. Work Status filters five-hour allowances before it
-selects model rows or the collapsed headline.
+composer's provider. Five-hour windows can supply this headline.
 
 Selection rules live in `usageHeadline.ts` and are pinned by
 `usageHeadline.test.ts`:

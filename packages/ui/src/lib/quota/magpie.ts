@@ -1,5 +1,5 @@
 import type { I18nKey } from '@/lib/i18n';
-import type { MagpieQuotaTrend } from '@/types/quota';
+import type { MagpieQuotaTrend, UsageWindow } from '@/types/quota';
 
 const errors = new Map<string, I18nKey>([
   ['MAGPIE_NOT_CONFIGURED', 'quota.magpie.error.notConfigured'],
@@ -15,6 +15,21 @@ export const formatMagpieError = (error: string, t: (key: I18nKey) => string): s
   const key = errors.get(error);
   return key ? t(key) : error;
 };
+
+const FIVE_HOURS_SECONDS = 5 * 3600;
+const FIVE_HOUR_NAMES = new Set(['5h', '5 hour', '5-hour', '5 hours', 'five_hour', '5 小时', '5 小時', '5小时', '5小時']);
+
+export function magpieWorkStatusTrend(
+  name: string,
+  { windowSeconds, magpieTrend }: Pick<UsageWindow, 'windowSeconds' | 'magpieTrend'>,
+): MagpieQuotaTrend | null | undefined {
+  const fiveHourRow = windowSeconds === null
+    ? name.split(' · ').some(part => FIVE_HOUR_NAMES.has(part.trim().toLowerCase()))
+    : windowSeconds === FIVE_HOURS_SECONDS;
+  const cycle = magpieTrend?.cycle;
+  const fiveHourChart = cycle && cycle.reset - cycle.start === FIVE_HOURS_SECONDS * 1000;
+  return fiveHourRow || fiveHourChart ? undefined : magpieTrend;
+}
 
 export function magpieReferenceLeft(cycle: NonNullable<MagpieQuotaTrend['cycle']>, at: number) {
   return 100 * (cycle.reset - at) / (cycle.reset - cycle.start);
