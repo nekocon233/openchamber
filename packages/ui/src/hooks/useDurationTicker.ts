@@ -76,6 +76,23 @@ export const useDurationTickerNow = (active: boolean): number => {
     return now;
 };
 
+export const useDeadlineClock = (deadlines: readonly number[]): number => {
+    const paused = React.useContext(ClockPausedContext);
+    const [lastDeadline, setLastDeadline] = React.useState(() => Date.now());
+    const now = Math.max(lastDeadline, Date.now());
+    const next = deadlines.reduce((nearest, deadline) => deadline > now ? Math.min(nearest, deadline) : nearest, Infinity);
+
+    React.useEffect(() => {
+        if (paused || !Number.isFinite(next)) return;
+        return subscribe({
+            rate: 'second',
+            notify: (time) => { if (time >= next) setLastDeadline(time); },
+        });
+    }, [next, paused]);
+
+    return now;
+};
+
 const MINUTE_MS = 60_000;
 
 export const useMinuteTickerNow = (active: boolean): number => {

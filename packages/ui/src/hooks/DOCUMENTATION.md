@@ -38,6 +38,7 @@ A hook here owns the lifetime of what it subscribes to. Mechanics that another m
 
 ### Live readouts
 
+- Deadline readouts on the shared clock render when their boundary passes. Quota pace ends at the nearest visible reset without a network read.
 - One shared clock drives every live readout and waiting indicator. Spinners step on a 250 ms beat; everything else changes on every fourth beat. A page with only a counter or a blink draws one frame a second, and a page with no indicator draws none.
 
 ### Chat timeline scroll

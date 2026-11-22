@@ -2,6 +2,18 @@ import { z } from 'zod';
 import type { ProviderResult, QuotaProviderId } from '@/types';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
+const trendCycleSchema = z.object({ start: z.number().nonnegative(), reset: z.number().nonnegative() })
+  .refine(cycle => cycle.reset > cycle.start);
+
+const magpieTrendSchema = z.object({
+  points: z.array(z.object({ at: z.number().nonnegative(), left: z.number().min(0).max(100) })).min(1).max(96),
+  cycle: trendCycleSchema.optional(),
+  matchesSnapshot: z.boolean(),
+}).refine(({ points, cycle }) => points.every((point, index) =>
+  (points[index - 1]?.at ?? -Infinity) < point.at &&
+  (!cycle || (cycle.start <= point.at && point.at < cycle.reset)),
+));
+
 const windowSchema = z.object({
   usedPercent: z.number().nullable(),
   remainingPercent: z.number().nullable(),
@@ -18,6 +30,7 @@ const windowSchema = z.object({
     z.object({ kind: z.literal('spend'), spent: z.number().finite().nonnegative(), limit: z.number().finite().positive().nullable() }),
   ]).optional(),
   creditsUsed: z.number().finite().nonnegative().optional(),
+  magpieTrend: magpieTrendSchema.nullable().optional().catch(undefined),
   giftReset: z.object({ recordId: z.number(), expireAt: z.number(), grantType: z.string().optional() }).nullable().optional(),
 });
 const windowsSchema = z.record(z.string(), windowSchema);

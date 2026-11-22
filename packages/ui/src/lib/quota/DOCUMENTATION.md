@@ -10,3 +10,5 @@ This module owns usage-provider parsing, bounded quota reads, model-family defau
 - Extension-provider lists are accepted whole or fail whole so malformed data cannot silently hide a provider. Supported names and icons match manifest parsing, and built-ins precede extension entries in server order.
 - Gemini defaults recognize launch IDs and dotted or hyphenated minor versions, while earlier generations and embedding aliases stay out. Anthropic reports only models with plan limits, and Zen reports models actually served, so every reported model remains enabled by default.
 - Narrow reset and usage labels retain the full value in tooltips. Missing grant type stays omitted on the wire so the server applies its `GLOBAL` default.
+- Optional Magpie trend metadata is validated independently so an older server
+  or malformed chart leaves the quota snapshot usable.

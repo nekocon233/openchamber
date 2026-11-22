@@ -289,7 +289,7 @@ export interface FetchQuotaForProviderOptions {
 }
 
 export const fetchQuotaForProvider = (providerId: string | null, { claudeCacheScope = 'web', nativeAntigravity }: FetchQuotaForProviderOptions = {}) => {
-  if (providerId === 'magpie') return fetchMagpieQuota();
+  if (providerId === 'magpie') return fetchMagpieQuota({ history: false });
   if (providerId === 'antigravity-cli' && nativeAntigravity) return nativeAntigravity();
   if (providerId === claude.providerId) return fetchQuotaForProviderUncoalesced(providerId, claudeCacheScope);
   const existing = pendingFetches.get(providerId);

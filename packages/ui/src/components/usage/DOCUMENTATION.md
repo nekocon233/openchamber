@@ -20,7 +20,18 @@ external response parsing and source identity.
 - The collapsed usage headline never selects a Magpie account: the gateway
   chooses that account only when it routes a request.
 
+- Work Status shows pace only for a matching snapshot before its reset.
+  Low remaining balances keep their quota tone in either display mode.
+- The plot follows time from left to right and reads recorded remaining
+  percentages independently of the selected display mode.
+
 ## Decisions
+
+### Why Work Status puts quota trends in a floating panel
+
+Hover opens an anchored chart that also accepts pointer travel into its sample
+control. Tap and keyboard activation open the same chart. The quota rows hold
+their position and the chart mounts only while its popup is active.
 
 ### Why one account component serves all readouts
 
