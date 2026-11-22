@@ -20,9 +20,9 @@ external response parsing and source identity.
 - The collapsed usage headline never selects a Magpie account: the gateway
   chooses that account only when it routes a request.
 
-- Work Status hides five-hour provider, model and account windows. Quota
-  visibility uses the reported duration, a matching recorded cycle or the raw
-  window name. Refresh demand follows configured providers.
+- Work Status shows the amount and reset on five-hour windows. The Magpie
+  trend selector uses the reported duration, the recorded cycle or the raw
+  window name to reserve pace labels and charts for other windows.
 - Every signed difference from even pace has a label for a matching snapshot
   before its reset. Low balances keep their quota tone in either display mode.
 - The plot follows time from left to right and reads recorded remaining
