@@ -229,10 +229,12 @@ skips its queued read. Runtime changes retire the cache. Loading, failed and
 unknown counts stay distinct from zero.
 
 On GitHub projects, `PullRequestView` renders `ProjectPullRequestList` directly
-without an outer sub-surface tab strip. It uses the bound primary repository alone, across all branches, and only lists
-open PRs ordered by latest update. Its category tabs are Mine (combining PRs
-awaiting the viewer's review and PRs created by the viewer) and All, using the bound GitHub account. The project's saved category is selected, with Mine as the default (migrating legacy `reviewRequested` and `created` values);
-the existing search applies within that category. It needs no checkout branch or comparison base.
+without an outer sub-surface tab strip. It lists PRs from the bound primary
+repository across all branches, ordered by latest update. Mine combines open
+PRs awaiting the viewer's review and open PRs created by the viewer. All
+includes open, closed, and merged PRs. The project's saved category is selected,
+with Mine as the default (migrating legacy `reviewRequested` and `created` values).
+The existing search applies within that category. It needs no checkout branch or comparison base.
 `CiRunsView` (`mode: 'ci'`) hosts `ProjectCiList` on its own standalone surface, querying workflow runs of that same bound primary repository across `All runs`, `Running`, `Failed`, and `Current branch`, with text/qualifier/URL search, 20-second polling while visible runs are active, and persisted filter, query, loaded depth, scroll position, and selected run ID in `useWorkspaceViewStateStore`. Selecting a run opens `CiRunDetail` in place with `Back to list`, 15-second active polling, live step counts, failure annotations, on-demand bounded job log inspection, linked PR handoff that reveals the PR surface (`mode: 'pr'` on desktop or workspace tab `'pr'` on mobile), and failed-job attachment into `useInlineCommentDraftStore`. `useCiRunsStore` keys list, detail, and log entries by runtime and exact repository binding, retains loaded data across failed refreshes, pins mounted subscribers against idle eviction, and clears on runtime switch. GitLab keeps
 its existing branch view in `PullRequestView` and shows an unsupported notice inside `ProjectCiList` when opened on mobile; VS Code reports repository browsing and CI reads as unsupported.
 Hosted and native mobile expose `PullRequestView` and `CiRunsView` through adjacent `PR` and `CI` workspace tabs. The

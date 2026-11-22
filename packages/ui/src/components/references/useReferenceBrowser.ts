@@ -128,8 +128,10 @@ export function useReferenceBrowser({
     const effectiveRepositoryFilter = repositoryKind === chosenRepositoryKind
         ? chosenRepositoryFilter
         : lastRepositoryFilter.get(repositoryKind) ?? DEFAULT_REPOSITORY_FILTER;
-    const repositoryFilter = React.useMemo(
-        () => projectPulls ? { state: 'open' as const, people: projectPeople, labels: [] } : normalizedRepositoryFilter(effectiveRepositoryFilter, repositoryKind),
+    const repositoryFilter = React.useMemo<RepositoryReferenceFilter>(
+        () => projectPulls
+            ? { state: projectPeople === 'any' ? 'all' : 'open', people: projectPeople, labels: [] }
+            : normalizedRepositoryFilter(effectiveRepositoryFilter, repositoryKind),
         [effectiveRepositoryFilter, projectPeople, projectPulls, repositoryKind],
     );
     const filterMemory = useRepositoryFilterMemory(
@@ -202,10 +204,15 @@ export function useReferenceBrowser({
     });
     const list = source === 'repository' ? (across ? acrossList : repositoryList) : trackerList;
     useTrackedItems(onScreen ? list.followed : NO_FOLLOWED);
+    const includeClosedProjectPulls = projectPulls && repositoryFilter.state === 'all';
     const repositoryItems = React.useMemo(() => projectPulls
-        ? repositoryList.items.filter((item) => item.kind === 'pull' && item.state === 'open')
-        : repositoryList.items, [projectPulls, repositoryList.items]);
-    const singlePullStatusOf = useRepositoryPullStatuses(across ? null : directory, active && source === 'repository' && !across ? repositoryItems : NO_REFERENCES);
+        ? repositoryList.items.filter((item) => item.kind === 'pull' && (includeClosedProjectPulls || item.state === 'open'))
+        : repositoryList.items, [includeClosedProjectPulls, projectPulls, repositoryList.items]);
+    const singlePullStatusOf = useRepositoryPullStatuses(
+        across ? null : directory,
+        active && source === 'repository' && !across ? repositoryItems : NO_REFERENCES,
+        includeClosedProjectPulls,
+    );
     const acrossPullStatusOf = useRepositoryPullStatusesAcross(acrossList.contexts, source === 'repository' && across ? acrossList.items : NO_ACROSS_ITEMS);
     const pullStatusOf = (reference: RepositoryReference, itemFolder?: string): CachedValue<ChangeRequestListStatus | null> => (
         across ? acrossPullStatusOf(reference, itemFolder ?? null) : singlePullStatusOf(reference)
