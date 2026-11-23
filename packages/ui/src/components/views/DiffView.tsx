@@ -1,6 +1,6 @@
 import { useInContextPanelHeader } from "@/components/layout/contextPanelHeaderSlotContext";
 import { useWorkspaceScroll, WorkspaceViewScope } from "@/hooks/useWorkspaceViewState";
-import { PullRequestBackButton } from "./git/PullRequestBackButton";
+import { PullRequestNavigation } from "./git/PullRequestNavigation";
 import { DiffFileTypeFilter, DiffFileFilterEmpty } from "./DiffFileTypeFilter";
 import { MovablePane } from "@/components/layout/MovablePane";
 import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from "@/components/layout/contextPanelHeaderSlot";
@@ -68,6 +68,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     flushContent = false,
     directory: targetDirectory = null,
     fileListHost,
+    onLeaveChanges,
 }) => {
 
     const { t } = useI18n();
@@ -254,7 +255,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     };
     const renderFileNavigation = () => (
         <div className="flex min-w-0 items-center gap-1">
-            {activeDiffScope === 'pr' && <PullRequestBackButton compact directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} />}
+            {activeDiffScope === 'pr' && <PullRequestNavigation compact directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} onLeaveChanges={onLeaveChanges} />}
             <DiffFileTypeFilter options={fileFilter.options} excludedTypes={fileFilter.excludedTypes} hiddenCount={fileFilter.hiddenCount} onChange={fileFilter.setTypes} />
         </div>
     );

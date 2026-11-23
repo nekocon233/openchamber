@@ -156,26 +156,38 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
       ...descriptor, features: { ...descriptor.features, referenceSearch: true, referenceDetail: true },
     }] });
     await act(async () => root.render(<RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="/repo"><ThemeSystemProvider><I18nProvider><ChatPrLinkProbe directory="/repo" url="https://github.com/acme/app/pull/12/files#diff-1" /><ContextSurfacePanes /></I18nProvider></ThemeSystemProvider></SyncProvider></RuntimeAPIContext.Provider>));
-    await act(async () => useUIStore.getState().openContextPanelTab('/repo', { mode: 'pr' }));
+    await act(async () => {
+      const ui = useUIStore.getState();
+      ui.setWorkspaceLayout('editor');
+      ui.setContextSurfaceZones({ pr: 'right', diff: 'right' });
+      ui.openContextPanelTab('/repo', { mode: 'pr' });
+    });
     await until(() => Boolean(right.querySelector('[role="listitem"]')));
     const search = right.querySelector('input');
     if (!search) throw new Error('Missing normal PR search');
     await fill(search, 'retained search');
     await until(() => requests.some(url => url.searchParams.get('query') === 'retained search'));
-    const rowChanges = right.querySelector<HTMLButtonElement>('button[aria-label="Changes #7"]');
-    if (!rowChanges) throw new Error('Missing Changes in the PR list');
-    await act(async () => rowChanges.click());
-    await until(() => right.textContent?.includes('project-review.txt') === true);
+    const openRowChanges = async () => {
+      const rowChanges = right.querySelector<HTMLButtonElement>('button[aria-label="Changes #7"]');
+      if (!rowChanges) throw new Error('Missing Changes in the PR list');
+      await act(async () => rowChanges.click());
+      await until(() => right.textContent?.includes('project-review.txt') === true);
+      expect(useUIStore.getState().contextPanelByDirectory['/repo']?.editorDiffTab).toBe('active');
+    };
+    await openRowChanges();
     expect(right.querySelector('textarea')).toBeNull();
     await until(() => Boolean(document.querySelector('button[aria-label="Back to list"]')));
     await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Back to list"]')?.click());
     await until(() => Boolean(right.querySelector('[role="listitem"]')));
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.editorDiffTab).toBe('closed');
     expect(right.querySelector('input')?.value).toBe('retained search');
     expect(right.querySelector('textarea')).toBeNull();
 
-    const normalRow = right.querySelector<HTMLElement>('[role="listitem"]');
-    if (!normalRow) throw new Error('Missing normal PR row');
-    await act(async () => normalRow.click());
+    await openRowChanges();
+    await until(() => Boolean(document.querySelector('button[aria-label="View PR #7 details"]')));
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="View PR #7 details"]')?.click());
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.editorDiffTab).toBe('closed');
+    await act(async () => useUIStore.getState().setWorkspaceLayout('classic'));
     await until(() => Boolean(right.querySelector('textarea')));
     const originalReply = right.querySelector('textarea');
     if (!originalReply) throw new Error('Missing normal reply');

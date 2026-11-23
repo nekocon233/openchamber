@@ -88,22 +88,27 @@ describe('pull request diff requests', () => {
     expect(usePullRequestSelectionStore.getState().diffRequests.has('/repo')).toBe(false);
   });
 
-  test('returning keeps the exact PR and workspace after Changes consumes the handoff', () => {
-    const store = usePullRequestSelectionStore.getState();
-    const runtime = getRuntimeKey();
-    store.requestDiff(context.directory, source, { workspaceDirectory: '/workspace', tab: 'project', context, reference });
-    const request = usePullRequestSelectionStore.getState().diffRequests.get(context.directory);
-    const target = usePullRequestSelectionStore.getState().diffReturnTargets.get(pullRequestNavigationKey(runtime, context.directory));
-    if (!request || !target) throw new Error('Navigation missing');
-    store.settleDiffRequest(context.directory, request);
-    expect(usePullRequestSelectionStore.getState().diffReturnTargets.get(pullRequestNavigationKey(runtime, context.directory))).toBe(target);
-    expect(store.requestReturn({ ...target, runtimeKey: 'another-runtime' })).toBe(false);
-    expect(store.requestReturn(target)).toBe(true);
-    expect(usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtime, '/workspace'))).toMatchObject({ reference, context, tab: 'project' });
-    expect(store.requestReturn(target)).toBe(false);
-    store.settleReturnRequest(target);
-    expect(usePullRequestSelectionStore.getState().returnRequests.has(pullRequestNavigationKey(runtime, '/workspace'))).toBe(false);
-  });
+  for (const to of ['origin', 'details'] as const) {
+    test(`returning to ${to} keeps the exact PR and workspace after Changes consumes the handoff`, () => {
+      const store = usePullRequestSelectionStore.getState();
+      const runtime = getRuntimeKey();
+      store.requestDiff(context.directory, source, { workspaceDirectory: '/workspace', tab: 'project', showList: true, context, reference });
+      const request = usePullRequestSelectionStore.getState().diffRequests.get(context.directory);
+      const target = usePullRequestSelectionStore.getState().diffReturnTargets.get(pullRequestNavigationKey(runtime, context.directory));
+      if (!request || !target) throw new Error('Navigation missing');
+      store.settleDiffRequest(context.directory, request);
+      expect(usePullRequestSelectionStore.getState().diffReturnTargets.get(pullRequestNavigationKey(runtime, context.directory))).toBe(target);
+      expect(store.requestReturn({ ...target, runtimeKey: 'another-runtime' })).toBe(false);
+      expect(store.requestReturn(target, to)).toBe(true);
+      const destination = usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtime, '/workspace'));
+      expect(destination).toMatchObject({ reference, context, tab: 'project' });
+      if (destination?.tab !== 'project') throw new Error('Expected a project return');
+      expect(destination.showList).toBe(to === 'origin' ? true : undefined);
+      expect(store.requestReturn(target)).toBe(false);
+      store.settleReturnRequest(destination);
+      expect(usePullRequestSelectionStore.getState().returnRequests.has(pullRequestNavigationKey(runtime, '/workspace'))).toBe(false);
+    });
+  }
 
   test('a later navigation replaces the return target and a plain diff request clears it', () => {
     const store = usePullRequestSelectionStore.getState();
