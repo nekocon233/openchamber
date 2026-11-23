@@ -478,9 +478,11 @@ export const ReferenceBrowserList: React.FC<{
     onShow?: () => void;
     notice?: React.ReactNode;
     renderPullFileStats?: (pull: RepositoryChangeRequestReference) => React.ReactNode;
-}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onShow, notice, renderPullFileStats }) => {
+    renderPullChanges?: (pull: RepositoryChangeRequestReference) => React.ReactNode;
+}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onShow, notice, renderPullFileStats, renderPullChanges }) => {
     const { t } = useI18n();
     const { source, sourceStatus, list, items, term, descriptor, isMobile, directory, debouncedQuery, repositoryKind, tracker } = browser;
+    const projectPulls = browser.mode === 'project-pulls';
 
     const sentinelRef = React.useRef<HTMLDivElement>(null);
     const { hasMore, loadMore, loadingMore, refreshing, error } = list;
@@ -546,7 +548,7 @@ export const ReferenceBrowserList: React.FC<{
     return (
         <>
             {notice}
-            <div role="listbox" aria-label={label} aria-multiselectable={multiselectable} className="flex flex-col gap-1 p-1.5">
+            <div role={projectPulls ? 'list' : 'listbox'} aria-label={label} aria-multiselectable={projectPulls ? undefined : multiselectable} className="flex flex-col gap-1 p-1.5">
                 {list.error ? (
                     <div className="mb-1 flex items-center gap-2 rounded-lg bg-[var(--status-error-background)] px-2.5 py-1.5 typography-meta text-[var(--status-error-text)]">
                         <span className="min-w-0 flex-1 break-words">{t('references.picker.error.refresh', { error: list.error })}</span>
@@ -558,14 +560,17 @@ export const ReferenceBrowserList: React.FC<{
                     const key = referencePickerItemKey(item);
                     const status = item.source === 'repository' ? browser.pullStatusOf(item.reference, item.directory) : null;
                     const selection = rowSelection?.(item, key) ?? null;
+                    const pull = item.source === 'repository' && item.reference.kind === 'pull' ? item.reference : null;
                     return (
                         <ReferencePickerRow
                             key={key}
                             item={item}
                             pullStatus={status ? readyValue(status) : null}
                             pullStatusRead={status}
-                            showChecks={browser.mode === 'project-pulls' && browser.descriptor.id === 'github'}
-                            pullFileStats={item.source === 'repository' && item.reference.kind === 'pull' ? renderPullFileStats?.(item.reference) : undefined}
+                            showChecks={projectPulls && browser.descriptor.id === 'github'}
+                            pullFileStats={pull ? renderPullFileStats?.(pull) : undefined}
+                            listItem={projectPulls}
+                            pullChanges={pull ? renderPullChanges?.(pull) : undefined}
                             showRepository={browser.across}
                             highlighted={!isMobile && key === browser.effectiveHighlightKey}
                             checked={selection?.checked ?? null}

@@ -28,7 +28,7 @@ interface CiRunOpenRequest {
 
 export type PullRequestReturnLocation = {
   workspaceDirectory: string;
-} & ({ tab: 'project' } | { tab: 'linked'; request: PullRequestOpenRequest });
+} & ({ tab: 'project'; showList?: true } | { tab: 'linked'; request: PullRequestOpenRequest });
 
 type PullRequestDiffOrigin = PullRequestReturnLocation & {
   reference: GitHubPullReference;
@@ -183,6 +183,7 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
         workspaceDirectory: originOrRepository.workspaceDirectory,
         sourceDirectory: originOrRepository.context.directory,
         tab: originOrRepository.tab,
+        showList: originOrRepository.tab === 'project' ? originOrRepository.showList : undefined,
         url: originOrRepository.reference.url,
         repositoryIdentity: workspaceRepositoryIdentity(originOrRepository.context),
         source: { ...source, sourceRepo: source.sourceRepo },

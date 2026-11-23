@@ -157,12 +157,23 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     }] });
     await act(async () => root.render(<RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="/repo"><ThemeSystemProvider><I18nProvider><ChatPrLinkProbe directory="/repo" url="https://github.com/acme/app/pull/12/files#diff-1" /><ContextSurfacePanes /></I18nProvider></ThemeSystemProvider></SyncProvider></RuntimeAPIContext.Provider>));
     await act(async () => useUIStore.getState().openContextPanelTab('/repo', { mode: 'pr' }));
-    await until(() => Boolean(right.querySelector('[role="option"]')));
+    await until(() => Boolean(right.querySelector('[role="listitem"]')));
     const search = right.querySelector('input');
     if (!search) throw new Error('Missing normal PR search');
     await fill(search, 'retained search');
     await until(() => requests.some(url => url.searchParams.get('query') === 'retained search'));
-    const normalRow = right.querySelector<HTMLElement>('[role="option"]');
+    const rowChanges = right.querySelector<HTMLButtonElement>('button[aria-label="Changes #7"]');
+    if (!rowChanges) throw new Error('Missing Changes in the PR list');
+    await act(async () => rowChanges.click());
+    await until(() => right.textContent?.includes('project-review.txt') === true);
+    expect(right.querySelector('textarea')).toBeNull();
+    await until(() => Boolean(document.querySelector('button[aria-label="Back to list"]')));
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Back to list"]')?.click());
+    await until(() => Boolean(right.querySelector('[role="listitem"]')));
+    expect(right.querySelector('input')?.value).toBe('retained search');
+    expect(right.querySelector('textarea')).toBeNull();
+
+    const normalRow = right.querySelector<HTMLElement>('[role="listitem"]');
     if (!normalRow) throw new Error('Missing normal PR row');
     await act(async () => normalRow.click());
     await until(() => Boolean(right.querySelector('textarea')));
@@ -176,7 +187,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
       useSessionUIStore.setState({ currentSessionId: 'conversation-B', currentSessionDirectory: '/source' });
       useUIStore.getState().openContextPanelTab('/source', { mode: 'pr' });
     });
-    await until(() => Boolean(right.querySelector('[data-pull-request-directory="/source"] [role="option"]')));
+    await until(() => Boolean(right.querySelector('[data-pull-request-directory="/source"] [role="listitem"]')));
     await act(async () => {
       useDirectoryStore.setState({ currentDirectory: '/repo' });
       useSessionUIStore.setState({ currentSessionId: 'conversation-A', currentSessionDirectory: '/repo' });

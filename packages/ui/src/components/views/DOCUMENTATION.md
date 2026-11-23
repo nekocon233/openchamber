@@ -319,6 +319,8 @@ the document toolbar keeps these actions available. Returning restores the exact
 when it is absent from the loaded page. The existing query, category, list
 position and reply draft stay in the retained PR pane. The comparison's
 repository/account context and PR identity must still match the return target.
+The list row's Changes button opens the comparison directly. Its return target
+restores the original project list, including its category, search and scroll.
 Nested repositories keep the workspace destination separate from the repository
 whose diff is read. A new request without a PR origin clears the old return
 target. Mobile Changes keeps the same return identity and routes Back to PR to
