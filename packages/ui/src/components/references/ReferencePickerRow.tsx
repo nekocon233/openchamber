@@ -282,7 +282,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                     ) : null}
                 </div>
                 {pullChanges ? (
-                    <div className="flex min-w-0 items-center justify-between gap-1">
+                    <div className="flex min-w-0 items-center gap-1">
                         {pullFileStats}
                         {pullChanges}
                     </div>
