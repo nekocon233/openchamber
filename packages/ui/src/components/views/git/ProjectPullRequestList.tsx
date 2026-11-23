@@ -219,7 +219,8 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               <ProjectPullFileStats context={context} pull={pull} excludedTypes={fileFilter.excludedTypes} />
             ) : undefined}
             renderPullChanges={context && context !== 'missing' && diffServing !== 'not-served' ? pull => (
-              <Button type="button" size={isMobile ? 'lg' : 'sm'} variant="ghost"
+              <Button type="button" size="icon" variant="ghost" className={isMobile ? 'size-9' : 'size-6'}
+                title={changesLabel}
                 aria-label={`${changesLabel} ${formatChangeRequestReference(browser.descriptor, pull.number)}`}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -233,7 +234,6 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
                   });
                 }}>
                 <DiffViewIcon className="size-3.5" />
-                {changesLabel}
               </Button>
             ) : undefined} /> : null}
         </ScrollableOverlay>
