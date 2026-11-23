@@ -130,6 +130,7 @@ export function useGitComparison(
 
   return {
     key,
+    headSha,
     revision: current?.status === 'ready' ? current.revision : 0,
     files,
     loading: Boolean(enabled && key && (!current || current.status === 'loading' || (current.status === 'ready' && current.refreshing))),

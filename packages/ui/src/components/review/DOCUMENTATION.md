@@ -18,6 +18,8 @@ This module lets a person review a change request from its diff: the comments un
 - `owner` may be empty: a top-level project on a path-style host (Gerrit) has none.
 - Authors can submit comments on their own change requests even when the provider disallows their verdicts or votes.
 - A narrow toolbar keeps the pending-comment count visible when it folds the Review label.
+- The desktop Changes toolbar offers verdict shortcuts when the patch and review state share a head. Each shortcut opens the shared form for its verdict, including saved inline comments. The Review button keeps these choices available when the toolbar runs out of room.
+- Review submission shares the PR action lock with the details view.
 
 ## Decisions
 

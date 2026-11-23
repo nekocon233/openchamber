@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { newMutationKey } from '@/components/sourceBoard/mutationKey';
+import { beginPullRequestAction, usePullRequestActionPending } from '@/components/sourceBoard/pullRequestActions';
 import { toast } from '@/components/ui';
 import { readComposerDraftTarget } from '@/hooks/useComposerAddress';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
@@ -37,6 +38,7 @@ export type ReviewSubmission = { body?: string } & (
 export type ChangeRequestReview = {
     state: ChangeRequestReviewState | null;
     readFailed: boolean;
+    submissionPending: boolean;
     fileComments: boolean;
     addComment: (position: ReviewCommentPosition, body: string) => Promise<boolean>;
     updateComment: (commentId: string, body: string) => Promise<boolean>;
@@ -90,6 +92,10 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
         }
     }, [context, name, number, owner, reviewKey, sourceControl]);
     const readLatest = React.useRef(read);
+    const pullRef = React.useMemo(() => (
+        reviewKey && owner !== undefined && name && number ? { owner, repo: name, number } : null
+    ), [name, number, owner, reviewKey]);
+    const submissionPending = usePullRequestActionPending(context, pullRef);
     React.useEffect(() => { readLatest.current = read; }, [read]);
 
     React.useEffect(() => {
@@ -138,6 +144,7 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
         return {
             state,
             readFailed,
+            submissionPending,
             fileComments: descriptor.features.reviewDraftFileComments,
             addComment: (position, body) => write(
                 () => sourceControl.changeRequestReviewComment({ ...mutation(), target: reviewed, ...position, body }),
@@ -178,19 +185,28 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
                 });
                 if (!draftId) toast.error(t('inlineComment.toast.noRoom'));
             },
-            submit: (submission) => write(
-                async () => {
-                    await sourceControl.changeRequestReview({ ...mutation(), target: reviewed, ...submission });
-                    toast.success(t('review.toast.submitted', { reference: label }));
-                },
-                t('review.toast.submitFailed', { reference: label }),
-            ),
+            submit: async (submission) => {
+                if (currentKey.current !== reviewKey) return false;
+                const action = beginPullRequestAction(context, pullRef);
+                if (!action) return false;
+                try {
+                    return await write(
+                        async () => {
+                            await sourceControl.changeRequestReview({ ...mutation(), target: reviewed, ...submission });
+                            if (action.isRuntimeCurrent()) toast.success(t('review.toast.submitted', { reference: label }));
+                        },
+                        t('review.toast.submitFailed', { reference: label }),
+                    );
+                } finally {
+                    action.finish();
+                }
+            },
             discard: () => write(
                 () => sourceControl.changeRequestReviewDiscard({ ...mutation(), target: existing }),
                 t('review.toast.discardFailed', { reference: label }),
             ),
         };
-    }, [context, descriptor, directory, headSha, name, number, owner, read, readFailed, reviewKey, sourceControl, state, t, target?.provider]);
+    }, [context, descriptor, directory, headSha, name, number, owner, pullRef, read, readFailed, reviewKey, sourceControl, state, submissionPending, t, target?.provider]);
 }
 
 type ComparisonReview = { review: ChangeRequestReview | null; provider: SourceControlProvider | null };
@@ -204,6 +220,7 @@ export function useComparisonReview(
     },
     directory: string | null | undefined,
     enabled: boolean,
+    comparedHead?: string | null,
 ): ComparisonReview {
     const { selectedSource: source, prs, readContext, provider } = comparison;
     const record = source ? prs.find((pr) => pr.number === source.number) : undefined;
@@ -211,7 +228,7 @@ export function useComparisonReview(
     const name = source?.sourceRepo?.repo ?? record?.project.name;
     const number = source?.number;
     const reviewable = enabled && !source?.revision && !source?.linked && (!record || record.state === 'open');
-    const headSha = record?.headSha;
+    const headSha = comparedHead ?? record?.headSha;
     const target = React.useMemo<ChangeRequestReviewTarget | null>(() => (
         reviewable && readContext && provider && directory && owner !== undefined && name && number
             ? { context: readContext, provider, project: { owner, name }, number, headSha, directory }

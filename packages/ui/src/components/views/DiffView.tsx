@@ -625,10 +625,12 @@ export const DiffView: React.FC<DiffViewProps> = ({
                     )}
                     {changeRequestReview && reviewProvider ? (
                         <ReviewSubmitButton
+                            key={diffOwner ?? undefined}
                             review={changeRequestReview}
                             provider={reviewProvider}
                             className="diff-toolbar__review-button"
                             labelClassName="diff-toolbar__review-label"
+                            showVerdictActions={!isMobileLayout && comparison.headSha !== null && changeRequestReview.state?.headSha === comparison.headSha}
                         />
                     ) : null}
                     {changedFiles.length > 0 && showReviewAction && (
