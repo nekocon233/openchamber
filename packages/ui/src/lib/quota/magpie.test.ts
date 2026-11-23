@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { magpieQuotaPace, magpieWorkStatusTrend } from './magpie';
+import { magpieDisplayPercent, magpieQuotaPace, magpieReferenceLeft, magpieWorkStatusTrend } from './magpie';
 
 test('preserves small signed pace differences and exact equality', () => {
   const start = Date.parse('2026-11-21T10:00:00Z');
@@ -42,4 +42,13 @@ test('the recorded cycle identifies a five-hour chart with a custom name', () =>
     windowSeconds: null,
     magpieTrend: weeklyTrend,
   })).toBe(weeklyTrend);
+});
+
+test('the displayed reference and sample share the selected quota mode', () => {
+  const cycle = { start: 0, reset: 1_000 };
+  const reference = magpieReferenceLeft(cycle, 300);
+  expect([79, reference].map(left => magpieDisplayPercent(left, true))).toEqual([79, 70]);
+  expect([79, reference].map(left => magpieDisplayPercent(left, false))).toEqual([21, 30]);
+  expect([100, 0].map(left => magpieDisplayPercent(left, true))).toEqual([100, 0]);
+  expect([100, 0].map(left => magpieDisplayPercent(left, false))).toEqual([0, 100]);
 });
