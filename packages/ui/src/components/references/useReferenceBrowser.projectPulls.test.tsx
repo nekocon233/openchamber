@@ -33,6 +33,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   let failNextPage = false;
   let failRefresh = false;
   let oldServer = false;
+  let verdictApplied = false;
   let releaseOld: (() => void) | undefined;
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
@@ -44,6 +45,10 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       binding: { repositoryId: 'repo', configRevision: 'rev', revision: 1, state: 'bound',
         providers: [{ provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID, primaryRemote: 'origin', readiness: 'ready', endpoint: ENDPOINT }], remotes: [], auxiliary: [] },
     });
+    if (url.pathname.endsWith('/read-cache/refresh')) {
+      verdictApplied = true;
+      return Response.json({ error: 'Cache refresh unavailable' }, { status: 503 });
+    }
     if (url.pathname === '/api/source-control/github/references') {
       if (failRefresh || (failNextPage && url.searchParams.has('cursor'))) return Response.json({ error: 'fixture unavailable' }, { status: 503 });
       const query = url.searchParams.get('query');
@@ -53,7 +58,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       const allStates = url.searchParams.get('state') === 'all';
       const page = url.searchParams.has('cursor')
         ? [pull(3, owner, allStates ? 'closed' : undefined)]
-        : [pull(1, owner), pull(otherPullNumber, owner, allStates ? 'merged' : undefined)];
+        : [{ ...pull(1, owner), title: verdictApplied ? 'PR after review' : 'PR 1' }, pull(otherPullNumber, owner, allStates ? 'merged' : undefined)];
       const items = query === 'terminal' ? [pull(92, owner, 'merged'), pull(93, owner, 'closed')]
         : query ? [pull(query === 'old' ? 90 : 91, owner)] : page;
       return Response.json({ connected: true, scope: oldServer ? undefined : url.searchParams.get('scope'), repo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app' }, items,
@@ -63,7 +68,8 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       detail: { number: Number(url.searchParams.get('number')), comments: [], commentTotal: 0, pull: null } });
     if (url.pathname === '/api/source-control/github/references/status') return Response.json({ connected: true,
       statuses: (url.searchParams.get('pulls') ?? '').split(',').map((ref) => ({ owner: 'acme', repo: 'app', number: Number(ref.split('#')[1]),
-        checks: { state: 'success', total: 2, success: 2, failure: 0, pending: 0 }, mergeable: null, mergeableState: null })) });
+        checks: { state: 'success', total: 2, success: 2, failure: 0, pending: 0 },
+        mergeable: verdictApplied, mergeableState: verdictApplied ? 'clean' : 'blocked' })) });
     if (url.pathname.endsWith('/location')) return Response.json({ directory: '/repo', project: { id: 'fixture', directory: '/repo', canonical: '/repo' } });
     if (url.pathname.endsWith('/session/active')) return Response.json({});
     return Response.json({ data: [] });
@@ -77,8 +83,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { useReferenceBrowser } = await import('./useReferenceBrowser');
-  const { invalidateProjectPullLists } = await import('./referenceSources');
-  const { getRuntimeKey } = await import('@/lib/runtime-switch');
+  const { refreshProjectPullListsAfterReview } = await import('./referenceSources');
   const { revalidateReferences } = await import('./referenceCache');
   const { referencePickerItemKey } = await import('./referencePickerItems');
   const provider = githubLikeDescriptor();
@@ -131,10 +136,16 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(boardBrowser().pullStatusOf(pull(2, 'upstream')).status).toBe('idle');
 
     const beforeReview = listRequests().length;
-    await act(async () => invalidateProjectPullLists({ provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
-      repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' }, getRuntimeKey()));
-    await until(() => listRequests().length === beforeReview + 1);
+    await act(async () => refreshProjectPullListsAfterReview(apis.sourceControl, { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
+      repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' }));
+    await until(() => current().list.items[0]?.title === 'PR after review');
+    expect(listRequests()).toHaveLength(beforeReview + 1);
+    expect(current().list.pageReads[0]?.read.forced).toBe(true);
     expect(current().items).toHaveLength(2);
+    await until(() => {
+      const status = current().pullStatusOf(pull(1));
+      return status.status === 'ready' && status.value?.mergeable === true;
+    });
 
     await act(async () => boardBrowser().selectRepositoryFilter({ state: 'open', people: 'created' }));
     expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine', labels: [] });

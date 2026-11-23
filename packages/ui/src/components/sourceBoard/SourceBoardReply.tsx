@@ -8,6 +8,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { referenceNumberLabel } from '@/components/references/referencePickerItems';
+import { refreshProjectPullListsAfterReview } from '@/components/references/referenceSources';
 import { toast } from '@/components/ui';
 import { ButtonTooltip, TooltipLabelWithShortcut } from '@/components/ui/action-toolbar';
 import { Button } from '@/components/ui/button';
@@ -91,6 +92,11 @@ export const SourceBoardReply: React.FC<{
         }
     };
 
+    const reviewCompleted = () => {
+        void refreshProjectPullListsAfterReview(sourceControl, context);
+        (onReviewCompleted ?? onRefresh)();
+    };
+
     const verdictNeedsBody = review.model === 'verdict' && !body && !['github', 'gitea'].includes(context.provider)
         && review.labels[0].options.some((option) => option.verdict === 'request-changes' && option.requiresBody);
     const sendVerdict = async (verdict: Exclude<ReviewVerdict, 'comment'>) => {
@@ -126,7 +132,7 @@ export const SourceBoardReply: React.FC<{
                 replyInput.acknowledge(text);
                 if (action.isRuntimeCurrent()) toast.success(t(doneKey, { reference: feedbackReference }), { id: toastId });
             }
-            if (action.isRuntimeCurrent()) (onReviewCompleted ?? onRefresh)();
+            if (action.isRuntimeCurrent()) reviewCompleted();
         } catch (error) {
             if (action.isRuntimeCurrent()) {
                 toast.error(t('sourceBoard.reply.toast.reviewFailed', { reference: feedbackReference }), { id: toastId, description: error instanceof Error ? error.message : String(error) });
@@ -178,7 +184,7 @@ export const SourceBoardReply: React.FC<{
 
     return (
         <section className="flex flex-col gap-2 border-t border-edge pt-4" aria-label={t('sourceBoard.reply.label')}>
-            <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onReviewDispatched={onReviewDispatched} onReviewCompleted={onReviewCompleted} />
+            <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} onReviewDispatched={onReviewDispatched} onReviewCompleted={reviewCompleted} />
             <Textarea
                 value={text}
                 onChange={(event) => setText(event.target.value)}

@@ -21,7 +21,8 @@ This module lets a person review a change request from its diff: the comments un
 - Approving or requesting changes from a comparison with a return target returns
   on dispatch. The shared PR action lock covers the pending write. The review
   summary stays in the comparison's workspace draft until the receipt
-  acknowledges its text, and successful verdicts refresh the project PR lists.
+  acknowledges its text. Every accepted approval or request for changes
+  refreshes the project PR list, including comparisons picked directly in Changes.
 
 ## Decisions
 

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { invalidateProjectPullLists } from '@/components/references/referenceSources';
+import { refreshProjectPullListsAfterReview } from '@/components/references/referenceSources';
 import { newMutationKey } from '@/components/sourceBoard/mutationKey';
 import { beginPullRequestAction, usePullRequestActionPending } from '@/components/sourceBoard/pullRequestActions';
 import { toast } from '@/components/ui';
@@ -196,7 +196,8 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
                 const action = beginPullRequestAction(context, pullRef);
                 if (!action) return false;
                 const verdict = submission.verdict;
-                const background = verdict === 'approve' || verdict === 'request-changes' ? onVerdictDispatched : undefined;
+                const changesReviewStatus = verdict === 'approve' || verdict === 'request-changes';
+                const background = changesReviewStatus ? onVerdictDispatched : undefined;
                 const reference = background ? `${owner}/${name} ${label}` : label;
                 let toastId: string | number | undefined;
                 try {
@@ -213,13 +214,7 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
                             : 'review.toast.submitted', { reference });
                         if (posted) toast.success(done, { id: toastId });
                         else toast.warning(done, { id: toastId, description: t('sourceBoard.reply.toast.textNotPosted') });
-                        if (background) {
-                            void sourceControl.refreshProviderReads(context, { lists: true }).then(() => {
-                                if (action.isRuntimeCurrent()) invalidateProjectPullLists(context, runtime);
-                            }).catch((error) => {
-                                if (action.isRuntimeCurrent()) toast.error(t('references.projectPulls.refreshFailed'), { description: error instanceof Error ? error.message : String(error) });
-                            });
-                        }
+                        if (changesReviewStatus) void refreshProjectPullListsAfterReview(sourceControl, context);
                     }
                     return posted;
                 } catch (error) {
@@ -235,7 +230,7 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
                 t('review.toast.discardFailed', { reference: label }),
             ),
         };
-    }, [context, descriptor, directory, headSha, name, number, owner, pullRef, read, readFailed, reviewKey, runtime, sourceControl, state, submissionPending, t, target?.provider]);
+    }, [context, descriptor, directory, headSha, name, number, owner, pullRef, read, readFailed, reviewKey, sourceControl, state, submissionPending, t, target?.provider]);
 }
 
 type ComparisonReview = { review: ChangeRequestReview | null; provider: SourceControlProvider | null };
