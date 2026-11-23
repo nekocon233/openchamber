@@ -82,7 +82,7 @@ interface PullRequestSelectionState {
   /** Drops `source` once Changes has taken it, so it never comes back on another branch. */
   settleDiffRequest: (directory: string, source: PullRequestSource) => void;
   bindDiffRequest: (directory: string, source: PullRequestSource, context: SourceControlReadContext) => void;
-  requestReturn: (target: PullRequestReturnTarget) => boolean;
+  requestReturn: (target: PullRequestReturnTarget, to?: 'origin' | 'details') => boolean;
   settleReturnRequest: (target: PullRequestReturnTarget) => void;
 }
 
@@ -228,7 +228,7 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     diffRequestAuthorities.set(bound, { ...authority, identity: workspaceRepositoryIdentity(context) });
     const diffRequests = new Map(state.diffRequests); diffRequests.set(directory, bound); return { diffRequests };
   }),
-  requestReturn: (target) => {
+  requestReturn: (target, to = 'origin') => {
     const key = pullRequestNavigationKey(target.runtimeKey, target.directory);
     if (target.runtimeKey !== getRuntimeKey() || get().diffReturnTargets.get(key) !== target) return false;
     const owner = workspaceViewKey(target.runtimeKey, target.directory, 'pr-navigation');
@@ -239,7 +239,8 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
       const workspaceKey = pullRequestNavigationKey(target.runtimeKey, target.workspaceDirectory);
       const openRequests = new Map(state.openRequests);
       openRequests.delete(workspaceKey);
-      return { diffReturnTargets, openRequests, returnRequests: rememberRequest(state.returnRequests, workspaceKey, target) };
+      const destination = to === 'details' && target.tab === 'project' && target.showList ? { ...target, showList: undefined } : target;
+      return { diffReturnTargets, openRequests, returnRequests: rememberRequest(state.returnRequests, workspaceKey, destination) };
     });
     return true;
   },

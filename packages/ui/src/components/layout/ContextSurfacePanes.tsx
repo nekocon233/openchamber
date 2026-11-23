@@ -231,6 +231,9 @@ export const ContextSurfacePanes: React.FC = () => {
   const revealEditorDiff = React.useCallback(() => {
     useUIStore.getState().setEditorDiffTabState(directoryKey, 'active');
   }, [directoryKey]);
+  const closeEditorDiff = React.useCallback(() => {
+    useUIStore.getState().setEditorDiffTabState(directoryKey, 'closed');
+  }, [directoryKey]);
   const terminalZone = zoneFor('terminal');
   const walkthroughZone = zoneFor('walkthrough');
   const pullRequestZone = zoneFor('pr');
@@ -595,6 +598,7 @@ export const ContextSurfacePanes: React.FC = () => {
                   directory={tab.targetDirectory ?? draftSpaceDirectory}
                   visible={detailVisible}
                   fileListHost={editorLayout ? { host: diffListHost, headerSlot: headerSlotFor(diffZone.zone, active), visible: diffZone.isOpen && active, onSelect: revealEditorDiff } : undefined}
+                  onLeaveChanges={editorLayout ? closeEditorDiff : undefined}
                   hideStackedFileSidebar
                   stackedDefaultCollapsedAll
                   pinSelectedFileHeaderToTopOnNavigate

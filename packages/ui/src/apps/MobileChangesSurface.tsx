@@ -55,7 +55,7 @@ import { useBranchPullRequestRequest } from '@/hooks/useBranchPullRequestRequest
 import { useCommitComparison } from '@/hooks/useCommitComparison';
 import { usePullRequestComparison } from '@/hooks/usePullRequestComparison';
 import { PullRequestComparisonSelector } from '@/components/views/git/PullRequestComparisonSelector';
-import { PullRequestBackButton } from '@/components/views/git/PullRequestBackButton';
+import { PullRequestNavigation } from '@/components/views/git/PullRequestNavigation';
 import { ChangeRequestDiffUnavailable } from '@/components/views/git/ChangeRequestDiffUnavailable';
 import { useGitComparison, type GitComparisonSource } from '@/hooks/useGitComparison';
 import { usePendingReview } from '@/components/sourceBoard/usePendingReview';
@@ -1323,7 +1323,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
       {networkDialogs}
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-edge px-3 py-2">
+      <header className={cn('flex shrink-0 flex-wrap items-center border-b border-edge py-2', mode === 'pr' ? 'gap-0.5 px-2 sm:gap-2 sm:px-3' : 'gap-2 px-3')}>
         {onClose ? (
           <button
             type="button"
@@ -1335,7 +1335,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
             <Icon name="close" className="size-5" />
           </button>
         ) : null}
-        {mode === 'pr' ? <PullRequestBackButton compact directory={rootDirectory || null} source={selectedPr} context={prComparison.readContext} /> : null}
+        {mode === 'pr' ? <PullRequestNavigation compact directory={rootDirectory || null} source={selectedPr} context={prComparison.readContext} /> : null}
         <DropdownMenu open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className={dropdownTriggerVariants({ size: 'mobile' })} data-mobile-comparison-trigger aria-label={t('diffView.scope.selectorAria')}>

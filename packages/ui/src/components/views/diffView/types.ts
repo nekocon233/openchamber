@@ -39,6 +39,7 @@ export interface DiffViewProps {
   directory?: string | null;
     /** In editor layout navigation remains in its tool zone while details occupy a document tab. */
     fileListHost?: { host: HTMLElement | null; headerSlot?: HTMLElement | null; visible: boolean; onSelect: () => void };
+    onLeaveChanges?: () => void;
     visible?: boolean;
     hideStackedFileSidebar?: boolean;
     stackedDefaultCollapsedAll?: boolean;
