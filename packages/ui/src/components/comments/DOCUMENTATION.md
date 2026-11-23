@@ -32,6 +32,8 @@ to [review](../review/DOCUMENTATION.md).
 - Comment shortcuts wait for IME composition to finish because Enter and Escape
   also confirm or abandon candidates. Mobile submission follows the prompt's
   Return key setting; desktop keeps the field's Enter preference.
+- In fields with review actions, the submitting Enter adds to the pending
+  review. Attach has its own button before Add to review in reading order.
 - Picker hosts report text and caret changes, mark pastes and caret moves as
   untyped, and give the picker first refusal on keydown. Replacement leaves the
   caret after inserted text, coordinates use the viewport, and the picker stays
