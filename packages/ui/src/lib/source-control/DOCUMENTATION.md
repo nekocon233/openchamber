@@ -160,14 +160,13 @@ fresh owner read even when another capability caused the revision change.
 ## Pull-request merge actions
 
 `SourceBoardActions` owns merge controls for the board, project PR preview and
-branch preview. GitHub hosts that explicitly advertise
-`forceMergeChangeRequests: true` show a separate destructive Force merge button
-beside the ordinary merge control. Missing capability fields grant no support.
-Both actions use the selected merge method; force is a per-request intent and
-never a saved method preference. Force merge requires a known head SHA and an
-open non-draft PR. Confirmation explains the current account's permission limit.
+branch preview. The merge control uses the selected method. On GitHub it
+requests any rule exemption the account already holds and reports whether the
+merge completed, entered the queue or will run when checks pass. The server
+continues to accept explicit administrator merge requests from older clients.
 
-A synchronous lock covers confirmation and dispatch for both merge actions.
+A synchronous lock covers confirmation and dispatch. The merge control stays
+disabled if the same PR is reopened while a request is pending.
 Changing the runtime generation, repository/account context or displayed PR
 target cancels the old confirmation. PR-pane actions and merges in the mobile
 board return on dispatch and retain
@@ -175,9 +174,9 @@ board return on dispatch and retain
 Their captured repository feedback and refresh survive detail unmounts within
 the same runtime generation. Desktop board and branch completions remain
 view-scoped.
-The server revalidates authority and the confirmed
-head before writing. Web, Electron and mobile use the server adapter. GitLab
-and VS Code advertise no force-merge support and reject explicit force calls.
+The server revalidates authority and the confirmed head before writing.
+Web, Electron and mobile use the server adapter. An explicit administrator
+merge is supported by that adapter for GitHub.
 
 ## Anonymous transport
 

@@ -137,7 +137,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
     const { sourceControl, trackers } = useRuntimeAPIs();
     const confirmation = useConfirmDialog();
     const { triggerFireworks } = useFireworksCelebration();
-    const [busy, setBusy] = React.useState<'merge' | 'force-merge' | 'ready' | null>(null);
+    const [busy, setBusy] = React.useState<'merge' | 'ready' | null>(null);
     const mounted = React.useRef(true);
     React.useEffect(() => {
         mounted.current = true;
@@ -225,14 +225,14 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
     const stackOnTop = onStartOnTop && openPull && descriptor.features.branchHeads && isStackable(openPull) ? () => onStartOnTop(openPull) : null;
     const stackOnTopLabel = t('stacks.actions.newOnTop');
 
-    const merge = async (origin?: HTMLElement, force = false) => {
-        if (!openPull || !context || !mergeMethod || (!force && submitBlocked) || mergePending.current || !isCurrent()) return;
-        if (force && (context.provider !== 'github' || !capabilities?.forceMergeChangeRequests || !openPull.headSha?.trim())) return;
+    const merge = async (origin?: HTMLElement) => {
+        if (!openPull || !context || !mergeMethod || submitBlocked || mergePending.current || !isCurrent()) return;
         const action = beginPullRequestAction(context, pullRef);
         if (!action) return;
         mergePending.current = true;
         let dispatched = false;
         const canReport = () => onMergeSubmitted ? action.isRuntimeCurrent() : isCurrent();
+        const resultReference = onMergeSubmitted ? `${openPull.sourceRepo.owner}/${openPull.sourceRepo.repo} ${reference}` : reference;
         try {
             const methodNote = t(MERGE_METHOD_KEYS[mergeMethod], { base: openPull.base });
             const stackNote = submits
@@ -242,12 +242,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                     : landsBelow.length === 1
                         ? t('stacks.merge.alsoBelow.one', { reference: referenceOf(landsBelow[0].number) })
                         : t('stacks.merge.alsoBelow.other', { count: landsBelow.length, references: landsBelow.map((layer) => referenceOf(layer.number)).join(', ') });
-            const approved = await confirmation.confirm(force ? {
-                title: t('sourceBoard.merge.forceConfirmTitle', { reference }),
-                message: t('sourceBoard.merge.forceConfirmMessage', { reference, base: openPull.base, method: t(MERGE_METHOD_LABELS[mergeMethod]) }),
-                action: t('sourceBoard.merge.forceConfirmAction'),
-                destructive: true,
-            } : {
+            const approved = await confirmation.confirm({
                 title: submitsBelow
                     ? t(landsBelow.length === 1 ? 'sourceBoard.submit.confirmTitleWithChain.one' : 'sourceBoard.submit.confirmTitleWithChain.other', { reference, count: landsBelow.length })
                     : t(`sourceBoard.merge.confirmTitle.${descriptor.terminology.changeRequest}`, { reference }),
@@ -255,13 +250,12 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                 action: t(submits ? 'gitView.pr.mergeMethod.submit' : 'sourceBoard.actions.merge'),
             });
             if (!approved || !isCurrent()) return;
-            setBusy(force ? 'force-merge' : 'merge');
+            setBusy('merge');
             const request = sourceControl.changeRequestMerge({
                 ...context,
                 idempotencyKey: newMutationKey(),
                 target: { project: { owner: openPull.sourceRepo.owner, name: openPull.sourceRepo.repo }, number: openPull.number, head: openPull.head, base: openPull.base, headSha: openPull.headSha },
                 method: mergeMethod,
-                ...(force ? { force: true } : {}),
             });
             dispatched = true;
             onMergeSubmitted?.();
@@ -271,25 +265,25 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
             if (merged) forgetLabelWrite(openPull);
             if (merged) triggerFireworks({ kind: 'merge', volleys: 2 + landsBelow.length, origin });
             if (submits) {
-                if (merged) toast.success(t('sourceBoard.toast.submitted', { reference }));
-                else toast.message(t('sourceBoard.toast.notSubmitted', { reference }), { description: message });
+                if (merged) toast.success(t('sourceBoard.toast.submitted', { reference: resultReference }));
+                else toast.message(t('sourceBoard.toast.notSubmitted', { reference: resultReference }), { description: message });
             } else if (merged) {
                 toast.success(landsBelow.length === 0
-                    ? t('sourceBoard.toast.merged', { reference })
+                    ? t('sourceBoard.toast.merged', { reference: resultReference })
                     : landsBelow.length === 1
-                        ? t('stacks.toast.mergedWithBelow.one', { reference })
-                        : t('stacks.toast.mergedWithBelow.other', { reference, count: landsBelow.length }));
+                        ? t('stacks.toast.mergedWithBelow.one', { reference: resultReference })
+                        : t('stacks.toast.mergedWithBelow.other', { reference: resultReference, count: landsBelow.length }));
             } else if (outcome === 'queued') {
-                toast.message(t('sourceBoard.toast.mergeQueued', { reference }));
+                toast.message(t('sourceBoard.toast.mergeQueued', { reference: resultReference }));
             } else if (outcome === 'auto-merge') {
-                toast.message(t('sourceBoard.toast.autoMerge', { reference }));
+                toast.message(t('sourceBoard.toast.autoMerge', { reference: resultReference }));
             } else if (outcome === 'merging') {
-                toast.message(t('sourceBoard.toast.mergeRunning', { reference }), { description: t('sourceBoard.toast.mergeRunningDescription') });
+                toast.message(t('sourceBoard.toast.mergeRunning', { reference: resultReference }), { description: t('sourceBoard.toast.mergeRunningDescription') });
             } else {
-                toast.message(t('sourceBoard.toast.notMerged', { reference }), { description: message });
+                toast.message(t('sourceBoard.toast.notMerged', { reference: resultReference }), { description: message });
             }
         } catch (error) {
-            if (canReport()) toast.error(t(submits ? 'sourceBoard.toast.submitFailed' : 'sourceBoard.toast.mergeFailed', { reference }), { description: error instanceof Error ? error.message : String(error) });
+            if (canReport()) toast.error(t(submits ? 'sourceBoard.toast.submitFailed' : 'sourceBoard.toast.mergeFailed', { reference: resultReference }), { description: error instanceof Error ? error.message : String(error) });
         } finally {
             mergePending.current = false;
             if (mounted.current) setBusy(null);
@@ -326,7 +320,7 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                             size="sm"
                             variant="outline"
                             className={cn(mergeMethods.length > 1 && 'rounded-e-none')}
-                            disabled={busy === 'merge' || submitBlocked}
+                            disabled={busy === 'merge' || actionPending || submitBlocked}
                             onClick={(event) => void merge(event.currentTarget)}
                         >
                             <Icon name={busy === 'merge' ? 'loader-4' : 'git-merge'} className={busy === 'merge' ? 'size-3.5 animate-spin' : 'size-3.5'} />
@@ -358,12 +352,6 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                         </DropdownMenu>
                     ) : null}
                 </div>
-            ) : null}
-            {openPull && !openPull.draft && mergeMethod && context?.provider === 'github' && capabilities?.forceMergeChangeRequests === true ? (
-                <Button size="sm" variant="destructive" disabled={busy !== null || actionPending || !openPull.headSha?.trim()} onClick={(event) => void merge(event.currentTarget, true)}>
-                    <Icon name={busy === 'force-merge' ? 'loader-4' : 'git-merge'} className={busy === 'force-merge' ? 'size-3.5 animate-spin' : 'size-3.5'} />
-                    {t('sourceBoard.actions.forceMerge')}
-                </Button>
             ) : null}
             {openPull && !openPull.draft && unmet.length > 0 ? (
                 <span
