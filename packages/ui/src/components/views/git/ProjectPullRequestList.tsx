@@ -2,11 +2,9 @@ import { useWorkspaceViewOwner } from '@/hooks/useWorkspaceViewOwner';
 import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
-import { DiffViewIcon } from '@/components/icons/DiffIcon';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
-import { referencePickerItemKey } from '@/components/references/referencePickerItems';
+import { DEFAULT_REPOSITORY_FILTER, referencePickerItemKey, type ReferencePickerItem } from '@/components/references/referencePickerItems';
 import { invalidateRepositoryPullStatuses, useRepositoryReadContext, useRepositoryReferenceList } from '@/components/references/referenceSources';
-import { DEFAULT_REPOSITORY_FILTER } from '@/components/references/referencePickerItems';
 import { useReferenceBrowser } from '@/components/references/useReferenceBrowser';
 import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
 import { useOpenSourceBoardPull } from '@/components/sourceBoard/useOpenSourceBoardPull';
@@ -23,7 +21,7 @@ import { isIMECompositionEvent } from '@/lib/ime';
 import { captureRuntimeInstance, getRuntimeKey } from '@/lib/runtime-switch';
 import { hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import { useChangeRequestDiffServing } from '@/lib/source-control/providers/registry';
-import { formatChangeRequestReference } from '@/lib/source-control/providers/terminology';
+import { formatChangeRequestLabel } from '@/lib/source-control/providers/terminology';
 import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { PullRequestDetail } from './PullRequestDetail';
 import { useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
@@ -48,7 +46,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
   const context = useRepositoryReadContext(directory);
   const diffServing = useChangeRequestDiffServing(context && context !== 'missing' ? context.provider : undefined);
   const openPull = useOpenSourceBoardPull();
-  const changesLabel = t('sourceBoard.actions.changes');
+  const diffContext = context && context !== 'missing' && diffServing !== 'not-served' ? context : null;
   const owner = useWorkspaceViewOwner(workspaceDirectory);
   const stateOwner = context && context !== 'missing' ? workspaceViewKey(owner.runtime, workspaceDirectory, workspaceRepositoryIdentity(context)) : null;
   const browser = useReferenceBrowser({ source: 'repository', directory, isMobile, mode: 'project-pulls', active, projectPullsState: { owner: stateOwner, preferences: owner.project } });
@@ -129,6 +127,20 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     showingList && browser.list.status === 'ready' && (browser.list.items.length >= savedDepth.current.count || !browser.list.hasMore), showingList);
 
   const rememberScroll = () => { scrollTop.current = scrollRef.current?.scrollTop ?? 0; };
+  const openRow = (item: ReferencePickerItem) => {
+    rememberScroll();
+    if (diffContext && item.source === 'repository' && item.reference.kind === 'pull') {
+      openPull('diff', {
+        pull: item.reference, context: diffContext, repository: directory,
+        project: { id: '', path: workspaceDirectory },
+        projectOwnsDirectory: path => path === workspaceDirectory,
+        currentDirectory: workspaceDirectory,
+        returnTo: { workspaceDirectory, tab: 'project', showList: true },
+      });
+    } else {
+      browser.showItem(referencePickerItemKey(item));
+    }
+  };
   const goBack = () => {
     browser.closeMobilePreview();
     requestAnimationFrame(() => browser.searchRef.current?.focus());
@@ -194,8 +206,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             if (isIMECompositionEvent(event) || browser.handleNavigationKey(event)) return;
             if (event.key === 'Enter' && browser.highlightedItem) {
               event.preventDefault();
-              rememberScroll();
-              browser.showItem(referencePickerItemKey(browser.highlightedItem));
+              openRow(browser.highlightedItem);
             }
           }} />
           <Button size="sm" variant="ghost" disabled={refreshingFromHost || !context || context === 'missing'} onClick={() => void refreshFromHost()} aria-label={t('gitView.pr.actions.refresh')} title={t('gitView.pr.actions.refresh')}>
@@ -214,28 +225,23 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             if (listVisibleRef.current) scrollTop.current = event.currentTarget.scrollTop;
           }}
         >
-          {showingList ? <ReferenceBrowserList browser={browser} label={t('gitView.pullRequest.tab.project')} multiselectable={false} onOpenSettings={openSettings} onShow={rememberScroll}
+          {showingList ? <ReferenceBrowserList browser={browser} label={t('gitView.pullRequest.tab.project')} multiselectable={false} onOpenSettings={openSettings} onSelectItem={openRow}
             renderPullFileStats={context && context !== 'missing' ? pull => (
               <ProjectPullFileStats context={context} pull={pull} excludedTypes={fileFilter.excludedTypes} />
             ) : undefined}
-            renderPullChanges={context && context !== 'missing' && diffServing !== 'not-served' ? pull => (
-              <Button type="button" size="icon" variant="ghost" className={isMobile ? 'size-9' : 'size-6'}
-                title={changesLabel}
-                aria-label={`${changesLabel} ${formatChangeRequestReference(browser.descriptor, pull.number)}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  rememberScroll();
-                  openPull('diff', {
-                    pull, context, repository: directory,
-                    project: { id: '', path: workspaceDirectory },
-                    projectOwnsDirectory: path => path === workspaceDirectory,
-                    currentDirectory: workspaceDirectory,
-                    returnTo: { workspaceDirectory, tab: 'project', showList: true },
-                  });
-                }}>
-                <DiffViewIcon className="size-3.5" />
-              </Button>
-            ) : undefined} /> : null}
+            renderPullAction={diffContext ? pull => {
+              const label = t('references.projectPulls.viewDetails', { reference: formatChangeRequestLabel(browser.descriptor, pull.number) });
+              return (
+                <Button type="button" size="icon" variant="ghost" className={isMobile ? 'size-9' : 'size-6'}
+                  title={label} aria-label={label} onClick={(event) => {
+                    event.stopPropagation();
+                    rememberScroll();
+                    openItem({ source: 'repository', reference: pull });
+                  }}>
+                  <Icon name="git-pull-request" className="size-3.5" />
+                </Button>
+              );
+            } : undefined} /> : null}
         </ScrollableOverlay>
       </div>
     </div>

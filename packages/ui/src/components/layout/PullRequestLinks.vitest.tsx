@@ -168,10 +168,18 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     if (!search) throw new Error('Missing normal PR search');
     await fill(search, 'retained search');
     await until(() => requests.some(url => url.searchParams.get('query') === 'retained search'));
+    const rowDetails = right.querySelector<HTMLButtonElement>('button[aria-label="View PR #7 details"]');
+    if (!rowDetails) throw new Error('Missing Details in the PR list');
+    await act(async () => rowDetails.click());
+    await until(() => Boolean(right.querySelector('textarea')));
+    const backToList = [...right.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Back to list');
+    if (!backToList) throw new Error('Missing return from PR details');
+    await act(async () => backToList.click());
+    await until(() => Boolean(right.querySelector('[role="listitem"]')));
     const openRowChanges = async () => {
-      const rowChanges = right.querySelector<HTMLButtonElement>('button[aria-label="Changes #7"]');
-      if (!rowChanges) throw new Error('Missing Changes in the PR list');
-      await act(async () => rowChanges.click());
+      const row = right.querySelector<HTMLElement>('[role="listitem"]');
+      if (!row) throw new Error('Missing PR row');
+      await act(async () => row.click());
       await until(() => right.textContent?.includes('project-review.txt') === true);
       expect(useUIStore.getState().contextPanelByDirectory['/repo']?.editorDiffTab).toBe('active');
     };

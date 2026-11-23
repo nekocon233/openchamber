@@ -157,7 +157,7 @@ type RowProps = {
     showChecks?: boolean;
     pullFileStats?: React.ReactNode;
     listItem?: boolean;
-    pullChanges?: React.ReactNode;
+    pullAction?: React.ReactNode;
     highlighted: boolean;
     checked: boolean | null;
     diffIncluded: boolean;
@@ -175,7 +175,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     showChecks = false,
     pullFileStats,
     listItem = false,
-    pullChanges,
+    pullAction,
     highlighted,
     checked,
     diffIncluded,
@@ -281,10 +281,10 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                         <ReferenceLabelChips labels={labels} max={2} />
                     ) : null}
                 </div>
-                {pullChanges ? (
+                {pullAction ? (
                     <div className="flex min-w-0 items-center gap-1">
                         {pullFileStats}
-                        {pullChanges}
+                        {pullAction}
                     </div>
                 ) : pullFileStats}
                 {conflict ? <div className="mt-1 flex items-center gap-1 typography-micro text-[var(--status-warning-text)]">

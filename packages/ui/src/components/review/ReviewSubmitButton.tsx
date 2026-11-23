@@ -10,6 +10,7 @@ import { GlassRedrawGuard } from '@/components/ui/glass-redraw-guard';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useWorkspaceDraft } from '@/hooks/useWorkspaceDraft';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { useSourceControlProvider } from '@/lib/source-control/providers/registry';
@@ -24,30 +25,38 @@ export const ReviewSubmitForm: React.FC<{
     review: ChangeRequestReview;
     provider: SourceControlProvider;
     voteLabels?: ChangeRequestVoteLabel[];
+    onVerdictDispatched?: () => void;
     onDone: () => void;
-}> = ({ review, provider, voteLabels, onDone }) => {
+}> = ({ review, provider, voteLabels, onVerdictDispatched, onDone }) => {
     const { t } = useI18n();
     const { isMobile } = useDeviceInfo();
     const buttonClass = isMobile ? 'min-w-0 px-1.5' : undefined;
     const descriptor = useSourceControlProvider(provider);
     const confirmation = useConfirmDialog();
-    const [text, setText] = React.useState('');
+    const summary = useWorkspaceDraft(onVerdictDispatched ? review.summaryDraftKey : null);
+    const { value: text, setValue: setText } = summary;
     const [busy, setBusy] = React.useState<ReviewVerdict | 'votes' | 'discard' | null>(null);
     const [votes, setVotes] = React.useState<Record<string, number>>({});
     const count = reviewDraftCount(review);
     const body = text.trim() ? text : undefined;
     const labels = reviewLabelsOf(descriptor, { voteLabels });
     const canJudge = !review.state?.viewerIsAuthor || descriptor.features.authorCanReview;
+    const blocked = busy !== null || review.submissionPending;
 
     const send = async (kind: ReviewVerdict | 'votes') => {
-        if (busy) return;
+        if (blocked) return;
         setBusy(kind);
-        const sent = await review.submit(kind === 'votes' ? { votes, publishDrafts: true, body } : { verdict: kind, body });
+        const dispatch = kind === 'approve' || kind === 'request-changes' ? onVerdictDispatched : undefined;
+        const submission = kind === 'votes' ? { votes, publishDrafts: true, body } : { verdict: kind, body };
+        const sent = await review.submit(submission, dispatch);
         setBusy(null);
-        if (sent) onDone();
+        if (sent) {
+            summary.acknowledge(text);
+            onDone();
+        }
     };
     const discard = async () => {
-        if (busy) return;
+        if (blocked) return;
         const confirmed = await confirmation.confirm({
             title: t('review.discard.title'),
             message: t(count === 1 ? 'review.discard.message.one' : 'review.discard.message.other', { count }),
@@ -58,7 +67,10 @@ export const ReviewSubmitForm: React.FC<{
         setBusy('discard');
         const discarded = await review.discard();
         setBusy(null);
-        if (discarded) onDone();
+        if (discarded) {
+            summary.acknowledge(text);
+            onDone();
+        }
     };
     const sendLabel = count > 1 ? t('review.submit.send.other', { count }) : t('review.submit.send.one');
     const busyIcon = (kind: typeof busy) => (busy === kind ? <Spinner className="size-3.5" /> : null);
@@ -70,12 +82,12 @@ export const ReviewSubmitForm: React.FC<{
                 onChange={(event) => setText(event.target.value)}
                 placeholder={t('review.submit.placeholder')}
                 aria-label={t('review.submit.placeholder')}
-                disabled={busy !== null}
+                disabled={blocked}
                 rows={3}
                 autoFocus
             />
             {labels.model === 'votes' && canJudge ? (
-                <SourceBoardVotes labels={labels.labels} votes={votes} onChange={setVotes} disabled={busy !== null} />
+                <SourceBoardVotes labels={labels.labels} votes={votes} onChange={setVotes} disabled={blocked} />
             ) : null}
             {count > 0 ? (
                 <div className="flex items-center gap-2">
@@ -84,7 +96,7 @@ export const ReviewSubmitForm: React.FC<{
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <span className="inline-flex shrink-0">
-                                    <Button size="icon" variant="ghost" className="size-8 shrink-0 text-muted-foreground" disabled={busy !== null} aria-label={t('review.discard.button')} onClick={() => void discard()}>
+                                    <Button size="icon" variant="ghost" className="size-8 shrink-0 text-muted-foreground" disabled={blocked} aria-label={t('review.discard.button')} onClick={() => void discard()}>
                                         {busy === 'discard' ? <Spinner className="size-4" /> : <Icon name="delete-bin" className="size-4" />}
                                     </Button>
                                 </span>
@@ -98,30 +110,30 @@ export const ReviewSubmitForm: React.FC<{
             {review.state?.truncated ? <p className="typography-meta text-muted-foreground">{t('review.submit.truncated')}</p> : null}
             <div className="flex flex-wrap items-center justify-end gap-2">
                 {count > 0 && !isMobile ? (
-                    <Button size="sm" variant="ghost" className="me-auto text-muted-foreground" disabled={busy !== null} onClick={() => void discard()}>
+                    <Button size="sm" variant="ghost" className="me-auto text-muted-foreground" disabled={blocked} onClick={() => void discard()}>
                         {busyIcon('discard')}
                         {t('review.discard.button')}
                     </Button>
                 ) : null}
                 {labels.model === 'verdict' && canJudge ? (
                     <>
-                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null} onClick={() => void send('request-changes')}>
+                        <Button size="sm" variant="outline" className={buttonClass} disabled={blocked} onClick={() => void send('request-changes')}>
                             {busyIcon('request-changes')}
                             {t('sourceBoard.reply.requestChanges')}
                         </Button>
-                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null} onClick={() => void send('approve')}>
+                        <Button size="sm" variant="outline" className={buttonClass} disabled={blocked} onClick={() => void send('approve')}>
                             {busyIcon('approve')}
                             {t('sourceBoard.reply.approve')}
                         </Button>
                     </>
                 ) : null}
                 {labels.model === 'votes' ? (
-                    <Button size="sm" disabled={busy !== null || (Object.keys(votes).length === 0 && !body && count === 0)} onClick={() => void send('votes')}>
+                    <Button size="sm" disabled={blocked || (Object.keys(votes).length === 0 && !body && count === 0)} onClick={() => void send('votes')}>
                         {busyIcon('votes')}
                         {sendLabel}
                     </Button>
                 ) : (
-                    <Button size="sm" className={buttonClass} disabled={busy !== null || (!body && count === 0)} onClick={() => void send('comment')}>
+                    <Button size="sm" className={buttonClass} disabled={blocked || (!body && count === 0)} onClick={() => void send('comment')}>
                         {busyIcon('comment')}
                         {sendLabel}
                     </Button>
@@ -138,13 +150,14 @@ export const ReviewSubmitButton: React.FC<{
     voteLabels?: ChangeRequestVoteLabel[];
     className?: string;
     labelClassName?: string;
-}> = ({ review, provider, voteLabels, className, labelClassName }) => {
+    onVerdictDispatched?: () => void;
+}> = ({ review, provider, voteLabels, className, labelClassName, onVerdictDispatched }) => {
     const { t } = useI18n();
     const { isMobile } = useDeviceInfo();
     const [open, setOpen] = React.useState(false);
     const count = reviewDraftCount(review);
     const label = count > 0 ? t('review.submit.buttonWithCount', { count }) : t('review.submit.button');
-    const form = <ReviewSubmitForm review={review} provider={provider} voteLabels={voteLabels} onDone={() => setOpen(false)} />;
+    const form = <ReviewSubmitForm review={review} provider={provider} voteLabels={voteLabels} onVerdictDispatched={onVerdictDispatched} onDone={() => setOpen(false)} />;
     const content = (
         <>
             <Icon name="search-eye" className="size-4" />
