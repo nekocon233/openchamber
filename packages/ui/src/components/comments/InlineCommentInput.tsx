@@ -248,7 +248,7 @@ export function InlineCommentInput({
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           enterKeyHint={commentKeys.returnKeySends ? 'send' : undefined}
-          placeholder={isMobile
+          placeholder={isMobile || (review && !floating)
             ? t('inlineComment.input.placeholderShort')
             : t('inlineComment.input.placeholder', { shortcut: submitShortcut })}
           aria-label={ariaLabel}
@@ -357,7 +357,6 @@ export function InlineCommentInput({
               >
                 {addingToReview ? <Spinner className="size-3.5" /> : null}
                 {addToReviewLabel}
-                {isMobile ? null : <span aria-hidden="true" className="text-[0.6875rem] opacity-70">{submitShortcut}</span>}
               </Button>
             ) : null}
             </div>
