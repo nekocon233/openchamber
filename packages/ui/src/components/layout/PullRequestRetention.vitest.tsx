@@ -96,7 +96,7 @@ test('PR windows retain independent project state across conversation, tool and 
   try {
     await act(async () => root.render(<RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="/repo"><ThemeSystemProvider><I18nProvider><ContextSurfacePanes /></I18nProvider></ThemeSystemProvider></SyncProvider></RuntimeAPIContext.Provider>));
     await open('pr');
-    await until(() => right.querySelector('[role="option"]') !== null);
+    await until(() => right.querySelector('[role="listitem"]') !== null);
     expect(requests.find(url => url.pathname.endsWith('/references'))?.searchParams.get('people')).toBe('reviewRequested');
     const input = right.querySelector('input');
     if (!input) throw new Error('Missing PR search');
@@ -105,7 +105,7 @@ test('PR windows retain independent project state across conversation, tool and 
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await until(() => requests.some((url) => url.searchParams.get('query') === 'retained query'));
-    const row = right.querySelector<HTMLElement>('[role="option"]');
+    const row = right.querySelector<HTMLElement>('[role="listitem"]');
     if (!row) throw new Error('Missing PR row');
     await act(async () => row.click());
     await until(() => right.querySelector('textarea') !== null);
@@ -145,7 +145,7 @@ test('PR windows retain independent project state across conversation, tool and 
     await act(async () => back.click());
     const scroller = right.querySelector<HTMLElement>('.overlay-scrollbar-target');
     if (!scroller) throw new Error('Missing list scroll container');
-    const retainedRow = right.querySelector<HTMLElement>('[role="option"]');
+    const retainedRow = right.querySelector<HTMLElement>('[role="listitem"]');
     if (!retainedRow) throw new Error('Missing retained list row');
     // Happy DOM has no layout: model the browser's scroll movement if the old highlight scrolls again.
     retainedRow.scrollIntoView = () => { scroller.scrollTop = 0; };
@@ -178,14 +178,14 @@ test('PR windows retain independent project state across conversation, tool and 
     await act(async () => { detailScrollerA.scrollTop = 0; detailScrollerA.dispatchEvent(new Event('scroll')); });
     const readsBeforeB = requests.filter((url) => url.pathname.includes('/references') && url.searchParams.get('directory') === '/repo').length;
     await act(async () => useUIStore.getState().openContextPanelTab('/other-repo', { mode: 'pr' }));
-    await until(() => Boolean(projectView('/other-repo')?.querySelector('[role="option"]')));
+    await until(() => Boolean(projectView('/other-repo')?.querySelector('[role="listitem"]')));
     const inputB = projectView('/other-repo')?.querySelector('input');
     if (!inputB) throw new Error('Missing second project search');
     expect(inputB.value).toBe('');
     expect(projectView('/other-repo')?.textContent).toContain('other pull request');
     await fill(inputB, 'other project query');
     await until(() => requests.some((url) => url.searchParams.get('directory') === '/other-repo' && url.searchParams.get('query') === 'other project query'));
-    const rowB = projectView('/other-repo')?.querySelector<HTMLElement>('[role="option"]');
+    const rowB = projectView('/other-repo')?.querySelector<HTMLElement>('[role="listitem"]');
     if (!rowB) throw new Error('Missing second project PR');
     await act(async () => rowB.click());
     await until(() => Boolean(projectView('/other-repo')?.querySelector('textarea')));

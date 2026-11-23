@@ -51,6 +51,7 @@ const schemas = {
     returnTo: z.object({
       workspaceDirectory: z.string().min(1), sourceDirectory: z.string().min(1),
       tab: z.preprocess(value => value === 'branch' ? 'project' : value, z.enum(['project', 'linked'])), url: z.string().url(),
+      showList: z.literal(true).optional().catch(undefined),
       repositoryIdentity: z.string(), source: pullSourceSchema,
       navigation: navigationReturnSchema.nullable(),
     }).nullable().catch(null),

@@ -70,7 +70,10 @@ test('retired branch tabs, split people categories, and Changes returns restore 
       [c]: { people: 'reviewRequested' },
     },
     ci: { [a]: { filter: 'branch', query: 'build' } },
-    changes: { [a]: { pullRequest: source, pullRequestIdentity: returnTo.repositoryIdentity, returnTo } },
+    changes: {
+      [a]: { pullRequest: source, pullRequestIdentity: returnTo.repositoryIdentity, returnTo },
+      [b]: { returnTo: { ...returnTo, tab: 'project', showList: true } },
+    },
   } }, version: 0 }));
   await views.persist.rehydrate();
   expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ people: 'mine', query: 'retained query', selectedUrl: returnTo.url });
@@ -78,6 +81,7 @@ test('retired branch tabs, split people categories, and Changes returns restore 
   expect(read(views.getState(), 'pullRequest', c)).toMatchObject({ people: 'mine' });
   expect(read(views.getState(), 'ci', a)).toMatchObject({ filter: 'branch', query: 'build' });
   expect(read(views.getState(), 'changes', a)).toMatchObject({ pullRequest: source, returnTo: { ...returnTo, tab: 'project' } });
+  expect(read(views.getState(), 'changes', b).returnTo?.showList).toBe(true);
 });
 
 test('a save acknowledgement keeps newer typing and other drafts', () => {

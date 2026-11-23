@@ -1,4 +1,3 @@
-import { usePullRequestSelectionStore, type PullRequestReturnLocation } from '@/stores/usePullRequestSelectionStore';
 import { beginPullRequestAction, usePullRequestActionPending } from './pullRequestActions';
 import { getRuntimeEndpointGeneration, getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import * as React from 'react';
@@ -25,19 +24,17 @@ import { resolveComposerReferences } from '@/components/references/resolveCompos
 import { readMergeMethod, rememberMergeMethod, type RememberedMergeMethod } from '@/components/views/git/mergeMethodPreference';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { RepositoryChangeRequestReference, RepositoryDiscussionReference, PullRequestStack, SourceControlReadContext } from '@/lib/api/types';
-import type { PullRequestSource } from '@/lib/diff/pullRequestDiff';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { ChangeRequestSubmitRequirement, DiscussionCloseReason, DraftChangeRequestInput, SetStateInput, SourceControlCapabilities } from '@/lib/source-control/types';
 import { useChangeRequestDiffServing, useSourceControlProvider } from '@/lib/source-control/providers/registry';
 import { formatChangeRequestReference } from '@/lib/source-control/providers/terminology';
 import { useUIStore } from '@/stores/useUIStore';
-import { useWalkthroughStore } from '@/stores/useWalkthroughStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import type { TrackedThread } from '@/lib/trackedItems/model';
 import { useTrackedRecords } from '@/stores/useTrackedItemsStore';
 import { useSession } from '@/sync/sync-context';
-import { resolvePullLinkTarget } from './boardRepository';
+import { useOpenSourceBoardPull, type PullLinkProps } from './useOpenSourceBoardPull';
 import { landsWithIt, mergeChoiceOf } from './mergeChoice';
 import { newMutationKey } from './mutationKey';
 
@@ -438,71 +435,17 @@ const LINK_CLASS = cn(
     REFERENCE_META_TEXT,
 );
 
-type PullLinkProps = {
-    pull: RepositoryChangeRequestReference;
-    project: SourceBoardProject;
-    repository: string | null;
-    context: SourceControlReadContext;
-    projectOwnsDirectory: (directory: string | undefined) => boolean;
-    currentDirectory: string | undefined;
-    onLeave?: () => void;
-    revision?: string | null;
-    returnTo?: PullRequestReturnLocation;
-};
-
-const useOpenPull = ({ pull, project, repository, context, projectOwnsDirectory, currentDirectory, onLeave, revision = null, returnTo }: PullLinkProps) => {
-    const mobile = useMobileAppActions();
-    return (surface: 'diff' | 'walkthrough') => {
-        const source: PullRequestSource = {
-            kind: 'pr', number: pull.number, sourceRepo: { owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo },
-            ...(revision ? { revision } : {}),
-            linked: context.linked,
-        };
-        const ui = useUIStore.getState();
-        const target = resolvePullLinkTarget({
-            projectPath: project.path,
-            repository,
-            currentDirectory: currentDirectory ?? null,
-            owned: Boolean(currentDirectory && projectOwnsDirectory(currentDirectory)),
-        });
-        const restoreWorkspace = !mobile && returnTo && !projectOwnsDirectory(currentDirectory)
-            ? useSessionUIStore.getState().captureNavigationReturn(returnTo.workspaceDirectory)
-            : undefined;
-        const navigationReturn = restoreWorkspace && returnTo
-            ? useSessionUIStore.getState().captureNavigationReturnSnapshot(returnTo.workspaceDirectory) : null;
-        const returning = returnTo ? { ...returnTo, reference: pull, context, restoreWorkspace, navigationReturn } : undefined;
-        if (mobile) {
-            if (target.mobileDirectory === currentDirectory) ui.closeMainSurfaces();
-            else useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: project.path });
-            usePullRequestSelectionStore.getState().requestDiff(target.mobileRequestDirectory, source, returning ?? target.mobileRepository, context);
-            onLeave?.();
-            mobile.openChanges();
-            return;
-        }
-        if (currentDirectory) ui.closeMainSurfaces();
-        else useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: project.path });
-        const { panelDirectory, targetDirectory, requestDirectory } = target;
-        if (surface === 'diff') {
-            usePullRequestSelectionStore.getState().requestDiff(requestDirectory, source, returning, context);
-            ui.openContextPanelTab(panelDirectory, { mode: 'diff', diffScope: 'pr', targetDirectory });
-            return;
-        }
-        useWalkthroughStore.getState().requestTarget(requestDirectory, { source, context });
-        ui.openContextPanelTab(panelDirectory, { mode: 'walkthrough', targetDirectory });
-    };
-};
-
 export const SourceBoardPullLinks: React.FC<PullLinkProps> = (props) => {
     const { t } = useI18n();
     const mobile = useMobileAppActions();
     const diffServing = useChangeRequestDiffServing(props.context.provider);
-    const open = useOpenPull(props);
+    const open = useOpenSourceBoardPull();
     if (diffServing === 'not-served') return null;
     return (
         <span className="inline-flex items-center gap-1">
             <Tooltip>
                 <TooltipTrigger asChild>
-                    <button type="button" className={LINK_CLASS} onClick={() => open('diff')}>
+                    <button type="button" className={LINK_CLASS} onClick={() => open('diff', props)}>
                         <DiffViewIcon className="size-3.5" />
                         {t('sourceBoard.actions.changes')}
                         <Icon name="external-link" className="size-3.5" />
@@ -513,7 +456,7 @@ export const SourceBoardPullLinks: React.FC<PullLinkProps> = (props) => {
             {mobile ? null : (
                 <Tooltip>
                     <TooltipTrigger asChild>
-                        <button type="button" className={LINK_CLASS} onClick={() => open('walkthrough')}>
+                        <button type="button" className={LINK_CLASS} onClick={() => open('walkthrough', props)}>
                             <Icon name="route" className="size-3.5 text-[var(--status-info)]" />
                             {t('walkthrough.action.open')}
                             <Icon name="external-link" className="size-3.5" />
@@ -530,7 +473,7 @@ export const SourceBoardPullLinks: React.FC<PullLinkProps> = (props) => {
 export const SourceBoardReviewDraft: React.FC<PullLinkProps> = (props) => {
     const { pull, context, project } = props;
     const { t } = useI18n();
-    const open = useOpenPull(props);
+    const open = useOpenSourceBoardPull();
     const target = React.useMemo(() => (pull.state === 'open' ? {
         context,
         provider: context.provider,
@@ -545,7 +488,7 @@ export const SourceBoardReviewDraft: React.FC<PullLinkProps> = (props) => {
     const login = review?.state?.draft?.comments[0]?.author?.login;
     const label = t(count === 1 ? 'review.board.draft.one' : 'review.board.draft.other', { count });
     return (
-        <button type="button" className={LINK_CLASS} onClick={() => open('diff')}>
+        <button type="button" className={LINK_CLASS} onClick={() => open('diff', props)}>
             {login ? `${login} · ${label}` : label}
         </button>
     );

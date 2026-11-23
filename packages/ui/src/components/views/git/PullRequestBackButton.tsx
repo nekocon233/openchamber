@@ -40,7 +40,10 @@ export const PullRequestBackButton: React.FC<{
     if (mobile) mobile.openWorkspaceTab('pr');
     else useUIStore.getState().openContextPanelTab(workspaceDirectory, { mode: 'pr' });
   };
-  const label = t(context.provider === 'gitlab' ? 'references.projectPulls.backToMerge' : 'references.projectPulls.backToPull', { number: source.number });
+  const destination = live ?? restored;
+  const label = destination?.tab === 'project' && destination.showList
+    ? t('gitView.pullRequest.backToList')
+    : t(context.provider === 'gitlab' ? 'references.projectPulls.backToMerge' : 'references.projectPulls.backToPull', { number: source.number });
   return <Button variant="ghost" size="sm" className={cn('min-w-0', compact ? 'shrink-0' : 'me-auto shrink')} title={label} aria-label={label} onClick={() => {
     if (live && usePullRequestSelectionStore.getState().requestReturn(live)) {
       live.restoreWorkspace?.();
@@ -56,7 +59,7 @@ export const PullRequestBackButton: React.FC<{
         const workspace = workspaceViewKey(runtimeKey, restored.workspaceDirectory);
         if (workspace) useWorkspaceViewStateStore.getState().update('pullRequest', workspace, previous => ({ ...previous, link: null }));
         const list = workspaceViewKey(runtimeKey, restored.workspaceDirectory, workspaceRepositoryIdentity(context));
-        if (list) useWorkspaceViewStateStore.getState().update('pullRequest', list, previous => ({ ...previous, selectedUrl: restored.url }));
+        if (list) useWorkspaceViewStateStore.getState().update('pullRequest', list, previous => ({ ...previous, selectedUrl: restored.showList ? null : restored.url }));
       }
       setSaved(null);
       openPullRequest(restored.workspaceDirectory);

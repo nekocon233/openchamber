@@ -156,6 +156,8 @@ type RowProps = {
     pullStatusRead?: CachedValue<ChangeRequestListStatus | null> | null;
     showChecks?: boolean;
     pullFileStats?: React.ReactNode;
+    listItem?: boolean;
+    pullChanges?: React.ReactNode;
     highlighted: boolean;
     checked: boolean | null;
     diffIncluded: boolean;
@@ -172,6 +174,8 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     pullStatusRead,
     showChecks = false,
     pullFileStats,
+    listItem = false,
+    pullChanges,
     highlighted,
     checked,
     diffIncluded,
@@ -191,6 +195,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     const id = item.source === 'repository' ? referenceNumberLabel(item.reference, descriptor) : item.item.identifier;
     const updated = relativeTimeOf(item.source === 'repository' ? item.reference.updatedAt : item.item.updatedAt, now);
     const labels = toLabels(item.source === 'repository' ? item.reference.labels : (capabilities.labels ? item.item.labels : undefined));
+    const titleClass = cn('typography-ui-header font-semibold line-clamp-2 break-words', !highlighted && 'text-foreground');
     const rowRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -200,8 +205,8 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     return (
         <div
             ref={rowRef}
-            role="option"
-            aria-selected={highlighted}
+            role={listItem ? 'listitem' : 'option'}
+            aria-selected={listItem ? undefined : highlighted}
             className={cn(
                 'group flex cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors',
                 highlighted ? 'bg-interactive-selection/70 text-interactive-selection-foreground' : 'hover:bg-interactive-hover/60',
@@ -223,7 +228,11 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                         <span dir="auto" className="truncate">{tracker.parent.title}</span>
                     </div>
                 ) : null}
-                <div dir="auto" className={cn('typography-ui-header font-semibold line-clamp-2 break-words', !highlighted && 'text-foreground')}>{title}</div>
+                {listItem ? (
+                    <button type="button" dir="auto" aria-label={`${id} ${title}`} className={cn(titleClass, 'w-full text-start rounded-sm focus-visible:bg-interactive-hover')}>
+                        {title}
+                    </button>
+                ) : <div dir="auto" className={titleClass}>{title}</div>}
                 <div className={cn('mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 typography-micro', REFERENCE_META_TEXT)}>
                     <span className="font-mono">{id}</span>
                     {item.source === 'repository' && item.reference.author ? (
@@ -272,7 +281,12 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                         <ReferenceLabelChips labels={labels} max={2} />
                     ) : null}
                 </div>
-                {pullFileStats}
+                {pullChanges ? (
+                    <div className="flex min-w-0 items-center justify-between gap-1">
+                        {pullFileStats}
+                        {pullChanges}
+                    </div>
+                ) : pullFileStats}
                 {conflict ? <div className="mt-1 flex items-center gap-1 typography-micro text-[var(--status-warning-text)]">
                     <Icon name="error-warning" className="size-3.5 shrink-0" />
                     {t('sessions.sidebar.group.pr.status.mergeConflicts')}
