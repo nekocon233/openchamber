@@ -1,15 +1,14 @@
 import type { AnnotationSide, DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs';
 import type { ReviewDraftComment, ReviewThread } from '@/lib/source-control/types';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
-import type { GitHubPendingReviewComment } from '@/lib/source-control/pendingReview';
 
 export type PierreAnnotationData =
   | { type: 'saved' | 'edit'; draft: InlineCommentDraft }
-  | { type: 'review'; comment?: GitHubPendingReviewComment; id?: string }
+  | { type: 'review'; id: string }
   | { type: 'new'; selection: SelectedLineRange };
 
 export const toPierreAnnotationId = (meta: PierreAnnotationData): string => {
-  if (meta.type === 'review') return `review-${meta.id ?? meta.comment?.id ?? ''}`;
+  if (meta.type === 'review') return `review-${meta.id}`;
   if (meta.type === 'new') {
     const start = Math.min(meta.selection.start, meta.selection.end);
     const end = Math.max(meta.selection.start, meta.selection.end);
@@ -24,7 +23,6 @@ interface BuildPierreLineAnnotationsOptions {
   drafts: InlineCommentDraft[];
   editingDraftId: string | null;
   selection?: SelectedLineRange | null;
-  reviewComments?: readonly GitHubPendingReviewComment[];
   reviewItems?: readonly ReviewLineItem[];
 }
 
@@ -47,11 +45,6 @@ export const buildPierreLineAnnotations = (
 ): DiffLineAnnotation<PierreAnnotationData>[] => {
   const { drafts, editingDraftId, selection, reviewItems = [] } = options;
   const annotations: DiffLineAnnotation<PierreAnnotationData>[] = [];
-  for (const comment of options.reviewComments ?? []) {
-    if (comment.line === null) continue;
-    annotations.push({ lineNumber: comment.line, side: comment.side === 'LEFT' ? 'deletions' : 'additions', metadata: { type: 'review', comment, id: comment.id } });
-  }
-
   for (const draft of drafts) {
     if (!Number.isFinite(draft.endLine)) {
       continue;

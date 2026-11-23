@@ -17,7 +17,7 @@ export type DiffData = {
     patch?: string;
     fileDiff?: FileDiffMetadata;
     contextMode?: DiffContextMode;
-    reviewHeadSha?: string;
+    reviewHeadSha?: string | null;
     /** Set for a live working or staged diff of a submodule; its patch alone can be empty. */
     submodule?: GitSubmoduleState | null;
 };

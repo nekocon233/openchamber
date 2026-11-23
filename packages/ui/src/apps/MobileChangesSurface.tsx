@@ -57,7 +57,6 @@ import { PullRequestComparisonSelector } from '@/components/views/git/PullReques
 import { useMobileChangesReview } from './useMobileChangesReview';
 import { ChangeRequestDiffUnavailable } from '@/components/views/git/ChangeRequestDiffUnavailable';
 import { useGitComparison, type GitComparisonSource } from '@/hooks/useGitComparison';
-import { usePendingReview } from '@/components/sourceBoard/usePendingReview';
 import { useGitBaseBranchStore } from '@/stores/useGitBaseBranchStore';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -415,13 +414,6 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   const comparison = useGitComparison(currentDirectory || null, comparisonSource, visible && isGitRepo === true, comparisonRevision, prComparison.readContext, prComparison.provider);
   const { review: changeRequestReview, navigationButtons, renderReviewButton } = useMobileChangesReview(
     prComparison, currentDirectory, mode === 'pr' ? rootDirectory || null : null, visible && mode === 'pr', comparison.headSha);
-  const reviewPull = React.useMemo(() => {
-    if (comparisonSource?.kind !== 'pr') return null;
-    const matches = prComparison.prs.filter((pull) => pull.number === comparisonSource.number);
-    const repo = comparisonSource.sourceRepo ?? (matches.length === 1 ? { owner: matches[0].project.owner, repo: matches[0].project.name } : null);
-    return repo ? { ...repo, number: comparisonSource.number } : null;
-  }, [comparisonSource, prComparison.prs]);
-  const pendingReview = usePendingReview(prComparison.readContext, reviewPull, visible && mode === 'pr');
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile, fetchVersions: loadComparisonVersions } = comparison;
   const treeScopeKey = JSON.stringify([ownerKey, mode, mode === 'turn' ? currentSessionId : comparison.key]);
   const [collapsedTreeState, setCollapsedTreeState] = React.useState<{ scopeKey: string; paths: Set<string> }>({
@@ -475,16 +467,16 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     try {
       if (isOfficePreviewFile(path)) {
         const versions = await loadComparisonVersions(path);
-        return { status: 'ready', diff: isDocumentVersions(versions.original, versions.modified) ? versions : { original: '', modified: '', isBinary: true, reviewHeadSha: versions.reviewHeadSha } };
+        return { status: 'ready', diff: isDocumentVersions(versions.original, versions.modified) ? versions : { original: '', modified: '', isBinary: true } };
       }
       const { diff: patch, reviewHeadSha } = await loadComparisonDiff(path);
-      const diff: MobileDiffData = { original: '', modified: '', isBinary: isBinaryPatch(patch), reviewHeadSha };
+      const diff: MobileDiffData = { original: '', modified: '', isBinary: isBinaryPatch(patch), reviewHeadSha: reviewHeadSha ?? (mode === 'pr' ? null : undefined) };
       if (!diff.isBinary) diff.fileDiff = fileDiffFromPatch(path, patch);
       return { status: 'ready', diff };
     } catch (error) {
       return { status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') };
     }
-  }, [loadComparisonDiff, loadComparisonVersions, t]);
+  }, [loadComparisonDiff, loadComparisonVersions, mode, t]);
   const branchDiffRevisions = React.useMemo(
     () => mode === 'branch' ? branchPathRevisions(comparison.files, comparisonRevision) : undefined,
     [comparison.files, comparisonRevision, mode],
@@ -510,7 +502,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     const loadFullDiff = async (): Promise<MobileDiffData> => {
       if (mode === 'pr') {
         const { original, modified, reviewHeadSha } = await loadComparisonFullFile(path);
-        return { original, modified, reviewHeadSha, fileDiff: parseDiffFromFile({ name: path, contents: original }, { name: path, contents: modified }) };
+        return { original, modified, reviewHeadSha: reviewHeadSha ?? null, fileDiff: parseDiffFromFile({ name: path, contents: original }, { name: path, contents: modified }) };
       }
       const { diff: patch } = await loadComparisonDiff(path, FULL_CONTEXT_DIFF_LINES);
       return { original: '', modified: '', fileDiff: fileDiffFromPatch(path, patch) };
@@ -1247,7 +1239,6 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
       <ChangeRequestReviewContext.Provider value={changeRequestReview}>
       <MobileDiffDetail
         path={activeComparisonPath}
-        review={mode === 'pr' && pendingReview.key ? pendingReview : undefined}
         previousPath={comparison.files?.find((file) => file.path === activeComparisonPath)?.previousPath}
         subtitle={[modeLabel, sourceLabel].filter(Boolean).join(' · ')}
         commentOrigin={commentOrigin}

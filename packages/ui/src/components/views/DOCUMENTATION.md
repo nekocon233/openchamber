@@ -956,19 +956,16 @@ expander asks `useGitComparison.fetchFullFile`, which reads both sides of that
 file from the provider through `/api/walkthrough/pr-file` (merge base and PR head),
 never from disk, so local edits and unfetched fork commits cannot leak in or
 block it. Existing inline comment controls still attach selected code to chat.
-For a GitHub PR, the same input also offers Start a review or Add to review.
-Saved pending comments appear beneath their code lines; the PR reply panel
-owns editing and final submission. `PierreDiffViewer` receives the shared
-pending-review controller from desktop or mobile Changes.
-The code container stays left to right; annotation controls follow the UI locale.
+For a provider with review drafts, Add to review saves inline comments to the
+same host draft used by the toolbar. The first comment creates the draft.
+The code container stays left to right and annotation controls follow the UI locale.
 
 Each PR snapshot carries the server's `X-OpenChamber-PR-Head-Sha` as `headSha`.
 Per-file patches and full-file reads retain that revision. The editor captures
-it when typing starts and refuses a review comment after the displayed revision
-or PR scope changes. A full-file read supplies the expected head to the server.
-An old server that omits the header can still display its diff, but cannot
-authorize inline review comments. A review tied to an earlier commit remains
-available for submission or discard before commenting on the new version.
+the revision and review identity when typing starts and sends the captured head
+with the comment. A full-file read also supplies the expected head to the server.
+A diff without a head can still render and ask the user to update the server
+when saving a review comment.
 
 Changes hands its PR source to walkthrough; walkthrough's Changes action opens
 PR mode with the shared selection. Picking a PR never generates a walkthrough.

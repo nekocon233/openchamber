@@ -80,7 +80,6 @@ interface LineAnnotationsInput {
   enableComments: boolean;
   fileDrafts: InlineCommentDraft[];
   editingDraftId: string | null;
-  reviewComments: readonly import('@/lib/source-control/pendingReview').GitHubPendingReviewComment[];
   reviewItems: ReviewLineItem[];
   hunkAnchors: readonly PatchHunkAnchor[];
   expandOnDemand: boolean;
@@ -94,7 +93,6 @@ export const useLineAnnotations = ({
   fileDrafts,
   editingDraftId,
   reviewItems,
-  reviewComments,
   hunkAnchors,
   expandOnDemand,
   fileDiff,
@@ -106,7 +104,6 @@ export const useLineAnnotations = ({
       drafts: fileDrafts,
       editingDraftId,
       reviewItems,
-      reviewComments,
     }) : [];
     for (const anchor of hunkAnchors) {
       annotations.push({ side: anchor.side, lineNumber: anchor.lineNumber, metadata: { type: 'hunk-action', index: anchor.index } });
@@ -116,7 +113,7 @@ export const useLineAnnotations = ({
     const selectionAnnotation = enableComments ? buildPierreSelectionAnnotation(selection, editingDraftId) : null;
     if (selectionAnnotation) annotations.push(selectionAnnotation);
     return annotations;
-  }, [editingDraftId, enableComments, expandOnDemand, fileDiff, fileDrafts, hunkAnchors, reviewComments, reviewItems, selection]);
+  }, [editingDraftId, enableComments, expandOnDemand, fileDiff, fileDrafts, hunkAnchors, reviewItems, selection]);
 
   const lineAnnotationsRef = useRef(lineAnnotations);
 

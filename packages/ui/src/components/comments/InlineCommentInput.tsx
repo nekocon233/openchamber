@@ -39,13 +39,6 @@ export interface InlineCommentInputProps {
     add: (text: string, range?: { start: number; end: number; side?: 'additions' | 'deletions' }) => Promise<boolean>;
     suggestionCode?: () => string;
   };
-  reviewAction?: {
-    label: string;
-    disabled: boolean;
-    busy: boolean;
-    message?: string | null;
-    onSave: InlineCommentInputProps['onSave'];
-  };
 }
 
 const MAX_FIELD_HEIGHT_PX = 120;
@@ -68,7 +61,6 @@ export function InlineCommentInput({
   saveLabel,
   saving = false,
   review,
-  reviewAction,
 }: InlineCommentInputProps) {
   const { t, direction } = useI18n();
   const { isMobile } = useDeviceInfo();
@@ -358,15 +350,6 @@ export function InlineCommentInput({
           </div>
         )}
       </div>
-      {reviewAction ? <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-        {reviewAction.message ? <span className="min-w-0 flex-1 typography-meta text-muted-foreground">{reviewAction.message}</span> : null}
-        <Button size={isMobile ? 'default' : 'sm'} disabled={reviewAction.disabled || !text.trim()} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => {
-          event.stopPropagation(); reviewAction.onSave(text, normalizeRange(stableRangeRef.current));
-        }}>
-          {reviewAction.busy ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : <Icon name="git-pull-request" className="size-3.5" />}
-          {reviewAction.label}
-        </Button>
-      </div> : null}
     </div>
   );
 }

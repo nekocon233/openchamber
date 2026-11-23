@@ -1,6 +1,3 @@
-import type { SelectedLineRange } from "@pierre/diffs";
-import { toast } from "@/components/ui";
-import type { GitHubPendingReviewAction } from "@/lib/source-control/pendingReview";
 import { WorkspaceViewVisible } from "@/hooks/useWorkspaceViewState";
 import { createPierreViewState } from "./pierreViewState";
 import { useEffect } from "react";
@@ -97,7 +94,6 @@ const PierreDiffViewerBody: React.FC<
   layout = 'fill',
   enableComments = true,
   hunkActions,
-  review: pendingReview,
   reviewHeadSha,
   persistenceOwner = null,
   onExpandContextRequest,
@@ -163,36 +159,11 @@ const PierreDiffViewerBody: React.FC<
     fileName,
     language,
     commentOrigin,
+    reviewHeadSha,
     enableComments,
     isMobile,
     diffInstanceRef,
   });
-
-  const reviewComments = useMemo(() => reviewHeadSha && pendingReview?.data?.review?.headSha === reviewHeadSha
-    ? pendingReview.data.review.comments.filter(comment => comment.path === fileName) : [], [reviewHeadSha, pendingReview?.data?.review, fileName]);
-  const selectedRevision = useRef<{ selection: SelectedLineRange | null; headSha?: string; key: string | null }>({ selection: null, key: null });
-  const [savingReview, setSavingReview] = React.useState(false);
-  // Once typing starts, retain the version those words refer to through a refresh.
-  if (!selection || !commentText || !selectedRevision.current.selection) selectedRevision.current = { selection, headSha: reviewHeadSha, key: pendingReview?.key ?? null };
-  const saveReviewComment = async (text: string, range?: SelectedLineRange) => {
-    const chosen = range ?? selection;
-    const captured = selectedRevision.current;
-    if (!pendingReview || !fileName || !chosen || !reviewHeadSha || captured.headSha !== reviewHeadSha || captured.key !== pendingReview.key) {
-      toast.error(t('pendingReview.staleDiff')); return;
-    }
-    if (chosen.endSide && chosen.side && chosen.endSide !== chosen.side) { toast.error(t('pendingReview.sameSide')); return; }
-    const start = Math.min(chosen.start, chosen.end), end = Math.max(chosen.start, chosen.end);
-    const action: GitHubPendingReviewAction = { kind: 'comment', path: fileName, body: text, side: chosen.side === 'deletions' ? 'LEFT' : 'RIGHT', line: end };
-    if (start !== end) action.startLine = start;
-    if (pendingReview.data?.review) action.reviewId = pendingReview.data.review.id;
-    setSavingReview(true);
-    try {
-      if (await pendingReview.mutate(action, reviewHeadSha)) {
-        if (selectedRevision.current === captured) handleCancelComment();
-        toast.success(t('pendingReview.saved'));
-      }
-    } finally { setSavingReview(false); }
-  };
 
   const { commentHostsRef, typingFieldRef, holdTypingField, renderAnnotation } = useAnnotationRenderer({
     diffContainerRef,
@@ -317,7 +288,6 @@ const PierreDiffViewerBody: React.FC<
     enableComments,
     fileDrafts,
     editingDraftId,
-    reviewComments,
     reviewItems,
     hunkAnchors,
     expandOnDemand,
@@ -381,18 +351,6 @@ const PierreDiffViewerBody: React.FC<
 
   const commentOverlays = enableComments ? (
     <PierreDiffCommentOverlays
-      reviewComments={reviewComments}
-      reviewAction={pendingReview?.key ? {
-        label: t(pendingReview.data?.review ? 'pendingReview.add' : 'pendingReview.start'),
-        busy: savingReview,
-        disabled: pendingReview.busy || pendingReview.loading || Boolean(pendingReview.readError) || !pendingReview.data?.open || !reviewHeadSha
-          || selectedRevision.current.headSha !== reviewHeadSha || selectedRevision.current.key !== pendingReview.key
-          || pendingReview.data.headSha !== reviewHeadSha || Boolean(pendingReview.data.review && pendingReview.data.review.headSha !== reviewHeadSha),
-        message: pendingReview.error ?? (pendingReview.readError ? t('pendingReview.loadFailed') : !reviewHeadSha ? t('pendingReview.noRevision')
-          : pendingReview.data?.headSha !== reviewHeadSha ? t('pendingReview.staleDiff')
-          : pendingReview.data.review && pendingReview.data.review.headSha !== reviewHeadSha ? t('pendingReview.older') : null),
-        onSave: (text, range) => { void saveReviewComment(text, range); },
-      } : undefined}
       diffRootRef={diffRootRef}
       drafts={fileDrafts}
       selection={selection}

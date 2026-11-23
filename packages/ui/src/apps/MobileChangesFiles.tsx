@@ -6,7 +6,6 @@ import { buildDiffTreeRows } from '@/components/views/diffFileTree';
 import { ChangeStats } from '@/components/views/git/ChangeRow';
 import { ChangedPathLabel } from '@/components/views/git/ChangedPathLabel';
 import { PierreDiffViewer, type ContextExpansionRequest } from '@/components/views/PierreDiffViewer';
-import { type PendingReviewController } from '@/components/sourceBoard/usePendingReview';
 import { cn } from '@/lib/utils';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { type FileDiffMetadata } from '@pierre/diffs';
@@ -22,7 +21,7 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { MOBILE_HEADER_BUTTON_CLASS, MOBILE_HEADER_CLASS, MOBILE_HEADER_TITLE_CLASS } from '@/components/ui/mobileHeader';
 
 export interface MobileDiffData {
-  reviewHeadSha?: string;
+  reviewHeadSha?: string | null;
   original: string;
   modified: string;
   isBinary?: boolean;
@@ -47,7 +46,6 @@ export const MobileChangesState: React.FC<{
 );
 
 export const MobileDiffDetail: React.FC<{
-  review?: PendingReviewController;
   path: string;
   previousPath?: string;
   subtitle?: string;
@@ -62,7 +60,7 @@ export const MobileDiffDetail: React.FC<{
   pendingContextExpansion?: ContextExpansionRequest | null;
   contextLoading?: boolean;
   commentOrigin?: DiffCommentOrigin;
-}> = ({ review, path, previousPath, subtitle, diff, staged = false, fileExists, unavailableReason = null, error = null, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading, commentOrigin }) => {
+}> = ({ path, previousPath, subtitle, diff, staged = false, fileExists, unavailableReason = null, error = null, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading, commentOrigin }) => {
   const { t } = useI18n();
   const language = React.useMemo(() => getLanguageFromExtension(path) || 'text', [path]);
   const wholeFileComment = useWholeFileComment({ fileLabel: path, origin: commentOrigin });
@@ -174,7 +172,6 @@ export const MobileDiffDetail: React.FC<{
               onExpandContextRequest={onExpandContextRequest}
               pendingContextExpansion={pendingContextExpansion}
               contextLoading={contextLoading}
-              review={review}
               reviewHeadSha={diff.reviewHeadSha}
             />
           </ScrollableOverlay>

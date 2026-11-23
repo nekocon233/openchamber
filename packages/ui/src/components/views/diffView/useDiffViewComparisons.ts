@@ -1,6 +1,5 @@
 import { useWorkspaceViewState, useWorkspacePathSet } from "@/hooks/useWorkspaceViewState";
 import { workspaceViewKey, workspaceRepositoryIdentity } from "@/stores/useWorkspaceViewStateStore";
-import { usePendingReview } from "@/components/sourceBoard/usePendingReview";
 import { useDiffFileFilter } from "../useDiffFileFilter";
 import React from 'react';
 import { useCommitComparison } from '@/hooks/useCommitComparison';
@@ -199,13 +198,6 @@ export function useDiffViewComparisons({
     const contentReady = activeDiffScope === 'branch' || activeDiffScope === 'commit' || activeDiffScope === 'pr'
         ? comparison.files !== null && !comparison.error
         : activeDiffScope === 'turn' ? turnDiffSettled : status !== null;
-    const reviewPull = React.useMemo(() => {
-        if (comparisonSource?.kind !== 'pr') return null;
-        const matches = prComparison.prs.filter(pull => pull.number === comparisonSource.number);
-        const repo = comparisonSource.sourceRepo ?? (matches.length === 1 ? { owner: matches[0].project.owner, repo: matches[0].project.name } : null);
-        return repo ? { ...repo, number: comparisonSource.number } : null;
-    }, [comparisonSource, prComparison.prs]);
-    const pendingReview = usePendingReview(prComparison.readContext, reviewPull, visible && activeDiffScope === 'pr');
     const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile, fetchVersions: loadComparisonVersions } = comparison;
     const commitFiles = activeDiffScope === 'commit' ? comparison.files : null;
     const commitFilesError = activeDiffScope === 'commit' ? comparison.error : null;
@@ -232,12 +224,12 @@ export function useDiffViewComparisons({
                     };
                 }
                 const response = await loadComparisonDiff(filePath, fullContext ? FULL_CONTEXT_DIFF_LINES : DEFAULT_CONTEXT_DIFF_LINES);
-                return { status: 'ready', data: { ...createTextDiffDataFromPatch(filePath, response.diff, fullContext ? 'full' : 'patch'), reviewHeadSha: response.reviewHeadSha } };
+                return { status: 'ready', data: { ...createTextDiffDataFromPatch(filePath, response.diff, fullContext ? 'full' : 'patch'), reviewHeadSha: response.reviewHeadSha ?? (activeDiffScope === 'pr' ? null : undefined) } };
             } catch (error) {
                 return { status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') };
             }
         },
-        [loadComparisonDiff, loadComparisonVersions, t]
+        [activeDiffScope, loadComparisonDiff, loadComparisonVersions, t]
     );
     const fetchComparisonFullFileEntry = React.useCallback(
         async (filePath: string): Promise<ComparisonDiffResult> => {
@@ -245,7 +237,7 @@ export function useDiffViewComparisons({
                 if (isOfficePreviewFile(filePath)) return await fetchComparisonDiffEntry(filePath);
                 const { original, modified, reviewHeadSha } = await loadComparisonFullFile(filePath);
                 const fileDiff = parseDiffFromFile({ name: filePath, contents: original }, { name: filePath, contents: modified });
-                return { status: 'ready', data: { original, modified, fileDiff, contextMode: 'full', reviewHeadSha } };
+                return { status: 'ready', data: { original, modified, fileDiff, contextMode: 'full', reviewHeadSha: reviewHeadSha ?? null } };
             } catch (error) {
                 return { status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') };
             }
@@ -356,7 +348,7 @@ export function useDiffViewComparisons({
     );
 
     return {
-        diffOwner, contentReady, allChangedFiles, fileFilter, pendingReview, displayFile, setDisplayFile, displayFileStaged, setDisplayFileStaged, expandedFiles, setExpandedFiles, expansionInitialized, setExpansionInitialized,
+        diffOwner, contentReady, allChangedFiles, fileFilter, displayFile, setDisplayFile, displayFileStaged, setDisplayFileStaged, expandedFiles, setExpandedFiles, expansionInitialized, setExpansionInitialized,
         lastTurnDiffs, turnFileCount, turnDiffLoaded, turnDiffSettled, turnDiffError, retryTurnDiff, lastTurnDiffData,
         workingFileCount, stagedFileCount, currentBranch, prComparison, pullRequestContext, selectedPr,
         prChangeRequestTerm, commitComparison, selectedCommitHash, branches, setBaseOverride, clearBaseOverride,

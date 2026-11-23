@@ -171,7 +171,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         qualifiedBranchBase, branchBaseSource, isBranchBaseResolved, showBranchOption, setComparisonRetryRevision,
         commentOrigin, changeRequestReview, reviewProvider, comparison, commitFiles, commitFilesError, branchFiles,
         branchFilesError, fetchComparisonDiffEntry, loadFullComparisonDiff, comparisonDiffData, branchFileCount,
-        diffOwner, contentReady, fileFilter, allChangedFiles, pendingReview, displayFile, setDisplayFile, displayFileStaged, setDisplayFileStaged, expandedFiles, setExpandedFiles,
+        diffOwner, contentReady, fileFilter, allChangedFiles, displayFile, setDisplayFile, displayFileStaged, setDisplayFileStaged, expandedFiles, setExpandedFiles,
         expansionInitialized, setExpansionInitialized, changedFiles, changedFilePathsKey } = useDiffViewComparisons({ currentSessionId, rootDirectory, visible: dataVisible,
         activeDiffScope, status, effectiveDirectory, binding, setActiveDiffScope, onDiffScopeChange, fetchBranches, git,
         isGitRepo, diffScope, runtimeKey, t,
@@ -275,7 +275,6 @@ export const DiffView: React.FC<DiffViewProps> = ({
                     visible={visible && isExpanded}
                     key={`${getRuntimeKey()}:${effectiveDirectory}:${file.path}`}
                     directory={effectiveDirectory}
-                    review={activeDiffScope === 'pr' && reviewProvider === 'github' ? pendingReview : undefined}
                     file={file}
                     layout={getLayoutForFile(file)}
                     wrapLines={diffWrapLines}

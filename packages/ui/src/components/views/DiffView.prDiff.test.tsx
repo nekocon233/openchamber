@@ -6,6 +6,7 @@ import type {
   ChangeRequest, PageResult, Project, SourceControlAuthStatus, SourceControlIdentity, SourceControlReadContext, SourceControlUser,
 } from '@/lib/source-control/types';
 
+const headSha = 'a'.repeat(40);
 const endpoint = { displayUrl: 'https://github.com/team/project', fingerprint: 'fetch' };
 const repository = { repositoryId: 'repo-1', configRevision: 'config', bare: false, remotes: [{ name: 'origin', fetch: endpoint, push: endpoint }] };
 const BINDING = {
@@ -35,7 +36,7 @@ const PR: ChangeRequest = {
 
 const STATUS: GitStatus = { current: 'feature-17', tracking: null, ahead: 0, behind: 0, files: [], isClean: true };
 
-test('the pull request diff on a host without change-request diffs says so and offers no retry', async () => {
+const verifyPullRequestDiff = async (servesDiff: boolean) => {
   const dom = new Window({ url: 'http://localhost' });
   const originals = new Map<string, PropertyDescriptor | undefined>();
   const globals = {
@@ -62,8 +63,17 @@ test('the pull request diff on a host without change-request diffs says so and o
     if (url.pathname === '/api/source-control/github/pulls/list') {
       return Response.json({ items: [PR], page: 1, hasMore: false } satisfies PageResult<ChangeRequest>);
     }
-    // As the server refuses a host without the diff read.
+    if (url.pathname.endsWith('/pr/review/state')) {
+      return Response.json({ connected: true, viewerIsAuthor: false, headSha, draft: null, threads: [], truncated: false });
+    }
+    if (url.pathname.endsWith('/pr/review/pending')) {
+      return Response.json({ headSha, open: true, ownPull: false, review: null });
+    }
     if (url.pathname.startsWith('/api/walkthrough/')) {
+      if (servesDiff) {
+        const patch = 'diff --git a/fixture.bin b/fixture.bin\nBinary files a/fixture.bin and b/fixture.bin differ\n';
+        return new Response(patch, { headers: { 'content-type': 'text/plain', 'x-openchamber-pr-head-sha': headSha } });
+      }
       return Response.json({ error: 'This source control provider does not offer change request walkthroughs', code: 'UNSUPPORTED_WALKTHROUGH_PROVIDER' }, { status: 422 });
     }
     // Git, status and the rest stay unanswered: the pull request scope does not wait on them.
@@ -84,7 +94,7 @@ test('the pull request diff on a host without change-request diffs says so and o
   const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
   const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const github = githubLikeDescriptor();
-  const descriptor = { ...github, features: { ...github.features, changeRequestPatch: false } };
+  const descriptor = { ...github, features: { ...github.features, changeRequestPatch: servesDiff, reviewDrafts: servesDiff } };
   useSourceControlProviderRegistry.setState({ ordered: [descriptor], byId: new Map([[descriptor.id, descriptor]]), status: 'ready', holdsList: true });
   // Opened on a pull request from the board, through the project's folder.
   const { usePullRequestSelectionStore } = await import('@/stores/usePullRequestSelectionStore');
@@ -101,6 +111,12 @@ test('the pull request diff on a host without change-request diffs says so and o
     });
     // The repository check is batched on a timer; let it and the reads after it land.
     for (let round = 0; round < 4; round += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+    if (servesDiff) {
+      expect(container.textContent).toContain('fixture.bin');
+      expect(container.querySelector('button[aria-label="Review"]')).not.toBeNull();
+      expect(paths.filter((path) => /\/pr\/review\/(state|pending)$/.test(path))).toEqual(['/api/source-control/github/pr/review/state']);
+      return;
+    }
     expect(container.textContent).toContain("GitHub doesn't serve pull request diffs");
     expect(container.textContent).not.toContain('does not offer change request walkthroughs');
     expect([...container.querySelectorAll('button')].map((button) => button.textContent)).not.toContain('Retry');
@@ -115,4 +131,7 @@ test('the pull request diff on a host without change-request diffs says so and o
       else Reflect.deleteProperty(globalThis, name);
     }
   }
-}, 30_000);
+};
+
+test('a host without change-request diffs says so and offers no retry', () => verifyPullRequestDiff(false), 30_000);
+test('PR Changes reads one review draft through the shared review panel', () => verifyPullRequestDiff(true), 30_000);
