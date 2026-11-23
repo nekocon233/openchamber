@@ -51,9 +51,16 @@ ExitPlanMode retains its execution model picker. Its initial choice comes from
 the applied combination, otherwise the current composer model; it contains no
 subagent selector. The adjacent thinking-effort picker uses the selected
 model's catalog variants, including supported Fast and Ultrafast tiers and explicit CLI
-defaults. Manual model and effort edits belong to this approval and survive
-failed submissions and remounts; the next approval starts from the combination
-again. Unsupported captured efforts require another choice before approval.
+defaults. Picking a model first applies its supported favorite effort or the
+favorite's explicit CLI default, from any list section. An older favorite can
+carry effort in a catalog alias. If multiple favorites match, the clicked
+model ID takes precedence. Without a usable favorite,
+the card uses its existing choice for the same model or the composer choice for
+the current model. For other models it checks the saved Build effort, then a
+matching settings default. The CLI supplies the effort if none applies. Manual
+model and effort edits belong to this approval and survive failed submissions
+and remounts; the next approval starts from the combination again. Unsupported
+captured efforts require another choice before approval.
 An unconfirmed execution keeps its original immutable submission while the
 picker can retain a new draft. Submitting first confirms that earlier attempt;
 an authoritative rollback reopens the draft for retry. A model change does not

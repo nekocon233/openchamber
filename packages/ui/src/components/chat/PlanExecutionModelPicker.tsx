@@ -40,7 +40,7 @@ const ActivePlanExecutionModelPicker = ({ selection, disabled, rootRef }: Props)
             allowedProviderIds={selection.providers.map((provider) => provider.id)} hiddenModels={hidden}
             selectedModel={selection.value ? { providerID: selection.value.model.providerID, modelID: selection.model?.id ?? selection.value.model.modelID } : null}
             searchQuery={query} onSearchQueryChange={setQuery}
-            onSelect={(entry) => { selection.choose(entry.providerID, entry.modelID, entry.providerID === NATIVE_PROVIDER_CODEX ? entry.variant : undefined); setOpen(false); setQuery(''); }}
+            onSelect={(entry) => { selection.choose(entry.providerID, entry.modelID); setOpen(false); setQuery(''); }}
             labels={{ searchPlaceholder: t('multirun.modelMultiSelect.search.placeholder'), noResults: t('multirun.modelMultiSelect.search.noResults'), favorites: t('multirun.modelMultiSelect.sections.favorites'), recent: t('multirun.modelMultiSelect.sections.recent'), keyboardHint: t('multirun.modelMultiSelect.keyboard.hint') }}
             maxHeightClassName="max-h-72" autoFocus onEscape={() => setOpen(false)} />
         </DropdownMenuContent>
