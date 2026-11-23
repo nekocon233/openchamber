@@ -61,6 +61,8 @@ describe('sending a review', () => {
             ] },
         },
         readFailed: false,
+        submissionPending: false,
+        summaryDraftKey: 'review-fixture',
         fileComments: true,
         addComment: async () => true, updateComment: async () => true, deleteComment: async () => true,
         reply: async () => true, setResolved: async () => true, attachThread: () => undefined, discard: async () => true,
@@ -109,13 +111,17 @@ describe('sending a review', () => {
             repositoryId: 'repo-1', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo',
         };
         const submissions: ReviewChangeRequestInput[] = [];
+        let dispatched = 0;
+        let rejectReview = () => {};
         const apis = createWebAPIs();
         apis.sourceControl.changeRequestReviewState = async () => ({
             connected: true, viewerIsAuthor: false, headSha: newerHead, draft: null, threads: [], truncated: false,
         });
         apis.sourceControl.changeRequestReview = async (payload) => {
             submissions.push(payload);
-            throw new Error('The pull request head changed');
+            return new Promise((_, reject) => {
+                rejectReview = () => reject(new Error('The pull request head changed'));
+            });
         };
         const ComparisonReview = () => {
             const { review: comparisonReview } = useComparisonReview({
@@ -123,7 +129,8 @@ describe('sending a review', () => {
                 prs: [], readContext: context, provider: 'github',
             }, context.directory, true, comparedHead);
             return comparisonReview?.state
-                ? <ReviewSubmitForm review={comparisonReview} provider="github" onDone={() => undefined} />
+                ? <ReviewSubmitForm review={comparisonReview} provider="github"
+                    onVerdictDispatched={() => { dispatched += 1; }} onDone={() => undefined} />
                 : null;
         };
         const providerRegistry = useSourceControlProviderRegistry.getState();
@@ -141,6 +148,9 @@ describe('sending a review', () => {
             expect(approve).toBeTruthy();
             await act(async () => approve?.click());
             expect(submissions.map(({ target }) => target.headSha)).toEqual([comparedHead]);
+            expect(dispatched).toBe(1);
+            expect(approve?.disabled).toBe(true);
+            await act(async () => rejectReview());
         } finally {
             await act(async () => useSourceControlProviderRegistry.setState(providerRegistry));
         }

@@ -18,6 +18,10 @@ This module lets a person review a change request from its diff: the comments un
 - `owner` may be empty: a top-level project on a path-style host (Gerrit) has none.
 - Authors can submit comments on their own change requests even when the provider disallows their verdicts or votes.
 - A narrow toolbar keeps the pending-comment count visible when it folds the Review label.
+- Approving or requesting changes from a comparison with a return target returns
+  on dispatch. The shared PR action lock covers the pending write. The review
+  summary stays in the comparison's workspace draft until the receipt
+  acknowledges its text, and successful verdicts refresh the project PR lists.
 
 ## Decisions
 

@@ -186,9 +186,10 @@ The project PR host supplies each row's filtered file statistics through
 through `ReferencePreview.pullFileStats`. The project view owns the reads and
 file-type exclusions. Picker and board previews use the provider totals.
 
-Project PR rows use a list with a button for the title and a separate Changes
-button for the same PR. Both can be reached by keyboard. Reference pickers
-use listbox options for their selection model.
+Project PR rows use a title button that opens Changes when the provider serves
+the diff. The adjacent Details button opens the preview. For providers without
+a diff, the title opens the preview directly. Reference pickers use listbox
+options for their selection model.
 
 - The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
   open PRs in Mine and open, closed, and merged PRs in All.

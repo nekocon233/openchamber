@@ -1,6 +1,7 @@
 import { useInContextPanelHeader } from "@/components/layout/contextPanelHeaderSlotContext";
 import { useWorkspaceScroll, WorkspaceViewScope } from "@/hooks/useWorkspaceViewState";
 import { PullRequestNavigation } from "./git/PullRequestNavigation";
+import { usePullRequestNavigation } from "./git/usePullRequestNavigation";
 import { DiffFileTypeFilter, DiffFileFilterEmpty } from "./DiffFileTypeFilter";
 import { MovablePane } from "@/components/layout/MovablePane";
 import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from "@/components/layout/contextPanelHeaderSlot";
@@ -249,13 +250,19 @@ export const DiffView: React.FC<DiffViewProps> = ({
         git, activeDiffStaged, setDiff, files, openContextFileAtLine, setComparisonRetryRevision,
     });
     useWorkspaceScroll(diffScrollRef, diffOwner, contentReady, visible);
+    const pullRequestNavigation = usePullRequestNavigation({
+        directory: activeDiffScope === 'pr' ? effectiveDirectory ?? null : null,
+        source: selectedPr,
+        context: prComparison.readContext,
+        onLeaveChanges,
+    });
     const selectFromList = (file: string) => {
         fileListHost?.onSelect();
         handleSelectFileAndScroll(file);
     };
     const renderFileNavigation = () => (
         <div className="flex min-w-0 items-center gap-1">
-            {activeDiffScope === 'pr' && <PullRequestNavigation compact directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} onLeaveChanges={onLeaveChanges} />}
+            <PullRequestNavigation compact navigation={pullRequestNavigation} />
             <DiffFileTypeFilter options={fileFilter.options} excludedTypes={fileFilter.excludedTypes} hiddenCount={fileFilter.hiddenCount} onChange={fileFilter.setTypes} />
         </div>
     );
@@ -629,6 +636,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
                             provider={reviewProvider}
                             className="diff-toolbar__review-button"
                             labelClassName="diff-toolbar__review-label"
+                            onVerdictDispatched={pullRequestNavigation ? () => pullRequestNavigation.navigate('origin') : undefined}
                         />
                     ) : null}
                     {changedFiles.length > 0 && showReviewAction && (

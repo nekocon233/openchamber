@@ -319,7 +319,8 @@ the document toolbar keeps these actions available. Returning restores the exact
 when it is absent from the loaded page. The existing query, category, list
 position and reply draft stay in the retained PR pane. The comparison's
 repository/account context and PR identity must still match the return target.
-The list row's Changes button opens the comparison directly. Back restores
+Activating a PR row opens the comparison directly when the diff is available.
+The row's Details button opens the preview. Back restores
 the original project list, including its category, search and scroll. These
 list-origin comparisons offer an adjacent action to open the compared PR's
 details. Both navigation actions close the resident Changes document before

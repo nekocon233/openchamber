@@ -475,11 +475,12 @@ export const ReferenceBrowserList: React.FC<{
     onOpenSettings: () => void;
     rowSelection?: (item: ReferencePickerItem, key: string) => ReferenceBrowserRowSelection;
     onActivate?: (item: ReferencePickerItem) => void;
+    onSelectItem?: (item: ReferencePickerItem) => void;
     onShow?: () => void;
     notice?: React.ReactNode;
     renderPullFileStats?: (pull: RepositoryChangeRequestReference) => React.ReactNode;
-    renderPullChanges?: (pull: RepositoryChangeRequestReference) => React.ReactNode;
-}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onShow, notice, renderPullFileStats, renderPullChanges }) => {
+    renderPullAction?: (pull: RepositoryChangeRequestReference) => React.ReactNode;
+}> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onSelectItem, onShow, notice, renderPullFileStats, renderPullAction }) => {
     const { t } = useI18n();
     const { source, sourceStatus, list, items, term, descriptor, isMobile, directory, debouncedQuery, repositoryKind, tracker } = browser;
     const projectPulls = browser.mode === 'project-pulls';
@@ -570,14 +571,15 @@ export const ReferenceBrowserList: React.FC<{
                             showChecks={projectPulls && browser.descriptor.id === 'github'}
                             pullFileStats={pull ? renderPullFileStats?.(pull) : undefined}
                             listItem={projectPulls}
-                            pullChanges={pull ? renderPullChanges?.(pull) : undefined}
+                            pullAction={pull ? renderPullAction?.(pull) : undefined}
                             showRepository={browser.across}
                             highlighted={!isMobile && key === browser.effectiveHighlightKey}
                             checked={selection?.checked ?? null}
                             diffIncluded={selection?.diffIncluded ?? false}
                             now={browser.now}
                             onHighlight={() => {
-                                browser.showItem(key);
+                                if (onSelectItem) onSelectItem(item);
+                                else browser.showItem(key);
                                 onShow?.();
                             }}
                             onToggle={() => selection?.onToggle()}
