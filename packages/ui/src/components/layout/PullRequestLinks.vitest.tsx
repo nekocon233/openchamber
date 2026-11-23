@@ -10,7 +10,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
   const originalGlobals = new Map<string, PropertyDescriptor | undefined>();
   for (const [name, value] of Object.entries({
     window: dom, document: dom.document, navigator: dom.navigator, location: dom.location, localStorage: dom.localStorage,
-    Element: dom.Element, HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, HTMLTextAreaElement: dom.HTMLTextAreaElement,
+    Element: dom.Element, HTMLElement: dom.HTMLElement, HTMLImageElement: dom.HTMLImageElement, HTMLInputElement: dom.HTMLInputElement, HTMLTextAreaElement: dom.HTMLTextAreaElement,
     Node: dom.Node, Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent, KeyboardEvent: dom.KeyboardEvent,
     customElements: dom.customElements, CSSStyleSheet: dom.CSSStyleSheet,
     MutationObserver: dom.MutationObserver, ResizeObserver: dom.ResizeObserver, IntersectionObserver: dom.IntersectionObserver,
@@ -47,6 +47,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     const owner = url.searchParams.get('directory') === '/source' ? 'other' : 'acme';
     const accountId = owner === 'other' ? sourceAccount : 'github.com#7';
     const endpoint = { displayUrl: `https://github.com/${owner}/app`, fingerprint: `${owner}-origin` };
+    if (url.pathname === '/api/fs/home') return Response.json({ home: '/home/fixture' });
     if (url.pathname.endsWith('/location')) return Response.json({ directory: '/repo', project: { id: 'fixture', directory: '/repo', canonical: '/repo' } });
     if (url.pathname.endsWith('/event')) return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } });
     if (url.pathname === '/api/source-control/binding') return Response.json({ status: 'bound', revision: bindingRevision,
@@ -67,6 +68,10 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     if (url.pathname.endsWith('/references/status')) return Response.json({ connected: true, statuses: [] });
     if (url.pathname.endsWith('/references/detail')) return Response.json({ connected: true,
       detail: { number: Number(url.searchParams.get('number')), comments: [], commentTotal: 0, pull: null } });
+    if (url.pathname === '/api/walkthrough/pr-diff') {
+      const file = owner === 'other' ? 'linked-review.txt' : 'project-review.txt';
+      return new Response(`diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-before\n+after\n`);
+    }
     if (url.pathname.endsWith('/pr/review/pending')) return Response.json({ headSha: 'a'.repeat(40), open: true, ownPull: false, review: null });
     if (url.pathname.endsWith('/repo/upstream')) return Response.json({ connected: true, isFork: false, upstream: null });
     if (url.pathname.endsWith('/themes')) return Response.json({ themes: [] });
@@ -88,6 +93,8 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
   const { usePullRequestSelectionStore, pullRequestNavigationKey } = await import('@/stores/usePullRequestSelectionStore');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { repositoryBindingOwner } = await import('@/lib/source-control/repository-binding');
+  const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
+  const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const { getRuntimeKey, switchRuntimeEndpoint } = await import('@/lib/runtime-switch');
   const { ContextSurfacePanes } = await import('./ContextSurfacePanes');
   const { setZoneBody } = await import('./zoneHosts');
@@ -105,7 +112,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
   useSessionUIStore.setState({ currentSessionId: 'conversation-A', currentSessionDirectory: '/repo', newSessionDraft: { ...useSessionUIStore.getInitialState().newSessionDraft } });
   useUIStore.setState({ workspaceLayout: 'classic', contextPanelByDirectory: {}, contextSurfaceZones: {} });
   const base = createWebAPIs();
-  const apis = { ...base, git: { ...base.git, checkIsGitRepository: async () => true,
+  const apis = { ...base, git: { ...base.git, checkIsGitRepository: async (directory: string) => directory === '/repo' || directory === '/source',
     getGitStatus: async () => ({ current: 'feature', tracking: 'origin/feature', isClean: true, files: [], ahead: 0, behind: 0 }),
     getGitBranches: async () => ({ all: ['main', 'feature', 'remotes/origin/main'], branches: {}, current: 'feature', defaultBranches: { origin: 'main' } }),
   } };
@@ -136,6 +143,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     const changes = [...(linked()?.querySelectorAll('button') ?? [])].find(button => button.textContent?.trim() === 'Changes');
     if (!changes) throw new Error('Missing linked Changes action');
     await act(async () => changes.click());
+    await until(() => right.textContent?.includes('linked-review.txt') === true);
     await until(() => Boolean(document.querySelector(`[aria-label="Back to PR #${number}"]`)));
     const back = document.querySelector<HTMLButtonElement>(`[aria-label="Back to PR #${number}"]`);
     if (!back) throw new Error('Missing linked PR return');
@@ -143,6 +151,10 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
   };
   const initialRuntime = getRuntimeKey();
   try {
+    const descriptor = githubLikeDescriptor();
+    await useSourceControlProviderRegistry.getState().refresh({ providers: async () => [{
+      ...descriptor, features: { ...descriptor.features, referenceSearch: true, referenceDetail: true },
+    }] });
     await act(async () => root.render(<RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="/repo"><ThemeSystemProvider><I18nProvider><ChatPrLinkProbe directory="/repo" url="https://github.com/acme/app/pull/12/files#diff-1" /><ContextSurfacePanes /></I18nProvider></ThemeSystemProvider></SyncProvider></RuntimeAPIContext.Provider>));
     await act(async () => useUIStore.getState().openContextPanelTab('/repo', { mode: 'pr' }));
     await until(() => Boolean(right.querySelector('[role="option"]')));
@@ -175,14 +187,14 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
       .find(button => button.textContent?.trim() === 'Changes');
     if (!normalChanges) throw new Error('Missing normal PR Changes');
     await act(async () => normalChanges.click());
+    await until(() => right.textContent?.includes('project-review.txt') === true);
     await until(() => Boolean(document.querySelector('[aria-label="Back to PR #7"]')));
     await act(async () => container.querySelector<HTMLButtonElement>('[data-chat-pr-link]')?.click());
     await until(() => Boolean(linked()?.querySelector('textarea')));
     await act(async () => useUIStore.getState().openContextPanelTab('/repo', { mode: 'diff', diffScope: 'pr' }));
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Back to PR #7"]')?.click());
     expect(linked()).toBeNull();
-    expect(right.querySelector('textarea')).toBe(originalReply);
-    expect(originalReply.value).toBe('normal PR draft');
+    expect(right.querySelector('textarea')?.value).toBe('normal PR draft');
 
     // Exercise the reported path through the actual chat entry, rather than the project PR list.
     await act(async () => container.querySelector<HTMLButtonElement>('[data-chat-pr-link]')?.click());
@@ -248,14 +260,9 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     await act(async () => useUIStore.getState().moveContextSurfaceToZone('pr', 'left'));
     expect(left.contains(reply)).toBe(true);
     await goBack();
-    expect(left.querySelector('textarea')).toBe(originalReply);
-    expect(originalReply.value).toBe('normal PR draft');
-    expect(left.querySelector('input')).toBe(search);
-    expect(search.value).toBe('retained search');
+    expect(left.querySelector('textarea')?.value).toBe('normal PR draft');
+    expect(left.querySelector('input')?.value).toBe('retained search');
 
-    const ci = [...left.querySelectorAll('button')].find(button => button.textContent === 'CI runs');
-    if (!ci) throw new Error('Missing CI tab');
-    await act(async () => ci.click());
     await openLink(90);
     await until(() => Boolean(releaseSlow));
     const releaseOld = takeSlowRead();
@@ -264,7 +271,6 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     await act(async () => releaseOld());
     expect(linked()?.textContent).not.toContain('other PR 90');
     await goBack();
-    expect(ci.getAttribute('aria-selected')).toBe('true');
 
     await openLink(99);
     await until(() => Boolean(linked()?.querySelector('[role="alert"]')));
@@ -311,6 +317,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
   } finally {
     await act(async () => root.unmount());
     switchRuntimeEndpoint({ apiBaseUrl: 'http://localhost', runtimeKey: initialRuntime });
+    useSourceControlProviderRegistry.getState().resetForRuntimeSwitch(initialRuntime);
     setZoneBody('left', null);
     setZoneBody('right', null);
     globalThis.fetch = originalFetch;

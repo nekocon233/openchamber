@@ -54,6 +54,9 @@ operation contracts belong to the runtime APIs and source-control modules.
 
 ### Change request state
 
+- Project and linked PR previews hand Changes and Walkthrough the checkout
+  directory used by the preview. The repository ID stays in the read context
+  as the binding's identity across worktrees.
 - A created change request is associated with the open session only when that
   session works in the Git view's directory. The view can show another worktree.
 - An automatically detected base can arrive after the form opens and updates
