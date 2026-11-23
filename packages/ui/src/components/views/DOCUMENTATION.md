@@ -264,16 +264,14 @@ GitHub merge conflicts appear by name in project PR rows and details, including
 directly linked previews. Each detail reads the selected PR's status even when
 it was not in a loaded list. An explicit refresh reads mergeability again.
 
-PR previews share `SourceBoardActions` with the board. On GitHub, a host that
-advertises administrator merge adds a separate Force merge button beside the
-ordinary merge control, with the same selected method and a destructive
-confirmation. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
+PR previews share the merge control and method picker in `SourceBoardActions`
+with the board. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
 owns capability gating, target changes and pending-operation behavior.
 
 Merges, approvals and requests for changes in project details and linked previews
 invoke their existing Back action immediately after dispatch. This includes
-administrator merges and verdicts that submit a pending review. Confirmation still precedes merge
-dispatch; cancelling it keeps the detail. The navigation clears only the
+verdicts that submit a pending review. Merge confirmation precedes dispatch.
+Cancelling it keeps the detail. The navigation clears only the
 submitted detail's selection and preserves the destination's retained state.
 Progress and results continue in repository-labelled toasts after returning;
 failures and queued merges never navigate again. Unposted text remains saved.

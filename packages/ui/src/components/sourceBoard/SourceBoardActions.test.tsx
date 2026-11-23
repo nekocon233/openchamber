@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import React, { act } from 'react';
 import { Window } from 'happy-dom';
 import type { GitHubPullReference, SourceControlAPI, SourceControlReadContext } from '@/lib/api/types';
-import type { MergeChangeRequestInput, SourceControlCapabilities } from '@/lib/source-control/types';
+import type { MergeChangeRequestInput, SourceControlCapabilities, SourceControlMergeMutationResult } from '@/lib/source-control/types';
 
 const browser = new Window({ url: 'http://source-board.test' });
 const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -53,12 +53,11 @@ const host = document.createElement('div');
 document.body.append(host);
 const sdk = OpenCode.make({ baseUrl: 'http://source-board.test', fetch: async () => Response.json([]) });
 let root: ReturnType<typeof createRoot> | null = null;
-let forceCapability: boolean | undefined = true;
 let capabilityFailure = false;
 let capabilityGate: Promise<void> | null = null;
 let mergeGate: Promise<void> | null = null;
 let mergeFailure: Error | null = null;
-let merged = true;
+let mergeResult: SourceControlMergeMutationResult;
 let mergeCalls: MergeChangeRequestInput[] = [];
 let refreshes = 0;
 let completions: number[] = [];
@@ -92,10 +91,10 @@ const dialog = () => {
     if (!found) throw new Error('Merge confirmation is missing');
     return found;
 };
-const confirm = () => click(button('Force merge', dialog()));
+const confirm = () => click(button('Merge', dialog()));
 
 beforeEach(() => {
-    forceCapability = true; capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; merged = true; mergeCalls = []; refreshes = 0; completions = [];
+    capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; mergeResult = { merged: true }; mergeCalls = []; refreshes = 0; completions = [];
     initializeRuntimeEndpoint({ apiBaseUrl: 'http://source-board.test', runtimeKey: 'source-board-one' });
     useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
     rememberMergeMethod('squash');
@@ -108,9 +107,8 @@ beforeEach(() => {
                 identity, authentication: true, authenticationMethods: {
                     device: { available: true }, pat: { available: true }, cli: { available: true },
                 }, multipleAccounts: true, projects: true, issues: true, changeRequests: true, draftChangeRequests: true,
-                mergeChangeRequests: true, mergeMethods: ['merge', 'squash', 'rebase'], ci: true,
+                mergeChangeRequests: true, forceMergeChangeRequests: true, mergeMethods: ['merge', 'squash', 'rebase'], ci: true,
             };
-            if (forceCapability !== undefined) capabilities.forceMergeChangeRequests = forceCapability;
             return capabilities;
         },
         changeRequestMerge: async input => {
@@ -118,7 +116,7 @@ beforeEach(() => {
             if (mergeGate) await mergeGate;
             if (mergeFailure) throw mergeFailure;
             return { status: 'succeeded', actor: { provider: input.provider, instance: input.instance, providerAccountId: 'provider-user-seven' },
-                replayed: false, result: { merged }, target: {
+                replayed: false, result: mergeResult, target: {
                     ...input.target, project: { ...input.target.project, id: 'fixture/repository' }, repositoryId: input.repositoryId,
                     bindingRevision: input.bindingRevision, primaryRemote: input.primaryRemote,
                 } };
@@ -141,41 +139,37 @@ afterAll(async () => {
     }
 });
 
-test('force merge uses a separate destructive confirmation and the selected method and exact displayed head', async () => {
+test('only the standard merge action is offered when the server advertises force merge', async () => {
     rememberMergeMethod('rebase');
     await render();
-    await click(button('Force merge'));
-    expect(dialog().textContent).toContain('Force merge #17?');
+    expect(host.textContent).not.toContain('Force merge');
+    await click(button('Rebase and merge'));
+    expect(dialog().textContent).toContain('Merge pull request #17?');
     expect(dialog().textContent).toContain('main');
-    expect(dialog().textContent).toContain('Rebase and merge');
-    expect(button('Force merge', dialog()).className).toContain('destructive');
     expect(mergeCalls).toEqual([]);
     await confirm(); await settle();
     expect(mergeCalls).toHaveLength(1);
-    expect(mergeCalls[0]).toMatchObject({ ...CONTEXT, method: 'rebase', force: true, target: {
+    expect(mergeCalls[0]).toMatchObject({ ...CONTEXT, method: 'rebase', target: {
         project: { owner: 'fixture', name: 'repository' }, number: 17, head: 'parser-fix', base: 'main', headSha: PULL.headSha,
     } });
+    expect(mergeCalls[0]).not.toHaveProperty('force');
     expect(mergeCalls[0].idempotencyKey.length).toBeGreaterThan(0);
     expect(refreshes).toBe(1);
     expect(completions).toEqual([0]);
 });
 
-test('ordinary merge never includes force and canceling force never dispatches or refreshes', async () => {
+test('canceling the merge confirmation never dispatches or refreshes', async () => {
     await render();
-    await click(button('Force merge'));
+    await click(button('Squash and merge'));
     await click(button('Cancel', dialog()));
     expect(mergeCalls).toEqual([]);
     expect(refreshes).toBe(0);
     expect(completions).toEqual([]);
-    await click(button('Squash and merge'));
-    await click(button('Merge', dialog())); await settle();
-    expect(mergeCalls).toHaveLength(1);
-    expect('force' in mergeCalls[0]).toBe(false);
-    expect(completions).toEqual([0]);
+    expect(button('Squash and merge').disabled).toBe(false);
 });
 
 test('a queued merge returns on dispatch and refreshes when its result arrives', async () => {
-    merged = false;
+    mergeResult = { merged: false, outcome: 'queued' };
     await render(); await click(button('Squash and merge'));
     await click(button('Merge', dialog())); await settle();
     expect(mergeCalls).toHaveLength(1);
@@ -193,7 +187,6 @@ test('dispatch returns before delivery and a reopened detail cannot submit the s
     await act(async () => root?.unmount()); root = null;
     await render();
     expect(button('Squash and merge').disabled).toBe(true);
-    expect(button('Force merge').disabled).toBe(true);
     await act(async () => { gate.release(); }); await settle();
     expect(refreshes).toBe(1);
     expect(completions).toEqual([0]);
@@ -216,48 +209,28 @@ test('a failure after returning keeps repository-labelled feedback and releases 
     expect(button('Squash and merge').disabled).toBe(false);
 });
 
-test('force merge requires explicit support, GitHub, an open non-draft pull and a head SHA', async () => {
-    for (const supported of [undefined, false]) {
-        forceCapability = supported;
-        await render();
-        expect(host.textContent).not.toContain('Force merge');
-        await act(async () => root?.unmount()); root = null;
-    }
-    forceCapability = true;
-    await render({ ...PULL, provider: 'gitlab' }, { ...CONTEXT, provider: 'gitlab', instance: 'gitlab.com' });
-    expect(host.textContent).not.toContain('Force merge');
-    for (const pull of [{ ...PULL, draft: true }, { ...PULL, state: 'closed' as const }, { ...PULL, state: 'merged' as const }]) {
-        await render(pull);
-        expect(host.textContent).not.toContain('Force merge');
-    }
-    await render({ ...PULL, headSha: '' });
-    expect(button('Force merge').disabled).toBe(true);
-    expect(mergeCalls).toEqual([]);
-});
-
-test('loading or failed capabilities cannot enable force merge', async () => {
+test('loading or failed capabilities leave merge unavailable', async () => {
     const gate = deferred(); capabilityGate = gate.promise;
     await render();
-    expect(host.textContent).not.toContain('Force merge');
+    expect(host.textContent).not.toContain('Squash and merge');
     capabilityFailure = true;
     await act(async () => { gate.release(); }); await settle();
-    expect(host.textContent).not.toContain('Force merge');
+    expect(host.textContent).not.toContain('Squash and merge');
     expect(mergeCalls).toEqual([]);
 });
 
-test('normal and force merge share one lock through confirmation and provider delivery', async () => {
+test('repeated clicks share one confirmation and dispatch', async () => {
     const gate = deferred(); mergeGate = gate.promise;
     await render();
-    const normal = button('Squash and merge'); const force = button('Force merge');
-    await act(async () => { force.click(); normal.click(); force.click(); });
-    expect(dialog().textContent).toContain('Force merge #17?');
+    const merge = button('Squash and merge');
+    await act(async () => { merge.click(); merge.click(); merge.click(); });
+    expect(dialog().textContent).toContain('Merge pull request #17?');
     await confirm(); await settle();
     expect(button('Squash and merge').disabled).toBe(true);
-    expect(button('Force merge').disabled).toBe(true);
     expect(mergeCalls).toHaveLength(1);
     await act(async () => { gate.release(); }); await settle();
     expect(mergeCalls).toHaveLength(1);
-    expect(button('Force merge').disabled).toBe(false);
+    expect(button('Squash and merge').disabled).toBe(false);
 });
 
 test('changing the pull, head or binding while confirming cancels the old operation', async () => {
@@ -267,7 +240,7 @@ test('changing the pull, head or binding while confirming cancels the old operat
         { pull: PULL, context: { ...CONTEXT, bindingRevision: 4 } },
         { pull: PULL, context: { ...CONTEXT, directory: '/fixture/other' } },
     ]) {
-        await render(); await click(button('Force merge'));
+        await render(); await click(button('Squash and merge'));
         await render(replacement.pull, replacement.context);
         expect(document.querySelector('[role="dialog"]')).toBeNull();
         expect(mergeCalls).toEqual([]);
@@ -276,7 +249,7 @@ test('changing the pull, head or binding while confirming cancels the old operat
 });
 
 test('a runtime switch with unchanged props cancels confirmation and sends nothing', async () => {
-    await render(); await click(button('Force merge'));
+    await render(); await click(button('Squash and merge'));
     await act(async () => { switchRuntimeEndpoint({ apiBaseUrl: 'http://other-source-board.test', runtimeKey: 'source-board-two' }); });
     await settle();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -284,13 +257,12 @@ test('a runtime switch with unchanged props cancels confirmation and sends nothi
     expect(refreshes).toBe(0);
 });
 
-test('provider failure refreshes once without retrying or changing merge mode', async () => {
+test('provider failure refreshes once without retrying', async () => {
     mergeFailure = new Error('GitHub rejected the request');
-    await render(); await click(button('Force merge')); await confirm(); await settle();
+    await render(); await click(button('Squash and merge')); await confirm(); await settle();
     expect(mergeCalls).toHaveLength(1);
-    expect(mergeCalls[0].force).toBe(true);
     expect(refreshes).toBe(1);
-    expect(button('Force merge').disabled).toBe(false);
+    expect(button('Squash and merge').disabled).toBe(false);
     expect(completions).toEqual([0]);
 });
 
@@ -298,10 +270,10 @@ for (const failed of [false, true]) {
     test(`a late ${failed ? 'failure' : 'success'} cannot refresh a different pull or unlock a duplicate dispatch`, async () => {
         const gate = deferred(); mergeGate = gate.promise;
         mergeFailure = failed ? new Error('Old pull request failed') : null;
-        await render(PULL, CONTEXT, false); await click(button('Force merge')); await confirm();
+        await render(PULL, CONTEXT, false); await click(button('Squash and merge')); await confirm();
         expect(mergeCalls).toHaveLength(1);
         await render({ ...PULL, number: 18 }, CONTEXT, false);
-        await click(button('Force merge'));
+        await click(button('Squash and merge'));
         expect(mergeCalls).toHaveLength(1);
         expect(document.querySelector('[role="dialog"]')).toBeNull();
         await act(async () => { gate.release(); }); await settle();
