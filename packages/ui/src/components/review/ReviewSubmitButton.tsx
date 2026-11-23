@@ -20,19 +20,12 @@ import { SourceBoardVotes } from '@/components/sourceBoard/SourceBoardVotes';
 
 import { reviewDraftCount, type ChangeRequestReview } from './useChangeRequestReview';
 
-type VerdictAction = Exclude<ReviewVerdict, 'comment'>;
-const VERDICT_ACTIONS = {
-    approve: { label: 'sourceBoard.reply.approve', icon: 'check' },
-    'request-changes': { label: 'sourceBoard.reply.requestChanges', icon: 'file-edit' },
-} as const;
-
 export const ReviewSubmitForm: React.FC<{
     review: ChangeRequestReview;
     provider: SourceControlProvider;
     voteLabels?: ChangeRequestVoteLabel[];
-    verdict?: VerdictAction;
     onDone: () => void;
-}> = ({ review, provider, voteLabels, verdict, onDone }) => {
+}> = ({ review, provider, voteLabels, onDone }) => {
     const { t } = useI18n();
     const { isMobile } = useDeviceInfo();
     const buttonClass = isMobile ? 'min-w-0 px-1.5' : undefined;
@@ -45,18 +38,16 @@ export const ReviewSubmitForm: React.FC<{
     const body = text.trim() ? text : undefined;
     const labels = reviewLabelsOf(descriptor, { voteLabels });
     const canJudge = !review.state?.viewerIsAuthor || descriptor.features.authorCanReview;
-    const blocked = busy !== null || review.submissionPending || Boolean(verdict && review.readFailed);
-    const verdicts: readonly VerdictAction[] = verdict ? [verdict] : ['request-changes', 'approve'];
 
     const send = async (kind: ReviewVerdict | 'votes') => {
-        if (blocked) return;
+        if (busy) return;
         setBusy(kind);
         const sent = await review.submit(kind === 'votes' ? { votes, publishDrafts: true, body } : { verdict: kind, body });
         setBusy(null);
         if (sent) onDone();
     };
     const discard = async () => {
-        if (blocked) return;
+        if (busy) return;
         const confirmed = await confirmation.confirm({
             title: t('review.discard.title'),
             message: t(count === 1 ? 'review.discard.message.one' : 'review.discard.message.other', { count }),
@@ -79,12 +70,12 @@ export const ReviewSubmitForm: React.FC<{
                 onChange={(event) => setText(event.target.value)}
                 placeholder={t('review.submit.placeholder')}
                 aria-label={t('review.submit.placeholder')}
-                disabled={blocked}
+                disabled={busy !== null}
                 rows={3}
                 autoFocus
             />
             {labels.model === 'votes' && canJudge ? (
-                <SourceBoardVotes labels={labels.labels} votes={votes} onChange={setVotes} disabled={blocked} />
+                <SourceBoardVotes labels={labels.labels} votes={votes} onChange={setVotes} disabled={busy !== null} />
             ) : null}
             {count > 0 ? (
                 <div className="flex items-center gap-2">
@@ -93,7 +84,7 @@ export const ReviewSubmitForm: React.FC<{
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <span className="inline-flex shrink-0">
-                                    <Button size="icon" variant="ghost" className="size-8 shrink-0 text-muted-foreground" disabled={blocked} aria-label={t('review.discard.button')} onClick={() => void discard()}>
+                                    <Button size="icon" variant="ghost" className="size-8 shrink-0 text-muted-foreground" disabled={busy !== null} aria-label={t('review.discard.button')} onClick={() => void discard()}>
                                         {busy === 'discard' ? <Spinner className="size-4" /> : <Icon name="delete-bin" className="size-4" />}
                                     </Button>
                                 </span>
@@ -107,24 +98,30 @@ export const ReviewSubmitForm: React.FC<{
             {review.state?.truncated ? <p className="typography-meta text-muted-foreground">{t('review.submit.truncated')}</p> : null}
             <div className="flex flex-wrap items-center justify-end gap-2">
                 {count > 0 && !isMobile ? (
-                    <Button size="sm" variant="ghost" className="me-auto text-muted-foreground" disabled={blocked} onClick={() => void discard()}>
+                    <Button size="sm" variant="ghost" className="me-auto text-muted-foreground" disabled={busy !== null} onClick={() => void discard()}>
                         {busyIcon('discard')}
                         {t('review.discard.button')}
                     </Button>
                 ) : null}
-                {labels.model === 'verdict' && canJudge ? verdicts.map((kind) => (
-                    <Button key={kind} size="sm" variant={verdict ? 'default' : 'outline'} className={buttonClass} disabled={blocked} onClick={() => void send(kind)}>
-                        {busyIcon(kind)}
-                        {t(VERDICT_ACTIONS[kind].label)}
-                    </Button>
-                )) : null}
-                {verdict ? null : labels.model === 'votes' ? (
-                    <Button size="sm" disabled={blocked || (Object.keys(votes).length === 0 && !body && count === 0)} onClick={() => void send('votes')}>
+                {labels.model === 'verdict' && canJudge ? (
+                    <>
+                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null} onClick={() => void send('request-changes')}>
+                            {busyIcon('request-changes')}
+                            {t('sourceBoard.reply.requestChanges')}
+                        </Button>
+                        <Button size="sm" variant="outline" className={buttonClass} disabled={busy !== null} onClick={() => void send('approve')}>
+                            {busyIcon('approve')}
+                            {t('sourceBoard.reply.approve')}
+                        </Button>
+                    </>
+                ) : null}
+                {labels.model === 'votes' ? (
+                    <Button size="sm" disabled={busy !== null || (Object.keys(votes).length === 0 && !body && count === 0)} onClick={() => void send('votes')}>
                         {busyIcon('votes')}
                         {sendLabel}
                     </Button>
                 ) : (
-                    <Button size="sm" className={buttonClass} disabled={blocked || (!body && count === 0)} onClick={() => void send('comment')}>
+                    <Button size="sm" className={buttonClass} disabled={busy !== null || (!body && count === 0)} onClick={() => void send('comment')}>
                         {busyIcon('comment')}
                         {sendLabel}
                     </Button>
@@ -141,18 +138,13 @@ export const ReviewSubmitButton: React.FC<{
     voteLabels?: ChangeRequestVoteLabel[];
     className?: string;
     labelClassName?: string;
-    showVerdictActions?: boolean;
-}> = ({ review, provider, voteLabels, className, labelClassName, showVerdictActions = false }) => {
+}> = ({ review, provider, voteLabels, className, labelClassName }) => {
     const { t } = useI18n();
     const { isMobile } = useDeviceInfo();
-    const descriptor = useSourceControlProvider(provider);
     const [open, setOpen] = React.useState(false);
     const count = reviewDraftCount(review);
     const label = count > 0 ? t('review.submit.buttonWithCount', { count }) : t('review.submit.button');
-    const form = (verdict?: VerdictAction) => <ReviewSubmitForm review={review} provider={provider} voteLabels={voteLabels} verdict={verdict} onDone={() => setOpen(false)} />;
-    const canShowVerdicts = showVerdictActions && review.state && !review.readFailed
-        && reviewLabelsOf(descriptor, { voteLabels }).model === 'verdict'
-        && (!review.state.viewerIsAuthor || descriptor.features.authorCanReview);
+    const form = <ReviewSubmitForm review={review} provider={provider} voteLabels={voteLabels} onDone={() => setOpen(false)} />;
     const content = (
         <>
             <Icon name="search-eye" className="size-4" />
@@ -168,54 +160,31 @@ export const ReviewSubmitButton: React.FC<{
                     {label}
                 </Button>
                 <MobileOverlayPanel open={open} onClose={() => setOpen(false)} title={t('review.submit.button')}>
-                    <div className="p-3">{form()}</div>
+                    <div className="p-3">{form}</div>
                 </MobileOverlayPanel>
             </>
         );
     }
     return (
-        <Popover.Root<VerdictAction> open={open} onOpenChange={setOpen}>
-            {({ payload }) => (
-                <>
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <span className="inline-flex flex-shrink-0">
-                                <Popover.Trigger render={<Button size="sm" className={cn('h-7 flex-shrink-0 gap-1.5 px-2', className)} aria-label={label} />}>
-                                    {content}
-                                </Popover.Trigger>
-                            </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" sideOffset={6}>{t('contextTooltips.diff.reviewSubmit')}</TooltipContent>
-                    </Tooltip>
-                    {canShowVerdicts ? (['approve', 'request-changes'] as const).map((kind) => {
-                        const action = VERDICT_ACTIONS[kind];
-                        const actionLabel = t(action.label);
-                        return (
-                            <Tooltip key={kind}>
-                                <TooltipTrigger asChild>
-                                    <span className="diff-toolbar__verdict-action inline-flex flex-shrink-0">
-                                        <Popover.Trigger payload={kind} disabled={review.submissionPending} render={
-                                            <Button size="sm" variant="outline" className={className} aria-label={actionLabel} />
-                                        }>
-                                            <Icon name={action.icon} className="size-4" />
-                                            <span className={labelClassName}>{actionLabel}</span>
-                                        </Popover.Trigger>
-                                    </span>
-                                </TooltipTrigger>
-                                <TooltipContent side="bottom" sideOffset={6}>{actionLabel}</TooltipContent>
-                            </Tooltip>
-                        );
-                    }) : null}
-                    <Popover.Portal>
-                        <Popover.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
-                            <Popover.Popup aria-label={payload ? t(VERDICT_ACTIONS[payload].label) : t('review.submit.button')} className={cn(dropdownMenuPopupClass, 'w-[34rem] max-w-[calc(100vw-2rem)] p-3')}>
-                                {form(payload)}
-                                <GlassRedrawGuard />
-                            </Popover.Popup>
-                        </Popover.Positioner>
-                    </Popover.Portal>
-                </>
-            )}
+        <Popover.Root open={open} onOpenChange={setOpen}>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <span className="inline-flex flex-shrink-0">
+                        <Popover.Trigger render={<Button size="sm" className={cn('h-7 flex-shrink-0 gap-1.5 px-2', className)} aria-label={label} />}>
+                            {content}
+                        </Popover.Trigger>
+                    </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>{t('contextTooltips.diff.reviewSubmit')}</TooltipContent>
+            </Tooltip>
+            <Popover.Portal>
+                <Popover.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
+                    <Popover.Popup aria-label={t('review.submit.button')} className={cn(dropdownMenuPopupClass, 'w-[34rem] max-w-[calc(100vw-2rem)] p-3')}>
+                        {form}
+                        <GlassRedrawGuard />
+                    </Popover.Popup>
+                </Popover.Positioner>
+            </Popover.Portal>
         </Popover.Root>
     );
 };

@@ -10,10 +10,12 @@ import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import type { GitHubReference, SourceControlReadContext } from '@/lib/api/types';
 import { I18nProvider } from '@/lib/i18n';
 import type { GitHubPendingReviewAction } from '@/lib/source-control/pendingReview';
+import { githubLikeDescriptor } from '@/lib/source-control/providers/descriptor.fixture';
+import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
 import type { ReviewChangeRequestInput } from '@/lib/source-control/types';
 import { createWebAPIs } from '../../../../web/src/api/index';
 import { ReviewSubmitForm } from './ReviewSubmitButton';
-import type { ChangeRequestReview, ReviewSubmission } from './useChangeRequestReview';
+import { useComparisonReview, type ChangeRequestReview, type ReviewSubmission } from './useChangeRequestReview';
 
 describe('sending a review', () => {
     let browser: Window;
@@ -59,7 +61,6 @@ describe('sending a review', () => {
             ] },
         },
         readFailed: false,
-        submissionPending: false,
         fileComments: true,
         addComment: async () => true, updateComment: async () => true, deleteComment: async () => true,
         reply: async () => true, setResolved: async () => true, attachThread: () => undefined, discard: async () => true,
@@ -100,18 +101,49 @@ describe('sending a review', () => {
         expect(received).toEqual({ verdict: 'request-changes', body: undefined });
     });
 
-    test('a focused approval form submits only its selected verdict', async () => {
-        const submissions: ReviewSubmission[] = [];
-        const submit = async (submission: ReviewSubmission) => {
-            submissions.push(submission);
-            return true;
+    test('approval targets the displayed patch when the review state reports a newer head', async () => {
+        const comparedHead = 'a'.repeat(40);
+        const newerHead = 'b'.repeat(40);
+        const context: SourceControlReadContext = {
+            provider: 'github', instance: 'github.com', accountId: 'github.com#1',
+            repositoryId: 'repo-1', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo',
         };
-        await act(async () => root.render(<I18nProvider><ReviewSubmitForm review={review(submit)} provider="github" verdict="approve" onDone={() => undefined} /></I18nProvider>));
-        expect(button('Request changes')).toBeUndefined();
-        expect(button('Send 2 comments')).toBeUndefined();
-        expect(button('Approve')).toBeTruthy();
-        await act(async () => { button('Approve')?.click(); });
-        expect(submissions).toEqual([{ verdict: 'approve', body: undefined }]);
+        const submissions: ReviewChangeRequestInput[] = [];
+        const apis = createWebAPIs();
+        apis.sourceControl.changeRequestReviewState = async () => ({
+            connected: true, viewerIsAuthor: false, headSha: newerHead, draft: null, threads: [], truncated: false,
+        });
+        apis.sourceControl.changeRequestReview = async (payload) => {
+            submissions.push(payload);
+            throw new Error('The pull request head changed');
+        };
+        const ComparisonReview = () => {
+            const { review: comparisonReview } = useComparisonReview({
+                selectedSource: { kind: 'pr', number: 7, sourceRepo: { owner: 'acme', repo: 'app' } },
+                prs: [], readContext: context, provider: 'github',
+            }, context.directory, true, comparedHead);
+            return comparisonReview?.state
+                ? <ReviewSubmitForm review={comparisonReview} provider="github" onDone={() => undefined} />
+                : null;
+        };
+        const providerRegistry = useSourceControlProviderRegistry.getState();
+        try {
+            const provider = githubLikeDescriptor();
+            await providerRegistry.refresh({ providers: async () => [
+                { ...provider, features: { ...provider.features, reviewDrafts: true } },
+            ] });
+            await act(async () => root.render(
+                <RuntimeAPIContext.Provider value={apis}>
+                    <I18nProvider><ComparisonReview /></I18nProvider>
+                </RuntimeAPIContext.Provider>,
+            ));
+            const approve = button('Approve');
+            expect(approve).toBeTruthy();
+            await act(async () => approve?.click());
+            expect(submissions.map(({ target }) => target.headSha)).toEqual([comparedHead]);
+        } finally {
+            await act(async () => useSourceControlProviderRegistry.setState(providerRegistry));
+        }
     });
 
     test('pending review section submits request changes without a summary body', async () => {
