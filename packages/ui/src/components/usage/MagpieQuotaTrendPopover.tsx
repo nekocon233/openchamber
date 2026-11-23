@@ -36,7 +36,7 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
   const display = (left: number) => magpieDisplayPercent(left, showRemaining);
   const sampleY = (left: number) => y(display(left));
 
-  const numbers = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumSignificantDigits: 3 });
+  const pacePercentages = new Intl.NumberFormat(getCurrentIntlLocale(), { style: 'percent', maximumSignificantDigits: 3 });
   const percentages = new Intl.NumberFormat(getCurrentIntlLocale(), { style: 'percent', maximumFractionDigits: 1 });
   const percent = (value: number) => percentages.format(value / 100);
   const stamp = (at: number) => formatDateTimeForPreference(at, timeFormat, {
@@ -57,7 +57,7 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
     ? t('chat.workStatus.magpie.trend.unknownCycle')
     : difference === 0 ? t('chat.workStatus.magpie.trend.onPace') : t(
       difference > 0 ? 'chat.workStatus.magpie.trend.ahead' : 'chat.workStatus.magpie.trend.behind',
-      { points: numbers.format(Math.abs(difference)) },
+      { difference: pacePercentages.format(Math.abs(difference) / 100) },
     );
 
   const inspect = (event: React.PointerEvent<HTMLDivElement>) => {
