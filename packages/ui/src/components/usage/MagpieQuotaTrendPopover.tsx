@@ -5,9 +5,10 @@ import { WorkStatusTouchContext } from '@/components/chat/work-status/touchConte
 import { GlassRedrawGuard } from '@/components/ui/glass-redraw-guard';
 import { dropdownMenuPopupClass } from '@/components/ui/dropdown-menu.styles';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
-import { magpiePaceDifference, magpieReferenceLeft } from '@/lib/quota/magpie';
+import { magpieDisplayPercent, magpiePaceDifference, magpieReferenceLeft } from '@/lib/quota/magpie';
 import { formatDateTimeForPreference } from '@/lib/timeFormat';
 import { cn } from '@/lib/utils';
+import { useQuotaStore } from '@/stores/useQuotaStore';
 import { useUIStore } from '@/stores/useUIStore';
 import type { MagpieQuotaTrend } from '@/types/quota';
 
@@ -18,6 +19,7 @@ const INSET = 4;
 function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
   const { t } = useI18n();
   const timeFormat = useUIStore(state => state.timeFormatPreference);
+  const showRemaining = useQuotaStore(state => state.displayMode === 'remaining');
   const [sampleIndex, setSampleIndex] = React.useState<number | null>(null);
   const { points, cycle } = trend;
   const first = points[0];
@@ -30,18 +32,26 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
   const end = cycle?.reset ?? latest.at;
   const available = end > start;
   const x = (at: number) => INSET + (CHART_WIDTH - 2 * INSET) * (at - start) / (end - start);
-  const y = (left: number) => INSET + (CHART_HEIGHT - 2 * INSET) * (100 - left) / 100;
+  const y = (value: number) => INSET + (CHART_HEIGHT - 2 * INSET) * (100 - value) / 100;
+  const display = (left: number) => magpieDisplayPercent(left, showRemaining);
+  const sampleY = (left: number) => y(display(left));
 
   const numbers = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumSignificantDigits: 3 });
   const percentages = new Intl.NumberFormat(getCurrentIntlLocale(), { style: 'percent', maximumFractionDigits: 1 });
-  const percent = (left: number) => percentages.format(left / 100);
+  const percent = (value: number) => percentages.format(value / 100);
   const stamp = (at: number) => formatDateTimeForPreference(at, timeFormat, {
     month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit',
   });
   const reference = cycle ? magpieReferenceLeft(cycle, sample.at) : null;
+  const readingAt = stamp(sample.at);
+  const actual = percent(display(sample.left));
   const reading = reference === null
-    ? t('chat.workStatus.magpie.trend.reading', { at: stamp(sample.at), actual: percent(sample.left) })
-    : t('chat.workStatus.magpie.trend.comparison', { at: stamp(sample.at), actual: percent(sample.left), reference: percent(reference) });
+    ? t(showRemaining ? 'chat.workStatus.magpie.trend.reading' : 'chat.workStatus.magpie.trend.usageReading', { at: readingAt, actual })
+    : t(showRemaining ? 'chat.workStatus.magpie.trend.comparison' : 'chat.workStatus.magpie.trend.usageComparison', {
+      at: readingAt, actual, reference: percent(display(reference)),
+    });
+  const actualLabel = t(showRemaining ? 'chat.workStatus.magpie.trend.actual' : 'chat.workStatus.magpie.trend.actualUsage');
+  const referenceLabel = t(showRemaining ? 'chat.workStatus.magpie.trend.reference' : 'chat.workStatus.magpie.trend.referenceUsage');
   const difference = reference === null ? null : magpiePaceDifference(reference, sample.left);
   const summary = difference === null
     ? t('chat.workStatus.magpie.trend.unknownCycle')
@@ -85,7 +95,7 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
           <div
             role="slider"
             tabIndex={0}
-            aria-label={t('chat.workStatus.magpie.trend.actual')}
+            aria-label={actualLabel}
             aria-valuemin={1}
             aria-valuemax={points.length}
             aria-valuenow={index + 1}
@@ -101,13 +111,13 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
                 <line key={left} x1={x(start)} x2={x(end)} y1={y(left)} y2={y(left)}
                   className="stroke-[var(--interactive-border)]" vectorEffect="non-scaling-stroke" />
               ))}
-              {cycle && <line x1={x(start)} x2={x(end)} y1={y(100)} y2={y(0)}
+              {cycle && <line x1={x(start)} x2={x(end)} y1={sampleY(100)} y2={sampleY(0)}
                 strokeDasharray="4 3" className="stroke-muted-foreground" vectorEffect="non-scaling-stroke" />}
               <line x1={x(sample.at)} x2={x(sample.at)} y1={y(100)} y2={y(0)}
                 className="stroke-muted-foreground opacity-45" vectorEffect="non-scaling-stroke" />
-              <polyline points={points.map(point => `${x(point.at)},${y(point.left)}`).join(' ')}
+              <polyline points={points.map(point => `${x(point.at)},${sampleY(point.left)}`).join(' ')}
                 fill="none" className="stroke-[var(--status-info)]" strokeWidth={1.75} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-              <circle cx={x(sample.at)} cy={y(sample.left)} r={2.75} className="fill-[var(--status-info)]" />
+              <circle cx={x(sample.at)} cy={sampleY(sample.left)} r={2.75} className="fill-[var(--status-info)]" />
             </svg>
           </div>
           <div className="col-start-2 flex justify-between gap-2 text-muted-foreground">
@@ -118,11 +128,11 @@ function MagpieTrendChart({ trend }: { trend: MagpieQuotaTrend }) {
         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <i aria-hidden className="w-3 border-t-2 border-[var(--status-info)]" />
-            {t('chat.workStatus.magpie.trend.actual')}
+            {actualLabel}
           </span>
           {cycle && <span className="inline-flex items-center gap-1">
             <i aria-hidden className="w-3 border-t border-dashed border-current" />
-            {t('chat.workStatus.magpie.trend.reference')}
+            {referenceLabel}
           </span>}
         </div>
       </>}

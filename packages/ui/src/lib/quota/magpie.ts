@@ -31,6 +31,9 @@ export function magpieWorkStatusTrend(
   return fiveHourRow || fiveHourChart ? undefined : magpieTrend;
 }
 
+export const magpieDisplayPercent = (left: number, showRemaining: boolean): number =>
+  showRemaining ? left : 100 - left;
+
 export function magpieReferenceLeft(cycle: NonNullable<MagpieQuotaTrend['cycle']>, at: number) {
   return 100 * (cycle.reset - at) / (cycle.reset - cycle.start);
 }

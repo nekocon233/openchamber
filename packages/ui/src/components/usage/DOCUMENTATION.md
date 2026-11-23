@@ -25,8 +25,9 @@ external response parsing and source identity.
   window name to reserve pace labels and charts for other windows.
 - Every signed difference from even pace has a label for a matching snapshot
   before its reset. Low balances keep their quota tone in either display mode.
-- The plot follows time from left to right and reads recorded remaining
-  percentages independently of the selected display mode.
+- The plot follows time from left to right. Both series and sample readouts
+  follow the selected quota display mode. Pace compares consumed quota with
+  elapsed cycle time.
 
 ## Decisions
 
