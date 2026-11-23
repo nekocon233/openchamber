@@ -19,7 +19,7 @@ export const PullRequestNavigation: React.FC<{
       </Button>
       {detailsLabel && (
         <Button variant="ghost" size="sm" className={buttonClass} title={detailsLabel} aria-label={detailsLabel} onClick={() => navigate('details')}>
-          <Icon name="git-pull-request" className="size-4" />
+          <Icon name="file-text" className="size-4" />
           {!compact && <span className="truncate">{detailsLabel}</span>}
         </Button>
       )}
