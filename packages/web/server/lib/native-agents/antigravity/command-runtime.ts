@@ -113,7 +113,7 @@ export function createAntigravityCommandRuntime({
   const commands = createAntigravityCommands({
     now,
     readSkills: (directory) => probe([
-      '--settings', JSON.stringify({ modelProvider: '', model: '' }),
+      '--settings', JSON.stringify({ model: '' }),
       '--disable-slash-commands=false', '--print', '/skills', '--print-timeout', '10s',
       '--add-dir', directory,
     ], { native: true, cwd: directory, timeoutMs: 25_000 }),

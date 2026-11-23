@@ -1599,8 +1599,8 @@ export const createDeepseekBackend = ({
     executeCommand(id, directory, line) {
       return serial(id, async () => {
         if (/^\/permission(?:\s|$)/i.test(line)) throw deepseekUnsupported();
-        const committing = /^\/compact(?:\s|$)/i.test(line);
-        if (committing) {
+        if (/^\/compact(?:\s|$)/i.test(line)) {
+          if (!/^\/compact\s*$/i.test(line)) throw invalidRequestError('Usage: /compact (no arguments)');
           await backend.adopt(id, directory);
           await commitRevert(id, directory, `command:${randomUUID()}`);
           await settleAdmission(id);

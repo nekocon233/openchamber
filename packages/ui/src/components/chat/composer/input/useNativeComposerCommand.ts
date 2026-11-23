@@ -62,7 +62,7 @@ export function useNativeComposerCommand({
         if (inputMode !== 'normal' || isBtwActive) return null;
         const codex = nativeTargetBackend === 'codex' ? parseCodexComposerCommand(text) : null;
         const deepseekCommand = nativeTargetBackend === 'deepseek' ? /^\/([a-z][a-z0-9_-]*)(?:\s|$)/i.exec(text.trim())?.[1] : undefined;
-        const deepseek = deepseekCommand && deepseekCommand !== 'compact' && !isNativeLocalCommand(deepseekCommand) ? deepseekCommand : null;
+        const deepseek = deepseekCommand && !isNativeLocalCommand(deepseekCommand.toLowerCase()) ? deepseekCommand : null;
         if (!codex && !deepseek) return null;
         const handled = { kind: 'handled' } as const;
         if (running.current || !ownsInput()) return handled;

@@ -149,25 +149,7 @@ export const nativeSendMessageId = (sessionId: string, requested: string | undef
   return createNativeUserMessageId(backend, sessionId)
 }
 
-const NATIVE_COMPACT_COMMAND = /^\/compact(?:\s+([\s\S]*?))?\s*$/
-
-/**
- * `/compact` typed in a native session: the CLI's own compaction, which shows
- * as its marker rather than as a message. Claude Code takes the rest of the
- * line as instructions for its summary. Null for any other text.
- */
-export const nativeCompactCommand = (text: string): { instructions?: string } | null => {
-  const match = NATIVE_COMPACT_COMMAND.exec(text.trim())
-  if (!match) return null
-  const instructions = match[1]?.trim()
-  return instructions ? { instructions } : {}
-}
-
-// Commands OpenChamber runs itself in a native session: the ones that act on
-// its own view of the session, `/btw`, which asks a fork of it, and
-// `/handoff-review`, which opens a review. Every other slash command is the
-// CLI's, and goes out as typed.
-const NATIVE_LOCAL_COMMANDS = new Set(["undo", "redo", "timeline", "btw", "handoff-review"])
+const NATIVE_LOCAL_COMMANDS = new Set(["undo", "redo", "timeline", "btw", "handoff-review", "compact"])
 
 /** Whether the composer runs `/name` itself in a native session. */
 export const isNativeLocalCommand = (name: string): boolean => NATIVE_LOCAL_COMMANDS.has(name)

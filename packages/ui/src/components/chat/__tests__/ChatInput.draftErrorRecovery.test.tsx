@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Window } from 'happy-dom';
 import { toast } from 'sonner';
-import type { NativePromptRequest, NativeSessionCreate, RuntimeAPIs } from '@/lib/api/types';
+import type { NativeCompactRequest, NativePromptRequest, NativeSessionCreate, RuntimeAPIs } from '@/lib/api/types';
 import type { Session } from '@/lib/opencode/model';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import { NativeAgentsRequestError } from '@/lib/native-agents/errors';
@@ -39,6 +39,7 @@ Object.assign(globalThis, {
 const DIRECTORY = '/opt/openchamber';
 const PROJECTS = [{ id: createProjectIdFromPath(DIRECTORY), path: DIRECTORY }];
 const SESSION_ID = 'ncv_1a3225d4-39b5-4534-9318-f82874de1d94';
+const COMPACTION_SESSION_ID = 'ncv_1a3225d4-39b5-4534-9318-f82874de1d95';
 const OTHER_SESSION_ID = 'ses_existing_other';
 
 const responseFor = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -101,10 +102,11 @@ const sdk = OpenCode.make({
 });
 
 let promptHandler: (sessionId: string, request: NativePromptRequest) => Promise<void>;
+let compactHandler: (sessionId: string, request: NativeCompactRequest) => Promise<void>;
 let createdRecord: Session;
 
 const buildUnifiedSession = (input: NativeSessionCreate): Session => ({
-  id: SESSION_ID,
+  id: input.backend === 'claude' ? COMPACTION_SESSION_ID : SESSION_ID,
   projectID: '',
   directory: input.directory,
   title: input.title ?? 'New conversation',
@@ -119,7 +121,7 @@ const buildUnifiedSession = (input: NativeSessionCreate): Session => ({
     openchamber: {
       native: {
         kind: 'unified',
-        backend: 'antigravity',
+        backend: input.backend,
         unifiedBackends: ['claude', 'codex', 'deepseek', 'antigravity'],
         revision: 0,
         recordRevision: 0,
@@ -127,7 +129,7 @@ const buildUnifiedSession = (input: NativeSessionCreate): Session => ({
         sourceSessionID: null,
         switchReady: true,
         preparing: false,
-        actions: { revert: true, delete: false, fork: true, compact: false },
+        actions: { revert: true, delete: false, fork: true, compact: input.backend !== 'antigravity' },
       },
     },
   },
@@ -185,6 +187,7 @@ const nativeAgents = createTestNativeAgentsAPI({
   },
   getSession: async () => createdRecord,
   prompt: (sessionId: string, request: NativePromptRequest) => promptHandler(sessionId, request),
+  compact: (sessionId: string, request: NativeCompactRequest) => compactHandler(sessionId, request),
 });
 
 // SAFETY: The composer reads only runtime, nativeAgents, and sourceControl identity in this fixture.
@@ -243,6 +246,7 @@ beforeEach(() => {
     hasEverConnected: true,
   });
   useSessionUIStore.getState().openNewSessionDraft({ target: 'project', directoryOverride: DIRECTORY });
+  compactHandler = async () => { throw new Error('Unexpected compaction request'); };
   promptHandler = async () => {
     throw new NativeAgentsRequestError(
       'invalid model selection (--model "gemini-4-hydrogen" --effort "xhigh"): --effort=xhigh is not supported for model "gemini-4-hydrogen"',
@@ -335,6 +339,47 @@ test('restores the prompt onto the materialized session and shows an error toast
     expect(
       useInlineCommentDraftStore.getState().getDrafts({ directory: DIRECTORY, sessionKey: SESSION_ID }).map((draft) => draft.text),
     ).toEqual(['explain this']);
+  });
+});
+
+test('submits /compact as a native session action and restores the command on refusal', async () => {
+  const text = '/compact Keep the plan.\nRetain test results.';
+  const model = { providerID: 'claude-native', modelID: 'sonnet' };
+  const requests: Array<{ sessionId: string; request: NativeCompactRequest }> = [];
+  const prompts: NativePromptRequest[] = [];
+  promptHandler = async (_sessionId, request) => { prompts.push(request); };
+  compactHandler = async (sessionId, request) => {
+    requests.push({ sessionId, request });
+    if (requests.length === 1) throw new NativeAgentsRequestError('Session is busy', 409, 'NATIVE_SESSION_BUSY');
+  };
+
+  await mountComposer(async ({ view, form }) => {
+    await act(async () => {
+      const session = await nativeAgents.createSession({ backend: 'claude', kind: 'unified', directory: DIRECTORY, selection: { model, agent: 'plan', variant: 'high' } });
+      useSessionUIStore.getState().setCurrentSession(session.id, DIRECTORY);
+      useConfigStore.setState({
+        currentProviderId: model.providerID, currentModelId: model.modelID, currentAgentName: 'plan', currentVariant: 'high',
+      });
+    });
+    await act(async () => {
+      useInputStore.getState().setAttachedFiles([sampleAttachment()]);
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, userEvent: 'input.type' });
+    });
+
+    await act(async () => { form.requestSubmit(); });
+    expect(requests).toEqual([{
+      sessionId: COMPACTION_SESSION_ID,
+      request: { directory: DIRECTORY, model, agent: 'plan', variant: 'high', instructions: 'Keep the plan.\nRetain test results.' },
+    }]);
+    expect(view.state.doc.toString()).toBe(text);
+    expect(toastErrors).toEqual(['Session is busy']);
+
+    await act(async () => { form.requestSubmit(); });
+    expect(requests).toHaveLength(2);
+    expect(prompts).toEqual([]);
+    expect([...optimisticIds]).toEqual([]);
+    expect(view.state.doc.toString()).toBe('');
+    expect(useInputStore.getState().attachedFiles.map((file) => file.id)).toEqual(['att-1']);
   });
 });
 

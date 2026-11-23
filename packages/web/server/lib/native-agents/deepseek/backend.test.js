@@ -424,6 +424,7 @@ it('reverts and restores a native conversation, then commits a fork behind the s
   const target = before.records[2].info.id;
   const reverted = await backend.revert(id, target, directory);
   expect(reverted).toMatchObject({ conversationOnly: true, session: { id, revert: { messageID: target } } });
+  await expect(backend.executeCommand(id, directory, '/compact keep the plan')).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
   expect((await backend.unrevert(id, directory)).revert).toBeUndefined();
   expect((await backend.loadMessages(id, directory, { limit: 50 })).records.map((row) => row.info.id)).toEqual(before.records.map((row) => row.info.id));
   await backend.revert(id, target, directory);

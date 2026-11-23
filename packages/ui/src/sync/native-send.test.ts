@@ -16,7 +16,7 @@ import { useConfigStore } from "@/stores/useConfigStore"
 import { useSessionGoalArmStore } from "@/stores/useSessionGoalArmStore"
 import type { QuestionRequest } from "@/types/question"
 import { ChildStoreManager } from "./child-store"
-import { isNativeLocalCommand, nativeCompactCommand, nativePromptParts, nativeSendMessageId, sendNativePrompt } from "./native-send"
+import { isNativeLocalCommand, nativePromptParts, nativeSendMessageId, sendNativePrompt } from "./native-send"
 import {
   abortCurrentOperation,
   cancelForm,
@@ -132,17 +132,9 @@ describe("native prompt parts", () => {
     ])
   })
 
-  test("keep only undo, redo, timeline, btw and handoff-review as the composer's own commands", () => {
-    expect(["undo", "redo", "timeline", "btw", "handoff-review"].every(isNativeLocalCommand)).toBe(true)
-    expect(["summary", "debug", "explore", "review", "init", "compact"].some(isNativeLocalCommand)).toBe(false)
-  })
-
-  test("recognize /compact and its summary instructions, and nothing else", () => {
-    expect(nativeCompactCommand("/compact")).toEqual({})
-    expect(nativeCompactCommand("  /compact   keep the plan  ")).toEqual({ instructions: "keep the plan" })
-    expect(nativeCompactCommand("/compact\nfocus on the tests")).toEqual({ instructions: "focus on the tests" })
-    expect(nativeCompactCommand("/compaction")).toBeNull()
-    expect(nativeCompactCommand("please /compact")).toBeNull()
+  test("keep native session actions in the composer", () => {
+    expect(["undo", "redo", "timeline", "btw", "handoff-review", "compact"].every(isNativeLocalCommand)).toBe(true)
+    expect(["summary", "debug", "explore", "review", "init", "compaction"].some(isNativeLocalCommand)).toBe(false)
   })
 
   test("use the caller's message id only when the CLI can record it", () => {

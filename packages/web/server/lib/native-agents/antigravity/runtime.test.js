@@ -48,7 +48,7 @@ const setup = async ({ checklist = false, memory = null, skillGate = false } = {
   cleanups.push(() => runtime.shutdown());
   if (skillGate) cleanups.push(() => fs.writeFileSync(skillGateFile, 'release'));
   const session = await runtime.createSession({ backend: 'antigravity', directory, title: 'Runtime agy' });
-  return { runtime, session, directory, events, requestsFile, skillsFile, skillProbesFile, skillGateFile, setUnauthenticated: () => { unauthenticated = true; } };
+  return { runtime, session, directory, events, fixtureHome, requestsFile, skillsFile, skillProbesFile, skillGateFile, setUnauthenticated: () => { unauthenticated = true; } };
 };
 
 const prompt = async (runtime, session, directory, text = 'runtime') => {
@@ -95,7 +95,8 @@ describe('Antigravity native runtime', () => {
   });
 
   it('discovers skills through HTTP, expands a send and rejects removed skills before native admission', async () => {
-    const { runtime, session, directory, requestsFile, skillsFile, skillProbesFile } = await setup();
+    const { runtime, session, directory, fixtureHome, requestsFile, skillsFile, skillProbesFile } = await setup();
+    fs.writeFileSync(path.join(fixtureHome, 'settings.json'), JSON.stringify({ modelProvider: 'gemini', model: 'saved-custom-model' }));
     const app = express();
     registerNativeAgentRoutes(app, { runtime });
     await request(app).get('/api/native/commands').query({ backend: 'antigravity', directory }).expect(200)

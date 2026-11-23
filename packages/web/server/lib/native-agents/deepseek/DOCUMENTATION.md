@@ -196,7 +196,8 @@ Commands are discovered for an existing session and dispatched through
 native revert and file snapshot store. A pending revert preserves the original
 native log and can restore the files. The next prompt forks the exact retained
 event prefix (or creates an empty session), durably changes the branch binding,
-and commits the revert. Compaction commands use the same branch commit path.
+and commits the revert. Bare `/compact` uses the same branch commit path.
+Compaction arguments are rejected before committing a pending revert.
 A definite send failure restores the original binding and pending revert; an
 unknown admission retains the new binding and original request id for history
 reconciliation, refusing redo or an unrelated send until confirmed.
