@@ -222,6 +222,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         setPinnedStackedTarget, pendingScrollFrameRef, pinSelectedFileHeaderToTopOnNavigate, scrollRequestNonce,
     });
     const isTreeMode = diffFileListMode === 'tree' && !isMobileLayout;
+    const hasHostedPrFileTree = isTreeMode && activeDiffScope === 'pr' && Boolean(fileListHost?.visible && fileListHost.host);
     const { stackedEntryCount, stackedEntriesPending } = useDiffViewStackedEntries({
         isTreeMode, effectiveDirectory, activeDiffScope, changedFiles, scrollRequestNonce,
     });
@@ -300,7 +301,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         };
         return (
             <div ref={fileTreeLayoutRef} className={cn('flex min-w-0 flex-1 min-h-0 h-full', flushContent ? 'gap-0' : 'gap-3 px-3 pb-3 pt-2')}>
-                {isTreeMode && (
+                {isTreeMode && !hasHostedPrFileTree && (
                     <>
                         <section className="flex max-w-[50%] flex-shrink-0 flex-col" style={{ width: `${fileTreeWidth}px` }}>
                             <FileTree changedFiles={changedFiles} selectedFile={treeSelectedFile?.path ?? null} onSelectFile={handleSelectFileAndScroll} />
@@ -466,7 +467,8 @@ export const DiffView: React.FC<DiffViewProps> = ({
             </div>;
         }
         if (fileListOnly) {
-            const list = { changedFiles, selectedFile: displayFile, onSelectFile: selectFromList };
+            const selectedFile = hasHostedPrFileTree ? treeSelectedFile?.path ?? null : displayFile;
+            const list = { changedFiles, selectedFile, onSelectFile: selectFromList };
             return isTreeMode ? <FileTree {...list} /> : <FileList {...list} />;
         }
         return renderStackedDiffView();
