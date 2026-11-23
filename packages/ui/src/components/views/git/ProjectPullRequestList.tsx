@@ -153,7 +153,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               onChanged={browser.list.retry}
               onSubmitted={goBack}
               refreshDetail={browser.refreshRepositoryDetail}
-              pullLinks={<SourceBoardPullLinks pull={selectedPull} repository={context.repositoryId} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
+              pullLinks={<SourceBoardPullLinks pull={selectedPull} repository={directory} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
                 returnTo={{ workspaceDirectory, tab: 'project' }} />}
             />
           ) : null}

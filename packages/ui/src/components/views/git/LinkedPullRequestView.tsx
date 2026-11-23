@@ -110,7 +110,7 @@ const LinkedPullRequestBody: React.FC<{
           refreshDetail={refresh}
           pullLinks={<SourceBoardPullLinks
             pull={reference}
-            repository={context.repositoryId}
+            repository={directory}
             project={project ?? { id: '', path: request.sourceDirectory }}
             context={context}
             projectOwnsDirectory={(value) => Boolean(project && projectFor(value)?.id === project.id)}
