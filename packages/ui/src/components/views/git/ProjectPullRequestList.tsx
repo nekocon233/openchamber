@@ -238,7 +238,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
                     rememberScroll();
                     openItem({ source: 'repository', reference: pull });
                   }}>
-                  <Icon name="git-pull-request" className="size-3.5" />
+                  <Icon name="file-text" className="size-3.5" />
                 </Button>
               );
             } : undefined} /> : null}
