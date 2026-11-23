@@ -542,7 +542,10 @@ preview's footer holds actions instead of what the agent gets.
   provider's current pending user or team requests, checked in the repository
   page query even when search membership lags behind a completed review. A
   number or URL search in this category obeys the same check. Approval alone
-  does not close a PR in the All list.
+  does not close a PR in the All list. After a review receipt, the affected
+  binding's cached lists and statuses become stale and the visible list reads
+  its first page again. A failed provider cache flush still lets the list read
+  and show its own result or error.
 - The side panel and its rail stay beside the board. A board under 960 px
   wide shows the kinds by icon and drops the list column: a trigger left of the search names the previewed
   item (`#12`, `!12`, `ENG-7`) and opens the list as a dropdown over the

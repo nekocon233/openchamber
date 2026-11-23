@@ -3,6 +3,7 @@ import * as React from 'react';
 import { useMinuteTickerNow } from '@/hooks/useDurationTicker';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type {
+    SourceControlAPI,
     SourceControlBindingRead,
     RepositoryItemRef,
     ChangeRequestListStatus,
@@ -19,7 +20,7 @@ import type {
     SourceControlReadContext,
 } from '@/lib/api/types';
 import { formatMessage, useI18nStore, type I18nKey } from '@/lib/i18n';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getRuntimeEndpointGeneration, getRuntimeKey } from '@/lib/runtime-switch';
 import { defaultSourceControlIdentities, resolveSourceControlIdentity } from '@/lib/source-control/identity';
 import { unknownProviderDescriptor, type SourceControlProviderDescriptor } from '@/lib/source-control/providers/descriptor';
 import { useSourceControlProvider, useSourceControlProviderRegistry, useSourceControlProviders } from '@/lib/source-control/providers/registry';
@@ -239,8 +240,11 @@ const readContextCacheKey = (context: SourceControlReadContext): unknown[] => [
     context.linked === true,
 ];
 
-/** A completed review changes every project-list filter for this binding. */
-export function invalidateProjectPullLists(context: SourceControlReadContext, runtime: string): void {
+export async function refreshProjectPullListsAfterReview(sourceControl: SourceControlAPI, context: SourceControlReadContext): Promise<void> {
+    const runtime = getRuntimeKey();
+    const generation = getRuntimeEndpointGeneration();
+    await sourceControl.refreshProviderReads(context, { lists: true }).catch(() => undefined);
+    if (getRuntimeKey() !== runtime || getRuntimeEndpointGeneration() !== generation) return;
     repositoryLists.invalidate((key) => {
         const value: unknown = JSON.parse(key);
         if (!Array.isArray(value) || value[0] !== runtime || value[3] !== 'repository' || value[4] !== 'pull') return false;
@@ -249,6 +253,7 @@ export function invalidateProjectPullLists(context: SourceControlReadContext, ru
             && scope[2] === context.accountId && scope[4] === context.repositoryId
             && scope[5] === context.primaryRemote && scope[6] === context.bindingRevision;
     });
+    invalidateRepositoryPullStatuses(context, runtime);
     revalidateReferences();
 }
 

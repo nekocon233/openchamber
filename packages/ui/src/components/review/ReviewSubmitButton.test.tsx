@@ -15,7 +15,7 @@ import { useSourceControlProviderRegistry } from '@/lib/source-control/providers
 import type { ReviewChangeRequestInput } from '@/lib/source-control/types';
 import { createWebAPIs } from '../../../../web/src/api/index';
 import { ReviewSubmitForm } from './ReviewSubmitButton';
-import { useComparisonReview, type ChangeRequestReview, type ReviewSubmission } from './useChangeRequestReview';
+import { useChangeRequestReview, useComparisonReview, type ChangeRequestReview, type ReviewSubmission } from './useChangeRequestReview';
 
 describe('sending a review', () => {
     let browser: Window;
@@ -156,6 +156,55 @@ describe('sending a review', () => {
         }
     });
 
+    for (const [label, verdict] of [['Approve', 'approve'], ['Request changes', 'request-changes']] as const) {
+        test(`a comparison opened directly refreshes project PRs after ${verdict} succeeds`, async () => {
+            const headSha = 'a'.repeat(40);
+            const project = { owner: 'acme', name: 'app' };
+            const context: SourceControlReadContext = {
+                provider: 'github', instance: 'github.com', accountId: 'github.com#1',
+                repositoryId: 'repo-1', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo',
+            };
+            const apis = createWebAPIs();
+            const refreshes: Array<Parameters<typeof apis.sourceControl.refreshProviderReads>> = [];
+            let finishReview: (() => void) | undefined;
+            apis.sourceControl.refreshProviderReads = async (...args) => { refreshes.push(args); };
+            apis.sourceControl.changeRequestReviewState = async () => ({
+                connected: true, viewerIsAuthor: false, headSha, draft: null, threads: [], truncated: false,
+            });
+            apis.sourceControl.changeRequestReview = async () => {
+                await new Promise<void>((resolve) => { finishReview = resolve; });
+                return {
+                    status: 'succeeded', replayed: false,
+                    actor: { provider: context.provider, instance: context.instance, providerAccountId: context.accountId },
+                    target: { project: { ...project, id: 'acme/app' }, number: 7, headSha,
+                        repositoryId: context.repositoryId, bindingRevision: context.bindingRevision, primaryRemote: context.primaryRemote },
+                    result: { commented: false },
+                };
+            };
+            const ComparisonReview = () => {
+                const activeReview = useChangeRequestReview({ context, project, number: 7, headSha, directory: context.directory, provider: 'github' });
+                return activeReview?.state
+                    ? <ReviewSubmitForm review={activeReview} provider="github" onDone={() => undefined} />
+                    : null;
+            };
+            const registry = useSourceControlProviderRegistry.getState();
+            try {
+                const provider = githubLikeDescriptor();
+                await registry.refresh({ providers: async () => [{ ...provider, features: { ...provider.features, reviewDrafts: true } }] });
+                await act(async () => root.render(<RuntimeAPIContext.Provider value={apis}>
+                    <I18nProvider><ComparisonReview /></I18nProvider>
+                </RuntimeAPIContext.Provider>));
+                await act(async () => button(label)?.click());
+                expect(finishReview).toBeDefined();
+                expect(refreshes).toEqual([]);
+                await act(async () => finishReview?.());
+                expect(refreshes).toEqual([[context, { lists: true }]]);
+            } finally {
+                await act(async () => useSourceControlProviderRegistry.setState(registry));
+            }
+        });
+    }
+
     test('pending review section submits request changes without a summary body', async () => {
         let received: { action: GitHubPendingReviewAction; headSha: string } | null = null;
         const controller: PendingReviewController = {
@@ -191,6 +240,8 @@ describe('sending a review', () => {
     test('board reply requests changes without a comment body', async () => {
         let received: ReviewChangeRequestInput | null = null;
         const apis = createWebAPIs();
+        const refreshes: Array<Parameters<typeof apis.sourceControl.refreshProviderReads>> = [];
+        apis.sourceControl.refreshProviderReads = async (...args) => { refreshes.push(args); };
         apis.sourceControl.changeRequestReview = async (payload) => {
             received = payload;
             return {
@@ -248,5 +299,6 @@ describe('sending a review', () => {
             target: { project: { owner: 'acme', name: 'app' }, number: 7, headSha: 'a'.repeat(40) },
         });
         expect(received).not.toHaveProperty('body');
+        expect(refreshes).toEqual([[context, { lists: true }]]);
     });
 });

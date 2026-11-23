@@ -222,7 +222,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                 total: page.total,
                 refreshing: false,
                 error: null,
-                pageReads: [{ start: 0, read: { at, forced: Boolean(options?.force) } }],
+                pageReads: [{ start: 0, read: { at, forced: options?.force === true || existing?.fetchedAt === -Infinity } }],
                 fetchedAt: at,
             });
         }).finally(() => {
