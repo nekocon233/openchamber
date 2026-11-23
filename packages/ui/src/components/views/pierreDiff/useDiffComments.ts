@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
+import { toast } from '@/components/ui';
+import { useI18n } from '@/lib/i18n';
 import type { FileDiff as PierreFileDiff, FileDiffMetadata, SelectedLineRange } from '@pierre/diffs';
 import {
   type ReviewLineItem,
@@ -19,6 +21,7 @@ interface DiffCommentsInput {
   fileName: string | undefined;
   language: string;
   commentOrigin: DiffCommentOrigin | undefined;
+  reviewHeadSha?: string | null;
   enableComments: boolean;
   isMobile: boolean;
   diffInstanceRef: RefObject<PierreFileDiff<DiffAnnotation> | null>;
@@ -31,10 +34,12 @@ export const useDiffComments = ({
   fileName,
   language,
   commentOrigin,
+  reviewHeadSha,
   enableComments,
   isMobile,
   diffInstanceRef,
 }: DiffCommentsInput) => {
+  const { t } = useI18n();
   const commentLineSources = useMemo(() => (incomingFileDiff
     ? { additions: diffLineSource(incomingFileDiff, 'additions'), deletions: diffLineSource(incomingFileDiff, 'deletions') }
     : { additions: modified ? textLineSource(modified) : null, deletions: original ? textLineSource(original) : null }
@@ -100,6 +105,11 @@ export const useDiffComments = ({
       lines: extractSelectedCode(original, modified, incomingFileDiff, { start, end: item.lineNumber, side: 'additions' }).split('\n'),
     };
   }, [incomingFileDiff, modified, original]);
+  const reviewKey = review?.summaryDraftKey;
+  const reviewSelection = useRef<{ key: string; file: string; head: string | null | undefined } | null>(null);
+  if (!selection || !commentText || !reviewSelection.current) {
+    reviewSelection.current = reviewKey && fileName ? { key: reviewKey, file: fileName, head: reviewHeadSha } : null;
+  }
   const selectionSide = selection?.side;
   const selectionCrossesSides = Boolean(selection?.endSide && selection.endSide !== selection.side);
   const reviewField = useMemo(() => {
@@ -108,6 +118,15 @@ export const useDiffComments = ({
       add: async (text: string, range?: SelectedLineRange) => {
         const target = range ?? selectionRef.current;
         if (!target) return false;
+        const captured = reviewSelection.current;
+        if (!captured || captured.key !== review.summaryDraftKey || captured.file !== fileName || captured.head !== reviewHeadSha) {
+          toast.error(t('pendingReview.staleDiff'));
+          return false;
+        }
+        if (captured.head === null) {
+          toast.error(t('pendingReview.noRevision'));
+          return false;
+        }
         const start = Math.min(target.start, target.end);
         const end = Math.max(target.start, target.end);
         const added = await review.addComment({
@@ -115,8 +134,8 @@ export const useDiffComments = ({
           side: target.side === 'deletions' ? 'old' : 'new',
           line: end,
           startLine: start < end ? start : undefined,
-        }, text);
-        if (added) cancel();
+        }, text, captured.head);
+        if (added && reviewSelection.current === captured) cancel();
         return added;
       },
       suggestionCode: selectionSide === 'deletions' ? undefined : () => {
@@ -124,7 +143,7 @@ export const useDiffComments = ({
         return target ? extractSelectedCode(original, modified, incomingFileDiff, target) : '';
       },
     };
-  }, [cancel, fileName, incomingFileDiff, modified, original, review, selectionCrossesSides, selectionSide]);
+  }, [cancel, fileName, incomingFileDiff, modified, original, review, reviewHeadSha, selectionCrossesSides, selectionSide, t]);
 
   const selectionRef = useRef<SelectedLineRange | null>(null);
   const moveSelectionRef = useRef<(range: SelectedLineRange) => void>(() => {});

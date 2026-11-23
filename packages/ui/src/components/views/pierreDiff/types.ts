@@ -1,4 +1,3 @@
-import type { PendingReviewController } from '@/components/sourceBoard/usePendingReview';
 import type React from 'react';
 import type { ExpansionDirections, FileDiffMetadata } from '@pierre/diffs';
 import type { PierreAnnotationData } from '@/components/comments';
@@ -22,8 +21,7 @@ export type DiffAnnotation =
 
 export interface PierreDiffViewerProps {
   persistenceOwner?: string | null;
-  review?: PendingReviewController;
-  reviewHeadSha?: string;
+  reviewHeadSha?: string | null;
   original: string;
   modified: string;
   fileDiff?: FileDiffMetadata;

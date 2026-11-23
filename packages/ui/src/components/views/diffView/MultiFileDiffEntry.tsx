@@ -1,4 +1,3 @@
-import type { PendingReviewController } from "@/components/sourceBoard/usePendingReview";
 import { useWorkspaceChildKey, useWorkspaceViewState, WorkspaceViewScope } from "@/hooks/useWorkspaceViewState";
 import React from 'react';
 import { useUIStore } from '@/stores/useUIStore';
@@ -43,7 +42,6 @@ const FILE_ACTIONS_MASK_ON_REVEAL_CLASS = [
     '[@media(hover:none)]:![mask-image:none]',
 ].join(' ');
 interface MultiFileDiffEntryProps {
-    review?: PendingReviewController;
     visible?: boolean;
     directory: string;
     file: FileEntry;
@@ -76,7 +74,6 @@ interface MultiFileDiffEntryProps {
 }
 
 export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
-    review,
     visible = true,
     directory,
     file,
@@ -611,7 +608,6 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
                     {isMounted && diffData && !renameOnlyDiff && (forceRenderLarge || (file.insertions + file.deletions) <= LARGE_DIFF_CHANGED_LINES) ? (
                         <>
                             <InlineDiffViewer
-                                review={review}
                                 filePath={file.path}
                                 diff={diffData}
                                 commentOrigin={rangeComparisonDiff ? commentOrigin : undefined}

@@ -44,7 +44,7 @@ export type ChangeRequestReview = {
     submissionPending: boolean;
     summaryDraftKey: string;
     fileComments: boolean;
-    addComment: (position: ReviewCommentPosition, body: string) => Promise<boolean>;
+    addComment: (position: ReviewCommentPosition, body: string, headSha?: string) => Promise<boolean>;
     updateComment: (commentId: string, body: string) => Promise<boolean>;
     deleteComment: (commentId: string) => Promise<boolean>;
     reply: (threadId: string, body: string) => Promise<boolean>;
@@ -152,8 +152,8 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
             submissionPending,
             summaryDraftKey: reviewKey,
             fileComments: descriptor.features.reviewDraftFileComments,
-            addComment: (position, body) => write(
-                () => sourceControl.changeRequestReviewComment({ ...mutation(), target: reviewed, ...position, body }),
+            addComment: (position, body, commentHead = reviewed.headSha) => write(
+                () => sourceControl.changeRequestReviewComment({ ...mutation(), target: { ...reviewed, headSha: commentHead }, ...position, body }),
                 t('review.toast.addFailed', { reference: label }),
             ),
             updateComment: (commentId, body) => write(

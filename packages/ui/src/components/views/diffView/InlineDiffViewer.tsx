@@ -1,4 +1,3 @@
-import type { PendingReviewController } from "@/components/sourceBoard/usePendingReview";
 import React from 'react';
 import { SubmoduleDiffSummary } from '../SubmoduleDiffSummary';
 import { isDocumentVersions } from '../files/documentVersions';
@@ -82,7 +81,6 @@ const InlineImageDiffViewer = React.memo<InlineImageDiffViewerProps>(({
 
 interface InlineDiffViewerProps {
   persistenceOwner?: string | null;
-  review?: PendingReviewController;
   filePath: string;
   diff: DiffData;
   commentOrigin?: DiffCommentOrigin;
@@ -100,7 +98,6 @@ interface InlineDiffViewerProps {
 
 export const InlineDiffViewer: React.FC<InlineDiffViewerProps> = React.memo<InlineDiffViewerProps>(({
   persistenceOwner,
-  review,
   filePath,
   diff,
   commentOrigin,
@@ -179,7 +176,6 @@ export const InlineDiffViewer: React.FC<InlineDiffViewerProps> = React.memo<Inli
         pendingContextExpansion={pendingContextExpansion}
         contextLoading={contextLoading}
         onFindWordRequest={onFindWordRequest}
-        review={review}
         reviewHeadSha={diff.reviewHeadSha}
       />
     </div>
