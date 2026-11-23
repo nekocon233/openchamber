@@ -229,9 +229,17 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                     </div>
                 ) : null}
                 {listItem ? (
-                    <button type="button" dir="auto" aria-label={`${id} ${title}`} className={cn(titleClass, 'w-full text-start rounded-sm focus-visible:bg-interactive-hover')}>
-                        {title}
-                    </button>
+                    <div className="flex min-w-0 items-center gap-1">
+                        <button
+                            type="button"
+                            dir="auto"
+                            aria-label={`${id} ${title}`}
+                            className={cn(titleClass, 'min-w-0 rounded-sm focus-visible:bg-interactive-hover', pullAction ? 'oc-ui-start-align' : 'w-full text-start')}
+                        >
+                            {title}
+                        </button>
+                        {pullAction}
+                    </div>
                 ) : <div dir="auto" className={titleClass}>{title}</div>}
                 <div className={cn('mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 typography-micro', REFERENCE_META_TEXT)}>
                     <span className="font-mono">{id}</span>
@@ -281,12 +289,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                         <ReferenceLabelChips labels={labels} max={2} />
                     ) : null}
                 </div>
-                {pullAction ? (
-                    <div className="flex min-w-0 items-center gap-1">
-                        {pullFileStats}
-                        {pullAction}
-                    </div>
-                ) : pullFileStats}
+                {pullFileStats}
                 {conflict ? <div className="mt-1 flex items-center gap-1 typography-micro text-[var(--status-warning-text)]">
                     <Icon name="error-warning" className="size-3.5 shrink-0" />
                     {t('sessions.sidebar.group.pr.status.mergeConflicts')}
