@@ -185,10 +185,10 @@ export function useDiffViewComparisons({
         () => diffCommentOriginFromSource(comparisonSource, { provider: prComparison.provider, revision: selectedPrHead }),
         [comparisonSource, prComparison.provider, selectedPrHead],
     );
+    const comparison = useGitComparison(effectiveDirectory ?? null, comparisonSource, visible && !isVSCodeRuntime(), activeDiffScope === 'branch' ? branchRevision : '', prComparison.readContext, prComparison.provider);
     const {
         review: changeRequestReview, provider: reviewProvider,
-    } = useComparisonReview(prComparison, effectiveDirectory, visible && activeDiffScope === 'pr' && !isVSCodeRuntime());
-    const comparison = useGitComparison(effectiveDirectory ?? null, comparisonSource, visible && !isVSCodeRuntime(), activeDiffScope === 'branch' ? branchRevision : '', prComparison.readContext, prComparison.provider);
+    } = useComparisonReview(prComparison, effectiveDirectory, visible && activeDiffScope === 'pr' && !isVSCodeRuntime(), comparison.headSha);
     const diffOwner = workspaceViewKey(runtimeKey, effectiveDirectory, 'diff-content', currentBranch, activeDiffScope,
         activeDiffScope === 'turn' ? currentSessionId : JSON.stringify(comparisonSource),
         activeDiffScope === 'pr' && prComparison.readContext ? workspaceRepositoryIdentity(prComparison.readContext) : null);

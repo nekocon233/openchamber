@@ -11,11 +11,12 @@ export const DIFF_TOOLBAR_MENU_STEPS = {
 } as const;
 
 const DIFF_TOOLBAR_MENU_STEP_ORDER = [DIFF_TOOLBAR_MENU_STEPS.walkthrough];
+const DIFF_TOOLBAR_OVERFLOW_STEPS = [...DIFF_TOOLBAR_MENU_STEP_ORDER, 'data-diff-toolbar-hide-verdict-actions'];
 
 const DIFF_TOOLBAR_FIT: ToolbarFit = {
-  steps: ['data-diff-toolbar-compact-walkthrough', 'data-diff-toolbar-compact', ...DIFF_TOOLBAR_MENU_STEP_ORDER],
+  steps: ['data-diff-toolbar-compact-walkthrough', 'data-diff-toolbar-compact', ...DIFF_TOOLBAR_OVERFLOW_STEPS],
   clippedText: '.truncate',
-  overflowSteps: DIFF_TOOLBAR_MENU_STEP_ORDER,
+  overflowSteps: DIFF_TOOLBAR_OVERFLOW_STEPS,
 };
 
 export const useToolbarFit = (ref: React.RefObject<HTMLElement | null>, fit: ToolbarFit): void => {

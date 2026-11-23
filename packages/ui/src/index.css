@@ -1533,6 +1533,14 @@ diffs-container {
   display: none;
 }
 
+[data-diff-toolbar-compact]:has(.diff-toolbar__verdict-action) {
+  column-gap: 0.25rem;
+}
+
+[data-diff-toolbar-hide-verdict-actions] .diff-toolbar__verdict-action {
+  display: none;
+}
+
 /* Walkthrough header: gives up room in steps while its row does not fit, as
    measured by useToolbarFit; each step keeps the ones before it. Labels go
    first; then the model, the language, the guide and Changes move into "More";

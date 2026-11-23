@@ -59,6 +59,7 @@ describe('sending a review', () => {
             ] },
         },
         readFailed: false,
+        submissionPending: false,
         fileComments: true,
         addComment: async () => true, updateComment: async () => true, deleteComment: async () => true,
         reply: async () => true, setResolved: async () => true, attachThread: () => undefined, discard: async () => true,
@@ -97,6 +98,20 @@ describe('sending a review', () => {
         expect(requestChanges?.hasAttribute('disabled')).toBe(false);
         await act(async () => { requestChanges?.click(); });
         expect(received).toEqual({ verdict: 'request-changes', body: undefined });
+    });
+
+    test('a focused approval form submits only its selected verdict', async () => {
+        const submissions: ReviewSubmission[] = [];
+        const submit = async (submission: ReviewSubmission) => {
+            submissions.push(submission);
+            return true;
+        };
+        await act(async () => root.render(<I18nProvider><ReviewSubmitForm review={review(submit)} provider="github" verdict="approve" onDone={() => undefined} /></I18nProvider>));
+        expect(button('Request changes')).toBeUndefined();
+        expect(button('Send 2 comments')).toBeUndefined();
+        expect(button('Approve')).toBeTruthy();
+        await act(async () => { button('Approve')?.click(); });
+        expect(submissions).toEqual([{ verdict: 'approve', body: undefined }]);
     });
 
     test('pending review section submits request changes without a summary body', async () => {
