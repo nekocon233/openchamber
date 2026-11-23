@@ -320,9 +320,10 @@ when it is absent from the loaded page. The existing query, category, list
 position and reply draft stay in the retained PR pane. The comparison's
 repository/account context and PR identity must still match the return target.
 The list row's Changes button opens the comparison directly. Back restores
-the original project list, including its category, search and scroll. The
-adjacent PR details action opens the compared pull request. Both navigation
-actions close the resident Changes document before opening the PR pane.
+the original project list, including its category, search and scroll. These
+list-origin comparisons offer an adjacent action to open the compared PR's
+details. Both navigation actions close the resident Changes document before
+opening the PR pane.
 Nested repositories keep the workspace destination separate from the repository
 whose diff is read. A new request without a PR origin clears the old return
 target. Mobile Changes keeps the same return identity and routes Back to PR to

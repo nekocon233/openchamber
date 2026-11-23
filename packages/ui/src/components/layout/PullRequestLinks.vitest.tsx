@@ -145,6 +145,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     await act(async () => changes.click());
     await until(() => right.textContent?.includes('linked-review.txt') === true);
     await until(() => Boolean(document.querySelector(`[aria-label="Back to PR #${number}"]`)));
+    expect(document.querySelector(`button[aria-label="View PR #${number} details"]`)).toBeNull();
     const back = document.querySelector<HTMLButtonElement>(`[aria-label="Back to PR #${number}"]`);
     if (!back) throw new Error('Missing linked PR return');
     await act(async () => back.click());
@@ -212,6 +213,7 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     await act(async () => normalChanges.click());
     await until(() => right.textContent?.includes('project-review.txt') === true);
     await until(() => Boolean(document.querySelector('[aria-label="Back to PR #7"]')));
+    expect(document.querySelector('button[aria-label="View PR #7 details"]')).toBeNull();
     await act(async () => container.querySelector<HTMLButtonElement>('[data-chat-pr-link]')?.click());
     await until(() => Boolean(linked()?.querySelector('textarea')));
     await act(async () => useUIStore.getState().openContextPanelTab('/repo', { mode: 'diff', diffScope: 'pr' }));

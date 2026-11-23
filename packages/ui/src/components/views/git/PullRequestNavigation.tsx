@@ -41,12 +41,13 @@ export const PullRequestNavigation: React.FC<{
     else useUIStore.getState().openContextPanelTab(workspaceDirectory, { mode: 'pr' });
   };
   const destination = live ?? restored;
-  const backLabel = destination?.tab === 'project' && destination.showList
+  const returnsToList = destination?.tab === 'project' && destination.showList;
+  const backLabel = returnsToList
     ? t('gitView.pullRequest.backToList')
     : t(context.provider === 'gitlab' ? 'references.projectPulls.backToMerge' : 'references.projectPulls.backToPull', { number: source.number });
-  const detailsLabel = t('references.projectPulls.viewDetails', {
+  const detailsLabel = returnsToList ? t('references.projectPulls.viewDetails', {
     reference: context.provider === 'gitlab' ? `MR !${source.number}` : `PR #${source.number}`,
-  });
+  }) : null;
   const navigate = (to: 'origin' | 'details') => {
     if (live) {
       if (!usePullRequestSelectionStore.getState().requestReturn(live, to)) return;
@@ -81,10 +82,12 @@ export const PullRequestNavigation: React.FC<{
         <Icon name="arrow-left" className="size-4" />
         {!compact && <span className="truncate">{backLabel}</span>}
       </Button>
-      <Button variant="ghost" size="sm" className={buttonClass} title={detailsLabel} aria-label={detailsLabel} onClick={() => navigate('details')}>
-        <Icon name="git-pull-request" className="size-4" />
-        {!compact && <span className="truncate">{detailsLabel}</span>}
-      </Button>
+      {detailsLabel && (
+        <Button variant="ghost" size="sm" className={buttonClass} title={detailsLabel} aria-label={detailsLabel} onClick={() => navigate('details')}>
+          <Icon name="git-pull-request" className="size-4" />
+          {!compact && <span className="truncate">{detailsLabel}</span>}
+        </Button>
+      )}
     </div>
   );
 };
