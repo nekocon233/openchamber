@@ -491,9 +491,9 @@ context handoff. A native `truncated_fields: ['content']` marker survives as
 ## Skill commands
 
 The command menu lists skills from the direct executable's local `--print /skills`
-command in the requested directory. A process-local settings override clears the
-model/provider selection for discovery only, so a shell gateway or missing API
-key cannot turn a local listing into a model request. Prompt routing is unchanged.
+command in the requested directory. The discovery process clears the saved model
+selection and uses the CLI's configured authentication, including Gemini API key
+mode. The listing runs without a model turn.
 
 Directory listings have a 25-second process deadline and share a 10-minute cache,
 bounded to 64 directories. Cold installed-CLI skill discovery can exceed the

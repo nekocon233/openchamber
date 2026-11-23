@@ -239,8 +239,10 @@ export function useComposerSubmission({
         let commandPlan = !queuedOnly && inputSnapshot.hasContent
             ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
             : null;
-        if (commandPlan && ((nativeSession || nativeBackendOfProviderId(providerIdToSend ?? ''))
-            && !isNativeLocalCommand(commandPlan.command.name))) commandPlan = null;
+        if (commandPlan && (nativeSession || nativeBackendOfProviderId(providerIdToSend ?? ''))) {
+            const { name } = commandPlan.command;
+            if (!isNativeLocalCommand(name) || (name === 'compact' && !nativeSession)) commandPlan = null;
+        }
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);
             const commandIsAvailable = commandPlan.command.name === 'btw'
@@ -406,9 +408,12 @@ export function useComposerSubmission({
             await runComposerActionCommand({
                 setMessage, confirmedMentionsRef, persistDraftImmediately, chatDraftIdentity, messageHistory,
                 setPromptHistorySearch, isBtwActive, setExpandedInput, isMobile, composerRef,
-                currentSessionId, scrollToBottom, openTimelineDialog, setReviewDialogOpen, currentProviderId,
-                currentModelId, currentAgentName, currentVariant, t, currentDirectory, getSubmitErrorMessage,
-                commandPlan, capturedSendConfig, restoreComposerText,
+                currentSessionId, scrollToBottom, openTimelineDialog, setReviewDialogOpen, t, currentDirectory,
+                getSubmitErrorMessage, commandPlan, restoreComposerText,
+                selection: {
+                    providerID: currentProviderId, modelID: currentModelId,
+                    agent: currentAgentName, variant: currentVariant ?? undefined,
+                },
             });
             return;
         }

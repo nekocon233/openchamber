@@ -1,5 +1,4 @@
 import type { useComposerSessionScope } from './useComposerSessionScope';
-import type { useComposerSelection } from './useComposerSelection';
 import type { useComposerDraftText } from './useComposerDraftText';
 import type { useComposerHistorySearchState } from './useComposerHistorySearchState';
 import type { useComposerEditorState } from './useComposerEditorState';
@@ -8,15 +7,15 @@ import type { useComposerExpansion } from './useComposerExpansion';
 import type { useComposerPreferences } from './useComposerPreferences';
 import type { useI18n } from '@/lib/i18n';
 import type { useComposerDraftHistory } from './useComposerDraftHistory';
-import { type QueuedMessage } from '@/stores/messageQueueStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useInputStore } from '@/sync/input-store';
 import * as sessionActions from '@/sync/session-actions';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { createChatDraftIdentity, type ChatDraftIdentity } from '@/lib/chatDraftPersistence';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { toast } from '@/components/ui';
 import { planLocalSlashCommand } from '../../composer/submit/slashCommands';
-import { runForkCommand } from '../../composer/submit/forkCommand';
+import { runForkCommand, type ForkSendSelection } from '../../composer/submit/forkCommand';
 import type { ChatInputProps } from './chatInputProps';
 import type { createComposerSubmitErrorMessage } from './createComposerSubmitErrorMessage';
 
@@ -30,11 +29,10 @@ type ActionCommandContext = Pick<ReturnType<typeof useComposerDraftText>, 'setMe
     & Pick<ReturnType<typeof useComposerExpansion>, 'setExpandedInput'>
     & Pick<ReturnType<typeof useComposerPreferences>, 'isMobile'>
     & Pick<ChatInputProps, 'scrollToBottom'>
-    & Pick<ReturnType<typeof useComposerSelection>, 'currentProviderId' | 'currentModelId' | 'currentAgentName' | 'currentVariant'>
     & {
     commandPlan: NonNullable<ReturnType<typeof planLocalSlashCommand>>;
     currentSessionId: string;
-    capturedSendConfig: QueuedMessage['sendConfig'];
+    selection: ForkSendSelection;
     restoreComposerText: (target?: ChatDraftIdentity | null) => void;
     getSubmitErrorMessage: ReturnType<typeof createComposerSubmitErrorMessage>;
 };
@@ -42,9 +40,8 @@ type ActionCommandContext = Pick<ReturnType<typeof useComposerDraftText>, 'setMe
 export async function runComposerActionCommand({
     setMessage, confirmedMentionsRef, persistDraftImmediately, chatDraftIdentity, messageHistory,
     setPromptHistorySearch, isBtwActive, setExpandedInput, isMobile, composerRef, currentSessionId,
-    scrollToBottom, openTimelineDialog, setReviewDialogOpen, currentProviderId, currentModelId,
-    currentAgentName, currentVariant, t, currentDirectory, getSubmitErrorMessage, commandPlan,
-    capturedSendConfig, restoreComposerText,
+    scrollToBottom, openTimelineDialog, setReviewDialogOpen, t, currentDirectory, getSubmitErrorMessage,
+    commandPlan, selection, restoreComposerText,
 }: ActionCommandContext) {
         const actionName = commandPlan.command.name;
         setMessage('');
@@ -66,12 +63,7 @@ export async function runComposerActionCommand({
             } else if (actionName === 'handoff-review') {
                 setReviewDialogOpen(true);
             } else if (actionName === 'fork') {
-                const forkOutcome = await runForkCommand(currentSessionId, commandPlan.command.argument, {
-                    providerID: capturedSendConfig?.providerID ?? currentProviderId,
-                    modelID: capturedSendConfig?.modelID ?? currentModelId,
-                    agent: capturedSendConfig?.agent ?? currentAgentName,
-                    variant: capturedSendConfig?.variant ?? currentVariant ?? undefined,
-                }, {
+                const forkOutcome = await runForkCommand(currentSessionId, commandPlan.command.argument, selection, {
                     fork: sessionActions.forkFromLastCompletedTurn,
                     directoryFor: (session) => useSessionUIStore.getState().getDirectoryForSession(session.id) || session.directory || null,
                     send: (text, selection, target) => useSessionUIStore.getState().sendMessage(
@@ -91,15 +83,21 @@ export async function runComposerActionCommand({
                 });
                 if (forkOutcome === 'send-failed') toast.error(t('chat.chatInput.toast.forkSendFailed'));
             } else if (actionName === 'compact') {
-                await sessionActions.waitForConnectionOrThrow();
-                const compactDirectory = useSessionUIStore.getState().getDirectoryForSession(currentSessionId) || currentDirectory || undefined;
-                await sessionActions.compactSession(
-                    currentSessionId,
-                    currentProviderId && currentModelId
-                        ? { providerID: currentProviderId, modelID: currentModelId, variant: currentVariant }
-                        : null,
-                    compactDirectory,
-                );
+                if (isNativeSessionId(currentSessionId) && !isBtwActive) {
+                    await sessionActions.compactNativeSession(currentSessionId, {
+                        ...selection,
+                        instructions: commandPlan.command.argument || undefined,
+                    });
+                    scrollToBottom?.();
+                } else {
+                    await sessionActions.waitForConnectionOrThrow();
+                    const directory = useSessionUIStore.getState().getDirectoryForSession(currentSessionId) || currentDirectory || undefined;
+                    await sessionActions.compactSession(
+                        currentSessionId,
+                        selection.providerID && selection.modelID ? selection : null,
+                        directory,
+                    );
+                }
             }
         } catch (error) {
             restoreComposerText();

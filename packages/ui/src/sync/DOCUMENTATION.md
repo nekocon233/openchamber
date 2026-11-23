@@ -1628,8 +1628,8 @@ with a native branch (`sync/native-send.ts`):
 
 - The message id is one the CLI records (`ncl_u_<uuid>`, `ncx_u_<uuid>`), so the
   optimistic message and the CLI's echo are the same record.
-- The composer keeps `/undo`, `/redo`, `/timeline`, `/btw` and
-  `/handoff-review` (`isNativeLocalCommand`), which OpenChamber runs itself.
+- The composer dispatches `/undo`, `/redo`, `/timeline`, `/btw`,
+  `/handoff-review` and `/compact` from its local command plan.
   Claude's other slash commands go to its CLI as typed. Codex built-ins are
   dispatched before prompt preparation because app-server does not parse
   terminal commands. Its enabled skills are resolved by the native server.
@@ -1795,11 +1795,13 @@ native session, in either direction, goes through the native prompt; the
 handoff and auto-review rules go as its `instructions`.
 
 In the composer, `/compact` in a native session calls
-`compactNativeSession`, which runs the CLI's own compaction; no message is
-sent, and the compaction marker shows it. The command picker offers the
-composer's `/compact`, `/undo`, `/redo`, `/timeline` and `/btw`, then the CLI's
-own commands (`useNativeCommands`) except those a composer command shadows;
-picking one inserts it as typed, and `/btw` opens the btw composer.
+`compactNativeSession` with the selected model and any summary instructions.
+The command keeps attachments in the draft and compaction appears through the
+CLI's history marker. A failed request restores the command text. Antigravity
+returns an unsupported error for manual compaction. The command picker offers
+`/compact` for Claude Code, Codex and DeepSeek Harness, plus OpenChamber's
+other local commands and the CLI's own commands (`useNativeCommands`).
+Picking one inserts it as typed, and `/btw` opens the btw composer.
 
 Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
 `composer/submit/codexCommands.ts` executes them. Model, effort, speed and plan

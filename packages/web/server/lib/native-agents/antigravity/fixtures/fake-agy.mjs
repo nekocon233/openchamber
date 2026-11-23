@@ -14,8 +14,14 @@ const option = (name) => {
 };
 if (args.includes('/skills')) {
   if (!args.includes('--disable-slash-commands=false')) throw new Error('Skill listing must execute the local CLI command');
-  const settings = JSON.parse(option('--settings') ?? '{}');
-  if (settings.modelProvider !== '' || settings.model !== '') throw new Error('Skill listing must ignore gateway model routing');
+  const settingsFile = path.join(home, 'settings.json');
+  const saved = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
+  const settings = { ...saved, ...JSON.parse(option('--settings') ?? '{}') };
+  if (saved.modelProvider === 'gemini' && settings.modelProvider !== 'gemini') {
+    console.error('authentication required');
+    process.exit(1);
+  }
+  if (settings.model !== '') throw new Error('Skill listing must use the default model selection');
   if (process.env.AGY_FIXTURE_SKILL_PROBES) fs.appendFileSync(process.env.AGY_FIXTURE_SKILL_PROBES, JSON.stringify({ cwd: process.cwd(), args }) + '\n');
   const gate = process.env.AGY_FIXTURE_SKILL_GATE;
   if (gate && !fs.existsSync(gate)) await new Promise((resolve) => {
