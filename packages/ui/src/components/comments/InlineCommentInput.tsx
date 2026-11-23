@@ -67,8 +67,10 @@ export function InlineCommentInput({
   const lineActions = guestActionsWhere(useGuestActions(), 'diff');
   const [text, setText] = React.useState(initialText);
   const [addingToReview, setAddingToReview] = React.useState(false);
+  const addingToReviewRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const saveShortcut = formatShortcutForDisplay('enter');
+  const submitShortcut = formatShortcutForDisplay('enter');
+  const addToReviewLabel = t('review.action.addToReview');
   void isEditing;
 
   const resizeTextarea = () => {
@@ -159,25 +161,28 @@ export function InlineCommentInput({
     }
   };
 
+  const addToReview = async () => {
+    if (!review || !text.trim() || addingToReviewRef.current) return;
+    addingToReviewRef.current = true;
+    setAddingToReview(true);
+    try {
+      await review.add(text, normalizeRange(stableRangeRef.current));
+    } finally {
+      addingToReviewRef.current = false;
+      setAddingToReview(false);
+    }
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (isIMECompositionEvent(event)) return;
     if (fieldPicker.handleKeyDown(event)) return;
     if (event.key === 'Enter' && commentKeys.shouldSubmit(event)) {
       event.preventDefault();
-      save();
+      if (review && !floating) void addToReview();
+      else save();
     } else if (event.key === 'Escape') {
       event.preventDefault();
       onCancel();
-    }
-  };
-
-  const addToReview = async () => {
-    if (!review || !text.trim() || addingToReview) return;
-    setAddingToReview(true);
-    try {
-      await review.add(text, normalizeRange(stableRangeRef.current));
-    } finally {
-      setAddingToReview(false);
     }
   };
 
@@ -245,7 +250,7 @@ export function InlineCommentInput({
           enterKeyHint={commentKeys.returnKeySends ? 'send' : undefined}
           placeholder={isMobile
             ? t('inlineComment.input.placeholderShort')
-            : t('inlineComment.input.placeholder', { shortcut: saveShortcut })}
+            : t('inlineComment.input.placeholder', { shortcut: submitShortcut })}
           aria-label={ariaLabel}
           spellCheck
           className={cn(
@@ -326,14 +331,9 @@ export function InlineCommentInput({
                 <TooltipContent side="top" sideOffset={6}>{t('review.action.suggest')}</TooltipContent>
               </Tooltip>
             ) : null}
-            {review ? (
-              <Button type="button" variant="outline" size={isMobile ? 'sm' : 'xs'} className="shrink-0" onClick={() => void addToReview()} disabled={!text.trim() || addingToReview}>
-                {addingToReview ? <Spinner className="size-3.5" /> : null}
-                {t('review.action.addToReview')}
-              </Button>
-            ) : null}
             <Button
               type="button"
+              variant={review ? 'outline' : 'default'}
               size={compactAttach ? 'icon' : isMobile ? 'sm' : 'xs'}
               className="shrink-0"
               aria-label={saveLabel ?? t('review.action.attach')}
@@ -344,8 +344,22 @@ export function InlineCommentInput({
             >
               {saving ? <Spinner className="size-3.5" /> : saveLabel ? null : <Icon name="attachment-2" className="size-3.5" />}
               {compactAttach ? null : saveLabel ?? t('review.action.attach')}
-              {isMobile ? null : <span className="text-[0.6875rem] opacity-70">{saveShortcut}</span>}
+              {!isMobile && !review ? <span className="text-[0.6875rem] opacity-70">{submitShortcut}</span> : null}
             </Button>
+            {review ? (
+              <Button
+                type="button"
+                size={isMobile ? 'sm' : 'xs'}
+                className="shrink-0"
+                aria-label={addToReviewLabel}
+                onClick={() => void addToReview()}
+                disabled={!text.trim() || addingToReview}
+              >
+                {addingToReview ? <Spinner className="size-3.5" /> : null}
+                {addToReviewLabel}
+                {isMobile ? null : <span aria-hidden="true" className="text-[0.6875rem] opacity-70">{submitShortcut}</span>}
+              </Button>
+            ) : null}
             </div>
           </div>
         )}

@@ -30,9 +30,11 @@ This module lets a person review a change request from its diff: the comments un
 
 A local draft would need its own sync across devices and would hide what an agent wrote through `gh`. The host already keeps one draft per person, which is what the reviewer sees on its own site too.
 
-### Why Attach stays the primary action of the comment field
+### Why review fields default to Add to review
 
-The field talks to the agent everywhere else, and most comments in a diff are for the agent. Add to review sits beside it, the same on your own change request and on someone else's, so nothing changes under a hand that knows the field.
+When the host accepts a review comment, the primary button and the field's
+submit key both add it to the pending review. The Attach button puts the
+comment in the composer and is the primary action outside a review.
 
 ### Why the review button and not a bar over the files
 

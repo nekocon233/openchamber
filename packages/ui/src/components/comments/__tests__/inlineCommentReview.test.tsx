@@ -76,21 +76,38 @@ describe('the comment field outside and inside a change request review', () => {
         expect(footer()).toContain('Whole file');
     });
 
-    test('a review adds its button and leaves Attach what Enter does', async () => {
-        const add = mock(async (_text: string) => true);
+    test('Enter adds the comment to review and Attach stays a separate action before it', async () => {
+        const addedComments: Array<{ text: string; range: InlineCommentInputProps['lineRange'] }> = [];
+        const add = async (text: string, range?: InlineCommentInputProps['lineRange']) => {
+            addedComments.push({ text, range });
+            return true;
+        };
         const onSave = mock((_text: string) => undefined);
-        await mount({ onSave, review: { add, suggestionCode: () => 'line' } });
+        await mount({ onSave, lineRange: { start: 9, end: 7, side: 'additions' }, review: { add, suggestionCode: () => 'line' } });
 
         const field = browser.document.querySelector('textarea');
+        if (!field) throw new Error('Missing comment field');
+        const pressEnter = (modifiers: Pick<KeyboardEventInit, 'shiftKey' | 'isComposing' | 'repeat'> = {}) => field.dispatchEvent(new browser.KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', bubbles: true, cancelable: true, ...modifiers,
+        }));
+        expect(buttons()).toEqual(['Suggest change', 'Attach', 'Add to review']);
         await act(async () => {
-            field?.dispatchEvent(new browser.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+            pressEnter({ shiftKey: true });
+            pressEnter({ isComposing: true });
         });
-        expect(onSave).toHaveBeenCalledTimes(1);
-        expect(add).not.toHaveBeenCalled();
+        expect(onSave).not.toHaveBeenCalled();
+        expect(addedComments).toHaveLength(0);
 
-        const addButton = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('Add to review'));
-        await act(async () => { addButton?.click(); });
-        expect(add).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            pressEnter();
+            pressEnter({ repeat: true });
+        });
+        expect(addedComments).toEqual([{ text: 'Note', range: { start: 7, end: 9, side: 'additions' } }]);
+        expect(onSave).not.toHaveBeenCalled();
+
+        await act(async () => { document.querySelector<HTMLButtonElement>('button[aria-label="Attach"]')?.click(); });
+        expect(onSave).toHaveBeenCalledTimes(1);
+        expect(addedComments).toHaveLength(1);
     });
 
     test('a suggestion starts from the selected lines', async () => {
