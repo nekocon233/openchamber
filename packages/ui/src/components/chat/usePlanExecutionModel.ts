@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import type { NativePlanExecutionChoice } from '@/lib/api/types';
-import { nativeModelAliasVariant, type FormRequest, type Session } from '@/lib/opencode/model';
+import { findCatalogModel, nativeModelAliasVariant, type FormRequest, type Session } from '@/lib/opencode/model';
 import { readNativePlanExecution } from '@/lib/native-agents/forms';
 import { isProviderPickableForSession, isUnifiedNativeSessionId, nativeBackendOfProviderId } from '@/lib/native-agents/ids';
 import { supportsUnifiedNativeBackend } from '@/lib/native-agents/capabilities';
 import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
-import { configuredVariantForModel, listModelVariantIds, preferredModelVariant } from '@/lib/modelVariants';
+import { configuredVariantForModel, listModelVariantIds } from '@/lib/modelVariants';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useUIStore } from '@/stores/useUIStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionSelector } from '@/sync/sync-context';
 import { useChatSessionSelection } from './chatColumnSession';
@@ -76,12 +77,27 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
     }
     setLocal({ key, value: next });
   };
-  const choose = (providerId: string, modelId: string, favoriteVariant?: string | null) => {
-    const target = pickable.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
+  const choose = (providerId: string, pickedModelId: string) => {
+    const provider = pickable.find((provider) => provider.id === providerId);
+    const target = findCatalogModel(provider?.models, pickedModelId);
     if (!target) return;
+    const modelId = target.id;
     const variants = listModelVariantIds(target.variants);
+    let favoriteVariant: string | null | undefined;
+    for (const favorite of useUIStore.getState().favoriteModels) {
+      if (favorite.providerID !== providerId) continue;
+      const alias = target.nativeAliases?.find((alias) => alias.id === favorite.modelID);
+      if (favorite.modelID !== modelId && !alias) continue;
+      const variant = favorite.variant === undefined ? alias?.variant : favorite.variant;
+      if (variant !== null && (variant === undefined || !variants.includes(variant))) continue;
+      if (favorite.modelID === pickedModelId) {
+        favoriteVariant = variant;
+        break;
+      }
+      if (favoriteVariant === undefined) favoriteVariant = variant;
+    }
     if (favoriteVariant !== undefined) {
-      saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: favoriteVariant && variants.includes(favoriteVariant) ? favoriteVariant : undefined });
+      saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: favoriteVariant ?? undefined });
       return;
     }
     const preference = useSelectionStore.getState().getAgentModelVariantForSession(form.sessionID, 'build', providerId, modelId);
@@ -91,8 +107,7 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
     const variant = value?.model.providerID === providerId && (value.model.modelID === modelId || model?.id === modelId)
       ? value.variant
       : composerModel ? current?.variant ?? (aliasVariant && variants.includes(aliasVariant) ? aliasVariant : undefined)
-      : preference === null ? undefined : preference && variants.includes(preference) ? preference
-        : configured && variants.includes(configured) ? configured : preferredModelVariant(variants, providerId);
+      : preference === null ? undefined : preference && variants.includes(preference) ? preference : configured;
     saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: variant && variants.includes(variant) ? variant : undefined });
   };
   const chooseVariant = (variant: string | undefined) => {

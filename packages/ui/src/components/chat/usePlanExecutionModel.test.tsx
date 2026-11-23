@@ -9,6 +9,7 @@ import { projectNativeQuestion } from '@/lib/native-agents/forms';
 import type { NativePlanExecutionChoice } from '@/lib/api/types';
 import type { FormRequest } from '@/lib/opencode/model';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useUIStore } from '@/stores/useUIStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { SyncProvider, useDirectoryStore } from '@/sync/sync-context';
 import { installHookTestDom } from '@/components/session/sidebar/test-utils/testDom';
@@ -20,7 +21,10 @@ const descriptor = (id: string, efforts: string[], fast = false) => ({
   id, name: id, efforts, fast, defaultEffort: null, contextWindow: 64000, outputLimit: 8192, input: { image: false, pdf: false },
 });
 const providers = [
-  buildNativeProvider('claude', [descriptor('opus', ['high', 'max'])]),
+  buildNativeProvider('claude', [
+    descriptor('fable', ['high', 'xhigh', 'max']),
+    { ...descriptor('opus', ['high', 'max']), aliases: [{ id: 'opus-legacy' }, { id: 'opus-high', variant: 'high' }] },
+  ]),
   buildNativeProvider('codex', [descriptor('gpt-test', ['low', 'high', 'max'], true)]),
   buildNativeProvider('deepseek', [descriptor('ds-test', ['max']), descriptor('plain', [])]),
 ];
@@ -28,11 +32,13 @@ const choice = (providerID: string, modelID: string, variant?: string): NativePl
 
 const withProbe = async (verify: (fixture: {
   state: () => PlanExecutionModelState;
+  sessionId: string;
   render: (pending?: NativePlanExecutionChoice, requestId?: string, mountKey?: string) => Promise<void>;
-  setExecution: (execution: NativePlanExecutionChoice, revision?: number) => Promise<void>;
+  setExecution: (execution: NativePlanExecutionChoice | null, revision?: number) => Promise<void>;
 }) => Promise<void>) => {
   const dom = installHookTestDom();
   const configBefore = useConfigStore.getState();
+  const favoritesBefore = useUIStore.getState().favoriteModels;
   const selectionBefore = useSelectionStore.getState();
   const spies = [
     spyOn(opencodeClient, 'getFilesystemHomeInfo').mockResolvedValue({ home: '/home' }),
@@ -57,12 +63,12 @@ const withProbe = async (verify: (fixture: {
         execution: choice('deepseek-native', 'ds-test', 'max') },
   };
   let record = nativeSessionSchema.parse({ id: sessionId, directory, projectID: '', title: 'Plan effort', time: { created: 1, updated: 1 },
-    agent: 'plan', model: { providerID: 'claude-native', id: 'opus', variant: 'high' },
+    agent: 'plan', model: { providerID: 'claude-native', id: 'fable', variant: 'xhigh' },
     metadata: { openchamber: { native: nativeMetadata } },
   });
   function Probe({ form }: { form: FormRequest }) {
     store = useDirectoryStore(directory, { bootstrap: false });
-    latest = usePlanExecutionModel(form, { providerID: 'claude-native', modelID: 'opus', variant: 'high' });
+    latest = usePlanExecutionModel(form, { providerID: 'claude-native', modelID: 'fable', variant: 'xhigh' });
     return null;
   }
   const render = async (pending?: NativePlanExecutionChoice, requestId = firstRequestId, mountKey = 'main') => {
@@ -78,7 +84,7 @@ const withProbe = async (verify: (fixture: {
     if (!latest) throw new Error('Expected the hook to render');
     return latest;
   };
-  const setExecution = async (execution: NativePlanExecutionChoice, revision = 3) => {
+  const setExecution = async (execution: NativePlanExecutionChoice | null, revision = 3) => {
     record = { ...record, metadata: { openchamber: { native: { ...nativeMetadata,
       revision, agents: { revision: 1, subagent: null, execution },
     } } } };
@@ -86,20 +92,59 @@ const withProbe = async (verify: (fixture: {
     await act(() => store?.setState({ session: [record] }));
   };
   try {
+    useUIStore.setState({ favoriteModels: [] });
     await render();
     await act(() => useConfigStore.setState({ providers, settingsDefaultModel: 'codex-native/gpt-test', settingsDefaultVariant: 'max' }));
     await setExecution(choice('deepseek-native', 'ds-test', 'max'));
-    await verify({ state, render, setExecution });
+    await verify({ state, sessionId, render, setExecution });
   } finally {
     await act(() => root.unmount());
     for (const spy of spies) spy.mockRestore();
     useConfigStore.setState(configBefore);
+    useUIStore.setState({ favoriteModels: favoritesBefore });
     useSelectionStore.setState(selectionBefore);
     dom.restore();
   }
 };
 
 describe('plan approval model and effort drafts', () => {
+  const favoriteCases = [
+    ['the favorite effort ahead of Build', 'opus', 'high', 'max', 'high'],
+    ['the effort saved under a native alias', 'opus-legacy', 'high', 'max', 'high'],
+    ['the effort carried by an older native alias', 'opus-high', undefined, 'max', 'high'],
+    ['the favorite CLI default ahead of Build', 'opus', null, 'max', undefined],
+    ['the remembered Build effort when the favorite effort is unavailable', 'opus', 'retired', 'high', 'high'],
+    ['the CLI default when an older favorite has no effort', 'opus', undefined, undefined, undefined],
+    ['the CLI default when no favorite or Build effort applies', 'opus', 'retired', undefined, undefined],
+  ] as const;
+  for (const [scenario, favoriteModelId, favoriteVariant, buildVariant, expected] of favoriteCases) {
+    test(`switching a Fable plan to Opus uses ${scenario}`, async () => {
+      await withProbe(async ({ state, sessionId, setExecution }) => {
+        await setExecution(null);
+        expect(state().value).toEqual(choice('claude-native', 'fable', 'xhigh'));
+        await act(() => {
+          useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'claude-native', 'opus', buildVariant);
+          useUIStore.setState({ favoriteModels: [{ providerID: 'claude-native', modelID: favoriteModelId, variant: favoriteVariant }] });
+        });
+        await act(() => state().choose('claude-native', 'opus'));
+        expect(state().executionFor({ 'question-0': 'build' })).toEqual({ ...choice('claude-native', 'opus', expected), expectedRevision: 3 });
+      });
+    });
+  }
+
+  test('prefers the selected favorite when two model IDs match Opus', async () => {
+    await withProbe(async ({ state }) => {
+      await act(() => useUIStore.setState({ favoriteModels: [
+        { providerID: 'claude-native', modelID: 'opus', variant: 'max' },
+        { providerID: 'claude-native', modelID: 'opus-high' },
+      ] }));
+      await act(() => state().choose('claude-native', 'opus-high'));
+      expect(state().value).toEqual(choice('claude-native', 'opus', 'high'));
+      await act(() => state().choose('claude-native', 'opus'));
+      expect(state().value).toEqual(choice('claude-native', 'opus', 'max'));
+    });
+  });
+
   test('captures a manual effort for this approval while retaining the combination default for the next', async () => {
     await withProbe(async ({ state, render, setExecution }) => {
       expect(state().value).toEqual(choice('deepseek-native', 'ds-test', 'max'));
