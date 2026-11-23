@@ -91,6 +91,8 @@ describe('the comment field outside and inside a change request review', () => {
             key: 'Enter', code: 'Enter', bubbles: true, cancelable: true, ...modifiers,
         }));
         expect(buttons()).toEqual(['Suggest change', 'Attach', 'Add to review']);
+        expect(field.placeholder).toBe('Add a comment...');
+        expect(document.querySelector('button[aria-label="Add to review"]')?.textContent).toBe('Add to review');
         await act(async () => {
             pressEnter({ shiftKey: true });
             pressEnter({ isComposing: true });
