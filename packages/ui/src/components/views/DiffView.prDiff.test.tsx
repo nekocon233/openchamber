@@ -72,7 +72,11 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
     if (url.pathname.startsWith('/api/walkthrough/')) {
       if (servesDiff) {
         const patch = 'diff --git a/fixture.bin b/fixture.bin\nBinary files a/fixture.bin and b/fixture.bin differ\n';
-        return new Response(patch, { headers: { 'content-type': 'text/plain', 'x-openchamber-pr-head-sha': headSha } });
+        return Response.json({
+          mode: 'files',
+          headSha,
+          files: [{ path: 'fixture.bin', status: 'M', insertions: 0, deletions: 0, patch }],
+        });
       }
       return Response.json({ error: 'This source control provider does not offer change request walkthroughs', code: 'UNSUPPORTED_WALKTHROUGH_PROVIDER' }, { status: 422 });
     }

@@ -903,7 +903,9 @@ step of every turn while the panel is open on another scope.
 
 DiffView, mobile Changes and walkthrough share `PullRequestComparisonSelector`
 and the selection owned by `usePullRequestComparison`. PR mode reads the
-published patch of a change request through `/api/walkthrough/pr-diff`, always
+published file list of a change request through `/api/walkthrough/pr-files`
+(falling back to `/api/walkthrough/pr-diff` only when an older server answers
+non-JSON on `/pr-files`), always
 through the checkout's bound read context, and only for a provider the server
 serves (`useSourceControlProviderServing`); for a provider the server does
 not serve, PR mode is not offered and reads nothing. While the provider list
@@ -920,24 +922,33 @@ left out. The scope picker shows a count only once it is known, so an unread
 PR never reads as one with 0 files. The mode, picker and messages use the provider's
 term (`changeRequestCopy(key, term)`: merge-request wording on GitLab) and
 its reference prefix (`!` on GitLab). It includes no local edits
-or unpushed commits. `lib/diff/pullRequestDiff.ts` splits the response once;
-`useGitComparison` serves file patches from that same snapshot. Snapshot revisions
-invalidate the view's patch cache atomically, including edits with unchanged
-file names and line counts. Opening a file adds no network request.
+or unpushed commits. GitHub returns `{ mode: 'files', headSha, files }` with
+inline patches for small files and omitted patches for large or >3,000-file
+entries; non-GitHub providers return `{ mode: 'patch', headSha, patch }` which
+`lib/diff/pullRequestDiff.ts` splits once. `useGitComparison` serves inline
+file patches directly with no extra network request, and loads deferred files
+on demand through `/api/walkthrough/pr-file-diff` pinned to the snapshot's
+`headSha`. Snapshot revisions invalidate the view's patch cache atomically,
+including edits with unchanged file names and line counts.
 
-GitHub diff size refusals are handled by the server's temporary Git snapshot
-reader. The comparison request allows the five-minute server operation plus five
-seconds for cleanup and response delivery. Its successful text format is
-unchanged, so large PRs use the same parser, file list and retained snapshots.
-Oversized output or an incomplete read remains an error rather than a shortened
-file list.
+Large GitHub PRs whose complete diff exceeds 20 MiB still list every file in
+Changes without hitting the monolithic patch ceiling: PRs up to 3,000 files
+paginate `pulls.listFiles`, and larger PRs use the server's metadata-only
+temporary Git snapshot (`includePatch: false`). The comparison request allows
+the five-minute server operation plus five seconds for cleanup and response
+delivery. An oversized individual file fails only for itself (`413 file-too-large`)
+while other files in the PR remain viewable and reviewable. Incomplete reads
+still fail rather than publishing a shortened file list.
 
 PR comparisons retain completed snapshots across panel and mode switches.
-`pullRequestSnapshotCache.ts` belongs to the retained view and deduplicates
-in-flight reads. The bound context is part of each snapshot's identity, so a
-rebind never serves a snapshot read under the previous binding. It keeps at most eight completed snapshots with a 32 MiB
-text target, allowing one oversized PR to remain complete. Eviction drops cache
-ownership only, never mounted content or pending requests.
+`pullRequestSnapshotCache.ts` belongs to the retained view, deduplicates
+in-flight snapshot and per-file diff reads, and caches lazily fetched file
+diffs under the same snapshot entry (evicting old lazy file patches above a
+16 MiB per-snapshot target). The bound context is part of each snapshot's
+identity, so a rebind never serves a snapshot read under the previous binding.
+It keeps at most eight completed snapshots with a 32 MiB text target, allowing
+one oversized PR to remain complete. Eviction drops cache ownership only, never
+mounted content or pending requests.
 
 `gitPushEvents` fires only after a confirmed push, with the runtime captured at
 request start. The HTTP Git adapter emits it, and so do the managed network
@@ -960,8 +971,8 @@ For a provider with review drafts, Add to review saves inline comments to the
 same host draft used by the toolbar. The first comment creates the draft.
 The code container stays left to right and annotation controls follow the UI locale.
 
-Each PR snapshot carries the server's `X-OpenChamber-PR-Head-Sha` as `headSha`.
-Per-file patches and full-file reads retain that revision. The editor captures
+Each PR snapshot carries the server's verified `headSha` from `/api/walkthrough/pr-files`.
+Per-file patches, lazy per-file diff reads, and full-file reads retain that revision. The editor captures
 the revision and review identity when typing starts and sends the captured head
 with the comment. A full-file read also supplies the expected head to the server.
 A diff without a head can still render and ask the user to update the server

@@ -77,7 +77,8 @@ const createConditionalFetch = (cacheIdentity: string, host = '') => async (url:
     return timeoutFetch(url, options, host);
   }
 
-  const cacheKey = `${cacheIdentity}\n${url}`;
+  const accept = (new Headers(options.headers).get('accept') ?? '').trim().toLowerCase();
+  const cacheKey = `${cacheIdentity}\n${accept}\n${url}`;
   const cached = etagCache.get(cacheKey);
   const headers: ConditionalHeaders = { ...(options.headers || {}) };
   if (cached?.etag) {

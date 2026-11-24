@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
+import { z } from 'zod';
 import { sourceControlProviderDescriptors } from '../source-control/provider-descriptors.js';
 import { markGitHubAuthAccountInvalid } from '../github/auth.js';
 import { getOctokitForAccountId } from '../github/octokit.js';
 import { resolveGitHubRepoFromDirectory } from '../github/repo/index.js';
 import { resolveRepoNetwork } from '../github/repo/fork-detection.js';
 import { readGitHubPullPatch } from '../github/pull-diff.js';
+import { readGitHubPullFileDiff, readGitHubPullFileList } from '../github/pull-file-diff.js';
 import type { SourceControlIdentity } from '../github/octokit.js';
 import type { GitHubPullPatchResult, GitHubPullRepo } from '../github/pull-diff.js';
+import type { ComputeUnifiedFilePatchInput, GitHubPullFileDiffResult, PullRequestComparisonFile } from '../github/pull-file-diff.js';
 import type { PullRequestSnapshot } from '../git/pull-request-snapshot.js';
 import type { Json, ProviderReadContext } from '../source-control/provider-contract.js';
 import type { WalkthroughSource } from './contracts.js';
@@ -41,8 +44,26 @@ export interface GitHubPullSnapshotReadInput {
   context: ProviderReadContext;
   repo: GitHubPullRepo;
   number: number;
+  expectedHeadSha?: string | undefined;
+  expectedBaseSha?: string | undefined;
+  includePatch?: boolean | undefined;
   signal?: AbortSignal | undefined;
 }
+
+export interface PullRequestFileDiffReadOptions extends DirectGitHubDependencies {
+  path: string;
+  previousPath?: string | undefined;
+  status: string;
+  sourceRepo?: ChangeRequestReadInput['sourceRepo'];
+  revision?: string | undefined;
+  expectedHeadSha?: string | undefined;
+  signal?: AbortSignal | undefined;
+  computeDiff?: ((input: ComputeUnifiedFilePatchInput) => Promise<string>) | undefined;
+}
+
+export type PullRequestFilesResult =
+  | { mode: 'files'; headSha: string | null; files: PullRequestComparisonFile[] }
+  | { mode: 'patch'; headSha: string | null; patch: string };
 
 interface DirectGitHubDependencies {
   getOctokitForAccountId?: typeof getOctokitForAccountId | undefined;
@@ -147,7 +168,9 @@ async function resolvePullRequestRepo(
     });
   }
   let target: GitHubPullRepo = repo;
-  if (sourceRepo && !sameRepository(sourceRepo, repo)) {
+  if (readContext.linked === true && sourceRepo) {
+    target = { owner: sourceRepo.owner, repo: sourceRepo.repo };
+  } else if (sourceRepo && !sameRepository(sourceRepo, repo)) {
     const resolveNetwork = dependencies.resolveRepoNetwork ?? resolveRepoNetwork;
     const network = await resolveNetwork(account.octokit, directory, readContext.primaryRemote, { strictErrors: true });
     const member = Array.isArray(network) ? network.find((entry) => sameRepository(entry, sourceRepo)) : null;
@@ -336,4 +359,154 @@ export async function getPullRequestFileContents(
     status === 'D' ? '' : readFile(path, headSha),
   ]);
   return { original, modified };
+}
+
+export async function getPullRequestFiles(
+  directory: string,
+  number: number,
+  readContext: ProviderReadContext | undefined,
+  options: PullRequestReadOptions = {},
+): Promise<PullRequestFilesResult> {
+  if (readContext?.provider === 'github' && !(options.readChangeRequestPatch instanceof Function)) {
+    const { octokit, repo: target } = await resolvePullRequestRepo(directory, number, readContext, options);
+    const readGitHubSnapshot = options.readGitHubPullRequestSnapshot;
+    const readSnapshot = readGitHubSnapshot
+      ? async ({ expectedHeadSha, expectedBaseSha }: { expectedHeadSha: string; expectedBaseSha: string }) => {
+        const snapshot = await readGitHubSnapshot({
+          context: readContext,
+          repo: target,
+          number,
+          expectedHeadSha,
+          expectedBaseSha,
+          includePatch: false,
+          signal: options.signal,
+        });
+        if (!snapshot.files) throw new Error('Pull request file list is unavailable');
+        return { files: snapshot.files };
+      }
+      : undefined;
+    const result = await readGitHubPullFileList({
+      octokit,
+      repo: target,
+      number,
+      readSnapshot,
+      signal: options.signal,
+    });
+    return { mode: 'files', headSha: result.headSha, files: result.files };
+  }
+
+  const { patch, meta } = await getPullRequestDiff(directory, number, readContext, {
+    ...options,
+    allowEmpty: true,
+    includeRevision: true,
+  });
+  const parsedMeta = z.object({ headSha: z.string() }).safeParse(meta);
+  const headSha = parsedMeta.success ? parsedMeta.data.headSha : null;
+  if (!isPatchText(patch)) {
+    throw new Error('Provider returned an invalid pull request diff');
+  }
+  return { mode: 'patch', headSha, patch };
+}
+
+export async function getPullRequestFileDiff(
+  directory: string,
+  number: number,
+  readContext: ProviderReadContext | undefined,
+  options: PullRequestFileDiffReadOptions,
+): Promise<GitHubPullFileDiffResult> {
+  if (readContext && readContext.provider !== 'github') {
+    throw Object.assign(new Error('Per-file change request diffs are unavailable for this provider'), {
+      statusCode: 501,
+      code: 'SOURCE_CONTROL_CAPABILITY_UNSUPPORTED',
+    });
+  }
+  const { octokit, repo: target } = await resolvePullRequestRepo(directory, number, readContext, options);
+  return readGitHubPullFileDiff({
+    octokit,
+    repo: target,
+    number,
+    path: options.path,
+    previousPath: options.previousPath,
+    status: options.status,
+    expectedHeadSha: options.expectedHeadSha,
+    signal: options.signal,
+    computeDiff: options.computeDiff,
+  });
+}
+
+export interface PullRequestWalkthroughReaderDeps {
+  getBindingService: () => {
+    accountUnavailable?: DirectGitHubDependencies['onAccountUnavailable'];
+    readChangeRequestPatch?: PullRequestReadOptions['readChangeRequestPatch'];
+    readGitLabChangeRequestPatch?: PullRequestReadOptions['readGitLabChangeRequestPatch'];
+    readChangeRequestFile?: PullRequestFileReadOptions['readChangeRequestFile'];
+    readGitLabChangeRequestFile?: PullRequestFileReadOptions['readGitLabChangeRequestFile'];
+  } | null;
+  getNetworkOperations: () => {
+    readPullRequestSnapshot: (input: GitHubPullSnapshotReadInput) => Promise<PullRequestSnapshot>;
+  } | null;
+}
+
+export function createPullRequestWalkthroughReaders({ getBindingService, getNetworkOperations }: PullRequestWalkthroughReaderDeps) {
+  const buildReadOptions = (
+    readContext: ProviderReadContext | undefined,
+    options: Partial<Pick<PullRequestReadOptions, 'allowEmpty' | 'sourceRepo' | 'revision' | 'signal' | 'includeRevision'>> = {},
+  ): PullRequestReadOptions => {
+    const binding = getBindingService();
+    return {
+      allowEmpty: options.allowEmpty,
+      sourceRepo: options.sourceRepo,
+      revision: options.revision,
+      signal: options.signal,
+      includeRevision: options.includeRevision,
+      onAccountUnavailable: binding?.accountUnavailable,
+      readChangeRequestPatch: readContext?.provider && readContext.provider !== 'github'
+        ? binding?.readChangeRequestPatch
+        : undefined,
+      readGitLabChangeRequestPatch: binding?.readGitLabChangeRequestPatch,
+      readGitHubPullRequestSnapshot: (input) => {
+        const networkOperations = getNetworkOperations();
+        if (!networkOperations) throw new Error('Git network operations are unavailable');
+        return networkOperations.readPullRequestSnapshot(input);
+      },
+    };
+  };
+
+  return {
+    getPullRequestDiff: (
+      directory: string,
+      number: number,
+      readContext: ProviderReadContext | undefined,
+      options: Partial<Pick<PullRequestReadOptions, 'allowEmpty' | 'sourceRepo' | 'revision' | 'signal' | 'includeRevision'>> = {},
+    ) => getPullRequestDiff(directory, number, readContext, buildReadOptions(readContext, options)),
+    getPullRequestFiles: (
+      directory: string,
+      number: number,
+      readContext: ProviderReadContext | undefined,
+      options: Partial<Pick<PullRequestReadOptions, 'allowEmpty' | 'sourceRepo' | 'revision' | 'signal' | 'includeRevision'>> = {},
+    ) => getPullRequestFiles(directory, number, readContext, buildReadOptions(readContext, options)),
+    getPullRequestFileDiff: (
+      directory: string,
+      number: number,
+      readContext: ProviderReadContext | undefined,
+      options: Pick<PullRequestFileDiffReadOptions, 'path' | 'previousPath' | 'status' | 'sourceRepo' | 'revision' | 'expectedHeadSha' | 'signal'>,
+    ) => getPullRequestFileDiff(directory, number, readContext, {
+      ...options,
+      onAccountUnavailable: getBindingService()?.accountUnavailable,
+    }),
+    getPullRequestFileContents: (
+      directory: string,
+      number: number,
+      readContext: ProviderReadContext | undefined,
+      options: Pick<PullRequestFileReadOptions, 'path' | 'previousPath' | 'status' | 'sourceRepo' | 'revision' | 'binary' | 'expectedHeadSha'>,
+    ) => {
+      const binding = getBindingService();
+      return getPullRequestFileContents(directory, number, readContext, {
+        ...options,
+        onAccountUnavailable: binding?.accountUnavailable,
+        readChangeRequestFile: binding?.readChangeRequestFile,
+        readGitLabChangeRequestFile: binding?.readGitLabChangeRequestFile,
+      });
+    },
+  };
 }

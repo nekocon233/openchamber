@@ -27,7 +27,7 @@ GitHub sits on the shared source-control route shell (`../source-control/provide
 - `review-draft.js`: a pull request's review as the diff draws it: the viewer's pending review and the open threads with their lines.
 - `change-request-patch.js`: a pull request's diff and one file's two sides for walkthroughs and the comparison view.
 - `ci-runs.ts` reads the bound repository's workflows, jobs and logs.
-- `pull-diff.ts` and `pull-file-stats.ts` load complete PR diffs and per-file totals, including large PRs.
+- `pull-diff.ts`, `pull-file-diff.ts` and `pull-file-stats.ts` load PR diffs, PR comparison file lists with lazy single-file diffs, and per-file totals, including large PRs.
 - `pending-reviews.ts` checks the account, head and draft revision before a pending review write.
 - `force-merge.ts` validates the current PR against the confirmed target and submits an administrator merge with the selected method.
 
@@ -192,26 +192,39 @@ GitHub keeps a chain of PRs, each targeting the branch of the one below, as a st
 
 The project PR list reads `/pulls/file-stats` through `resources.js` and
 `pull-file-stats.js`. It paginates `readGitHubPullFiles`, reuses the authorized
-snapshot fallback beyond the API ceiling, verifies the complete file count and
-checks head/base again before returning path/addition/deletion metadata. It
-loads no comments or checks and sends no patch content to the UI.
+metadata-only snapshot fallback (`includePatch: false`) beyond the 3,000-file
+API ceiling, verifies the complete file count and checks head/base again before
+returning path/addition/deletion metadata. It loads no comments or checks and
+sends no patch content to the UI.
 
-PR comparison, walkthrough and context attachments share `readGitHubPullPatch`.
-The ordinary path reads GitHub's diff media type. Only a `406` or `422` with
-`PullRequest / diff / too_large` starts the internal `pr-snapshot` Git operation.
-The provider resolves the target inside the bound repository network, reads its
-head/base SHAs and their merge base, and supplies the target repository's HTTPS
-endpoint. Fork heads are read through the target repository, including PRs whose
-source fork was deleted. The Git executor uses the exact bound account and
-revalidates the binding before credentials and transfer. There is no automatic
-retry for auth, rate-limit, malformed-data or unrelated provider failures.
+GitHub PR comparison uses `pull-file-diff.ts` (`readGitHubPullFileList` and
+`readGitHubPullFileDiff`). The file list paginates `pulls.listFiles` (or falls
+back to a metadata-only `pr-snapshot` above 3,000 files), verifies head/base
+consistency, attaches inline git patches for small files within a per-file
+(512 KiB) and total (8 MiB) budget, and leaves larger or omitted files deferred.
+Selecting a deferred file loads only that file from GitHub at the PR's merge
+base and head, rejecting files above 5 MiB (from directory metadata before
+downloading oversized blobs when available) or single-file diffs above 5 MiB
+with `413 file-too-large` without blocking other files in the PR.
 
-`/pulls/context` paginates files in groups of 100. A local snapshot supplies both
-its diff and its complete file list, bypassing GitHub's 3,000-file list ceiling.
-Context-only reads also use that snapshot when the API cannot supply every file.
-A native diff or multi-page file read checks the head/base again before returning;
-a changed revision or incomplete page sequence fails instead of publishing mixed
-or partial results. Diff output above 20 MiB returns `413 PR_DIFF_TOO_LARGE`.
+Walkthrough generation and diff-bearing context attachments share
+`readGitHubPullPatch`. The ordinary path reads GitHub's diff media type. Only a
+`406` or `422` with `PullRequest / diff / too_large` starts the full-patch
+internal `pr-snapshot` Git operation. The provider resolves the target inside
+the bound repository network, reads its head/base SHAs and their merge base,
+and supplies the target repository's HTTPS endpoint. Fork heads are read
+through the target repository, including PRs whose source fork was deleted. The
+Git executor uses the exact bound account and revalidates the binding before
+credentials and transfer. There is no automatic retry for auth, rate-limit,
+malformed-data or unrelated provider failures.
+
+`/pulls/context` paginates files in groups of 100. A local snapshot supplies
+its complete file list, bypassing GitHub's 3,000-file list ceiling, and skips
+patch generation (`includePatch: false`) when `includeDiff` is false. A native
+diff or multi-page file read checks the head/base again before returning; a
+changed revision or incomplete page sequence fails instead of publishing mixed
+or partial results. Complete-patch output above 20 MiB returns
+`413 PR_DIFF_TOO_LARGE`.
 
 PR list/search failures propagate as errors instead of successful empty lists.
 Comparison pickers use these responses to offer retry rather than claiming the

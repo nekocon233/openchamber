@@ -134,37 +134,74 @@ test('comparison reads preserve scope, report failures, retry, and stop while hi
 
     source = { kind: 'pr', number: 42, sourceRepo: { owner: 'upstream', repo: 'project' } };
     await render();
-    expect(requests[9].url.pathname).toBe('/api/walkthrough/pr-diff');
+    expect(requests[9].url.pathname).toBe('/api/walkthrough/pr-files');
     expect(JSON.parse(requests[9].url.searchParams.get('source') ?? '')).toEqual(source);
     // The published diff is read through the bound context, never an ambient account.
     expect(requests[9].url.searchParams.get('accountId')).toBe(PR_CONTEXT.accountId);
     expect(requests[9].url.searchParams.get('repositoryId')).toBe(PR_CONTEXT.repositoryId);
+    const prHead = 'a'.repeat(40);
     const publishedPatch = 'diff --git a/pr.ts b/pr.ts\n--- a/pr.ts\n+++ b/pr.ts\n@@ -1 +1 @@\n-old\n+published\n';
-    await finish(9, new Response(publishedPatch, { headers: { 'content-type': 'text/plain' } }));
-    expect(current().files?.map((file) => file.path)).toEqual(['pr.ts']);
-    expect(await current().fetchDiff('pr.ts')).toEqual({ diff: publishedPatch });
-    // Opening files uses this snapshot, never local files or another HTTP read.
+    const lazyPatch = 'diff --git a/lazy.ts b/lazy.ts\n--- a/lazy.ts\n+++ b/lazy.ts\n@@ -1 +1 @@\n-before\n+after\n';
+    const prFilesResponse = (patch: string) => Response.json({
+      mode: 'files',
+      headSha: prHead,
+      files: [{ path: 'pr.ts', status: 'M', insertions: 1, deletions: 1, patch }],
+    });
+    await finish(9, Response.json({
+      mode: 'files',
+      headSha: prHead,
+      files: [
+        { path: 'pr.ts', status: 'M', insertions: 1, deletions: 1, patch: publishedPatch },
+        { path: 'lazy.ts', status: 'M', insertions: 1, deletions: 1 },
+        { path: 'huge.json', status: 'M', insertions: 100_000, deletions: 0 },
+      ],
+    }));
+    expect(current().files?.map((file) => file.path)).toEqual(['pr.ts', 'lazy.ts', 'huge.json']);
+    expect(await current().fetchDiff('pr.ts')).toEqual({ diff: publishedPatch, reviewHeadSha: prHead });
+    // Opening inline files uses the snapshot without another HTTP read.
     expect(requests).toHaveLength(10);
+
+    // Deferred files fetch on demand and cache per snapshot; oversized files fail only for themselves.
+    const lazyRead = current().fetchDiff('lazy.ts');
+    await act(async () => { await Promise.resolve(); });
+    expect(requests[10].url.pathname).toBe('/api/walkthrough/pr-file-diff');
+    expect(requests[10].url.searchParams.get('path')).toBe('lazy.ts');
+    expect(requests[10].url.searchParams.get('headSha')).toBe(prHead);
+    await finish(10, Response.json({ diff: lazyPatch, headSha: prHead }));
+    expect(await lazyRead).toEqual({ diff: lazyPatch, reviewHeadSha: prHead });
+    expect(await current().fetchDiff('lazy.ts')).toEqual({ diff: lazyPatch, reviewHeadSha: prHead });
+    expect(requests).toHaveLength(11);
+
+    const hugeOutcome = current().fetchDiff('huge.json').then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(requests[11].url.pathname).toBe('/api/walkthrough/pr-file-diff');
+    await finish(11, Response.json({ error: 'This file is too large to show', code: 'file-too-large' }, { status: 413 }));
+    expect(await hugeOutcome).toBe('This file is too large to show');
+    expect(await current().fetchDiff('pr.ts')).toEqual({ diff: publishedPatch, reviewHeadSha: prHead });
+
     const snapshotRevision = current().revision;
     enabled = false;
     await render();
     enabled = true;
     await render();
-    expect(requests).toHaveLength(10);
+    expect(requests).toHaveLength(12);
     expect(current().revision).toBe(snapshotRevision);
     await act(async () => { retry = current().refresh(); });
-    await finish(10, new Response(publishedPatch.replace('+published', '+updated'), { headers: { 'content-type': 'text/plain' } }));
+    await finish(12, prFilesResponse(publishedPatch.replace('+published', '+updated')));
     await retry;
     expect(current().revision).toBeGreaterThan(snapshotRevision);
     expect((await current().fetchDiff('pr.ts')).diff).toContain('+updated');
 
     await act(async () => { retry = current().refresh(); });
-    await finish(11, Response.json({ error: 'GitHub unavailable' }, { status: 503 }));
+    await finish(13, Response.json({ error: 'GitHub unavailable' }, { status: 503 }));
     await retry;
     expect(current().files).toBeNull();
     expect(current().error).toBe('GitHub unavailable');
     await act(async () => { retry = current().refresh(); });
-    await finish(12, new Response('', { headers: { 'content-type': 'text/plain' } }));
+    await finish(14, Response.json({ mode: 'patch', headSha: null, patch: '' }));
     await retry;
     expect(current().files).toEqual([]);
     const refreshOldPr = current().refresh;
@@ -173,21 +210,33 @@ test('comparison reads preserve scope, report failures, retry, and stop while hi
     await render();
     source = { kind: 'pr', number: 43, sourceRepo: { owner: 'upstream', repo: 'project' } };
     await render();
-    await finish(14, new Response(publishedPatch.replace('+published', '+new PR'), { headers: { 'content-type': 'text/plain' } }));
-    await finish(13, new Response(publishedPatch, { headers: { 'content-type': 'text/plain' } }));
+    await finish(16, Response.json({ mode: 'patch', headSha: prHead, patch: publishedPatch.replace('+published', '+new PR') }));
+    await finish(15, prFilesResponse(publishedPatch));
     expect((await current().fetchDiff('pr.ts')).diff).toContain('+new PR');
     await refreshOldPr();
     await expect(readOldPr('pr.ts')).rejects.toThrow();
-    expect(requests).toHaveLength(15);
+    expect(requests).toHaveLength(17);
 
     await act(async () => { retry = current().refresh(); });
-    await finish(15, new Response('<html>OpenCode</html>', { headers: { 'content-type': 'text/html' } }));
+    await finish(17, new Response('<html>OpenCode</html>', { headers: { 'content-type': 'text/html' } }));
+    await act(async () => { await Promise.resolve(); });
+    expect(requests[18].url.pathname).toBe('/api/walkthrough/pr-diff');
+    await finish(18, new Response('<html>OpenCode</html>', { headers: { 'content-type': 'text/html' } }));
     await retry;
     expect(current().files).toBeNull();
     expect(current().error).toContain('unavailable on this server');
 
+    // Older servers without /api/walkthrough/pr-files fall back to /api/walkthrough/pr-diff.
     await act(async () => { retry = current().refresh(); });
-    await finish(16, new Response(publishedPatch, { headers: { 'content-type': 'text/plain' } }));
+    await finish(19, new Response('<html>OpenCode</html>', { headers: { 'content-type': 'text/html' } }));
+    await act(async () => { await Promise.resolve(); });
+    expect(requests[20].url.pathname).toBe('/api/walkthrough/pr-diff');
+    await finish(20, new Response(publishedPatch, { headers: { 'content-type': 'text/plain', 'x-openchamber-pr-head-sha': prHead } }));
+    await retry;
+    expect((await current().fetchDiff('pr.ts')).diff).toContain('+published');
+
+    await act(async () => { retry = current().refresh(); });
+    await finish(21, prFilesResponse(publishedPatch));
     await retry;
     enabled = false;
     await render();
@@ -195,22 +244,22 @@ test('comparison reads preserve scope, report failures, retry, and stop while hi
       notifyGitPush('/repo-b', getRuntimeKey());
       notifyGitPush('/repo-b', getRuntimeKey());
     });
-    expect(requests).toHaveLength(17);
+    expect(requests).toHaveLength(22);
     enabled = true;
     await render();
-    expect(requests).toHaveLength(18);
-    await finish(17, new Response(publishedPatch.replace('+published', '+after push'), { headers: { 'content-type': 'text/plain' } }));
+    expect(requests).toHaveLength(23);
+    await finish(22, prFilesResponse(publishedPatch.replace('+published', '+after push')));
     expect((await current().fetchDiff('pr.ts')).diff).toContain('+after push');
     await act(async () => { notifyGitPush('/other-repo', getRuntimeKey()); });
-    expect(requests).toHaveLength(18);
+    expect(requests).toHaveLength(23);
     await act(async () => { notifyGitPush('/repo-b', 'another-runtime'); });
-    expect(requests).toHaveLength(18);
+    expect(requests).toHaveLength(23);
     await act(async () => { notifyGitPush('/repo-b', getRuntimeKey()); });
-    expect(requests).toHaveLength(19);
+    expect(requests).toHaveLength(24);
     await act(async () => { notifyGitPush('/repo-b', getRuntimeKey()); });
-    expect(requests).toHaveLength(20);
-    await finish(19, new Response(publishedPatch.replace('+published', '+latest push'), { headers: { 'content-type': 'text/plain' } }));
-    await finish(18, new Response(publishedPatch.replace('+published', '+older push'), { headers: { 'content-type': 'text/plain' } }));
+    expect(requests).toHaveLength(25);
+    await finish(24, prFilesResponse(publishedPatch.replace('+published', '+latest push')));
+    await finish(23, prFilesResponse(publishedPatch.replace('+published', '+older push')));
     expect((await current().fetchDiff('pr.ts')).diff).toContain('+latest push');
   } finally {
     await act(async () => root.unmount());

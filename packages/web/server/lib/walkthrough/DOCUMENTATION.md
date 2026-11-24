@@ -205,6 +205,22 @@ patch read; the local snapshot already owns fixed revisions. A changing native
 diff fails with `409 STALE_CONFIG` instead of assigning comments to an
 unverified commit.
 
+`GET /api/walkthrough/pr-files` accepts the same `directory`, PR `source`, and
+bound read-context fields and returns JSON for the Changes comparison view:
+GitHub returns `{ mode: 'files', headSha, files }` from paginated file metadata
+(or a metadata-only `pr-snapshot` above 3,000 files) with inline patches only
+for small files within budget, so PRs above 20 MiB still list every file and
+let reviewers inspect individual source files. Non-GitHub providers return
+`{ mode: 'patch', headSha, patch }` from `getPullRequestDiff`.
+
+`GET /api/walkthrough/pr-file-diff` takes the same `directory`, PR `source`,
+`path`, optional `previousPath`, `status`, and optional `headSha`, and returns
+`{ diff, headSha }` for one deferred GitHub file computed from its merge base
+and PR head in an isolated temporary `git diff --no-index` invocation. Files or
+computed patches above 5 MiB answer `413` (`code: 'file-too-large'`), and a
+changed PR head answers `409 STALE_CONFIG`. Closing the HTTP request cancels
+both `/api/walkthrough/pr-files` and `/api/walkthrough/pr-file-diff`.
+
 `GET /api/walkthrough/pr-file` takes the same `directory` and PR `source` plus
 `path`, optional `previousPath`, and `status`, and returns `{ original, modified }`
 for that one file as the provider has it: the base side at the PR's merge base, the

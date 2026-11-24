@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getPullRequestDiff, getPullRequestFileContents } = await import('./pull-request.js');
+const { getPullRequestDiff, getPullRequestFileContents, getPullRequestFileDiff, getPullRequestFiles } = await import('./pull-request.js');
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 --- a/src/a.ts
@@ -314,5 +314,50 @@ describe('GitLab merge requests', () => {
         readChangeRequestFile: async () => result,
       })).resolves.toEqual(result);
     }
+  });
+
+  it('reads GitHub PR files with metadata-only snapshots and falls back to patch mode for other providers', async () => {
+    const head = 'a'.repeat(40);
+    const base = 'b'.repeat(40);
+    const snapshot = vi.fn(async () => ({
+      patch: '',
+      headSha: head,
+      files: [{ filename: 'big.ts', status: 'modified', additions: 10, deletions: 2, changes: 12 }],
+    }));
+    const octokit = {
+      rest: {
+        pulls: {
+          get: vi.fn(async () => ({ data: { number: 12, head: { sha: head }, base: { sha: base }, changed_files: 3001 } })),
+          listFiles: vi.fn(),
+        },
+      },
+    };
+    const linked = await getPullRequestFiles('/repo', 12, { ...contextOf('github'), linked: true }, {
+      sourceRepo: { owner: 'external', repo: 'other' },
+      getOctokitForAccountId: async () => ({ accountId: 'account-1', octokit }),
+      resolveGitHubRepoFromDirectory: async () => ({ repo: { owner: 'origin', repo: 'app' } }),
+      readGitHubPullRequestSnapshot: snapshot,
+    });
+    expect(linked).toEqual({
+      mode: 'files',
+      headSha: head,
+      files: [{ path: 'big.ts', status: 'M', insertions: 10, deletions: 2 }],
+    });
+    expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({
+      repo: { owner: 'external', repo: 'other' },
+      expectedHeadSha: head,
+      expectedBaseSha: base,
+      includePatch: false,
+    }));
+
+    const gitlab = await getPullRequestFiles('/repo', 4, contextOf('gitlab'), {
+      readGitLabChangeRequestPatch: async () => ({ patch: 'diff --git a/a.ts b/a.ts\n', meta: { headSha: head } }),
+    });
+    expect(gitlab).toEqual({ mode: 'patch', headSha: head, patch: 'diff --git a/a.ts b/a.ts\n' });
+
+    await expect(getPullRequestFileDiff('/repo', 4, contextOf('gitlab'), {
+      path: 'a.ts',
+      status: 'M',
+    })).rejects.toMatchObject({ statusCode: 501, code: 'SOURCE_CONTROL_CAPABILITY_UNSUPPORTED' });
   });
 });

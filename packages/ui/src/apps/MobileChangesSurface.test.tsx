@@ -115,7 +115,17 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
         branch: url.searchParams.get('branch') ?? '', changeRequest: PUBLISHED_PR } satisfies ChangeRequestStatus);
       case '/api/source-control/github/pulls/list':
         return Response.json({ items: [PUBLISHED_PR], page: 1, hasMore: false } satisfies PageResult<ChangeRequest>);
-      case '/api/walkthrough/pr-diff': return new Response('diff --git a/published.png b/published.png\nindex 1111111..2222222 100644\nBinary files a/published.png and b/published.png differ\n', { headers: { 'content-type': 'text/plain' } });
+      case '/api/walkthrough/pr-files': return Response.json({
+        mode: 'files',
+        headSha: null,
+        files: [{
+          path: 'published.png',
+          status: 'M',
+          insertions: 0,
+          deletions: 0,
+          patch: 'diff --git a/published.png b/published.png\nindex 1111111..2222222 100644\nBinary files a/published.png and b/published.png differ\n',
+        }],
+      });
       default: throw new Error(`Unexpected request ${url.pathname}`);
     }
   }, originalFetch);
@@ -275,7 +285,7 @@ test('mobile comparisons drill into files, retry, resume, change source, and yie
     await openFile('published.png');
     expect(container.textContent).toContain('Pull Requests · #42');
     expect(container.textContent).toContain('Content of this file cannot be viewed.');
-    const prRequest = requests.find((url) => url.pathname === '/api/walkthrough/pr-diff');
+    const prRequest = requests.find((url) => url.pathname === '/api/walkthrough/pr-files');
     expect(JSON.parse(prRequest?.searchParams.get('source') ?? '')).toEqual({ kind: 'pr', number: 42, sourceRepo: { owner: 'upstream', repo: 'project' } });
     expect(prRequest?.searchParams.get('accountId')).toBe(ACCOUNT_ID);
     expect(prRequest?.searchParams.get('repositoryId')).toBe('repo');

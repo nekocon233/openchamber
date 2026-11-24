@@ -115,7 +115,7 @@ import { completeWorktreeCheckoutHydration, configureRepositoryTransport, delete
 import { createPrivateRepositoryIdentityResolver, resolveRepositoryId } from '../source-control/repository-identity.js';
 import { createSourceControlAuditStore } from '../source-control/audit-storage.js';
 import type { Application } from '../shared/http-contracts.js';
-import type { WalkthroughRouteService, PullRequestOptions } from '../walkthrough/routes.js';
+import type { WalkthroughRouteService } from '../walkthrough/routes.js';
 import type { createTrackerRegistry } from '../trackers/registry.js';
 import type { createTrackerSessionStatus } from '../trackers/session-status.js';
 import type { HydrationRequirement, ProviderAccount, TransportAuthority } from '../git/network-plan-contracts.js';
@@ -177,41 +177,10 @@ export const createFeatureRoutesRuntime = (dependencies: FeatureRuntimeDependenc
         readWalkthroughInstructions: async (directory) => (
           magicPrompts ? (await magicPrompts.overridesForDirectory(directory))['walkthrough.instructions'] ?? '' : ''
         ),
-        getPullRequestDiff: (directory, number, readContext, { allowEmpty, sourceRepo, revision, signal, includeRevision }: Partial<PullRequestOptions> = {}) => pullRequest.getPullRequestDiff(
-          directory,
-          number,
-          readContext,
-          {
-            allowEmpty,
-            sourceRepo,
-            revision,
-            signal,
-            includeRevision,
-            onAccountUnavailable: walkthroughBindingService?.accountUnavailable,
-            readGitLabChangeRequestPatch: walkthroughBindingService?.readGitLabChangeRequestPatch,
-            readGitHubPullRequestSnapshot: (input) => {
-              if (!networkOperations) throw new Error('Git network operations are unavailable');
-              return networkOperations.readPullRequestSnapshot(input);
-            },
-          },
-        ),
-        getPullRequestFileContents: (directory, number, readContext, { path, previousPath, status, sourceRepo, revision, binary, expectedHeadSha }) => pullRequest.getPullRequestFileContents(
-          directory,
-          number,
-          readContext,
-          {
-            path,
-            previousPath,
-            status,
-            sourceRepo,
-            revision,
-            binary,
-            expectedHeadSha,
-            onAccountUnavailable: walkthroughBindingService?.accountUnavailable,
-            readChangeRequestFile: walkthroughBindingService?.readChangeRequestFile,
-            readGitLabChangeRequestFile: walkthroughBindingService?.readGitLabChangeRequestFile,
-          },
-        ),
+        ...pullRequest.createPullRequestWalkthroughReaders({
+          getBindingService: () => walkthroughBindingService,
+          getNetworkOperations: () => networkOperations,
+        }),
       };
     }
     return walkthroughService;

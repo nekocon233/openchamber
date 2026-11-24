@@ -30,3 +30,7 @@ Matching prefixes and suffixes handles re-indented code without a matrix. The re
 ### Why empty hunk sides use a boundary and not a first-line number
 
 A zero-length side identifies the line before an insertion, while a nonempty side identifies its first included line. Hunk placement preserves that distinction so insertion positions and collapsed gaps stay aligned.
+
+### Why PR comparisons fetch file lists with inline-budgeted patches and not one monolithic diff
+
+Downloading a whole PR diff fails above the server's 20 MiB cap and forces synchronous client-side splitting of every file before the list can paint. Listing files with bounded inline patches keeps small PRs at one request while letting >20 MiB PRs render every file and defer oversized entries to per-file reads.
