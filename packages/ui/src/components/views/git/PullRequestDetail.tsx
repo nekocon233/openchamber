@@ -76,7 +76,9 @@ export const PullRequestDetail: React.FC<{
         onIncludeDiffChange={() => undefined}
         now={now}
         onRefresh={refreshFromHost}
-        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} onMergeSubmitted={submitted} />}
+        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined}
+          onChanged={refresh} onMergeSubmitted={submitted} showSquashShortcut
+          stack={githubDetail.status === 'ready' ? githubDetail.value.pull?.stack : undefined} />}
         onOpenChecks={() => setChecksOpen(true)}
         commentAttachments={{ onAttach: attachments.attachComment, onAttachAll: attachments.attachComments }}
         threadActions={threadActions}

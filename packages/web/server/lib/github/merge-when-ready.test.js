@@ -5,9 +5,9 @@ const project = { owner: 'acme', name: 'app' };
 const target = { number: 7, base: 'main', headSha: 'abc' };
 const pull = (overrides = {}) => ({ id: 'PR_7', state: 'OPEN', headRefOid: 'abc', mergeable: 'MERGEABLE',
   mergeStateStatus: 'BLOCKED', isInMergeQueue: false, autoMergeRequest: null, ...overrides });
-const client = (pr = pull(), queue = null) => ({ graphql: vi.fn(async (query) => {
+const client = (pr = pull(), queue = null) => ({ graphql: vi.fn(async (query, variables) => {
   if (query.startsWith('query')) return { repository: { pullRequest: pr, mergeQueue: queue } };
-  if (query.includes('enablePullRequestAutoMerge')) return { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: { enabledAt: '2026-11-03' } } } };
+  if (query.includes('enablePullRequestAutoMerge')) return { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: { enabledAt: '2026-11-03', mergeMethod: variables.mergeMethod } } } };
   if (query.includes('disablePullRequestAutoMerge')) return { disablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: null } } };
   return { dequeuePullRequest: { mergeQueueEntry: { id: 'MQ_7' } } };
 }) });
@@ -27,6 +27,26 @@ describe('GitHub merge when ready', () => {
     expect(await enableMergeWhenReady(octokit, project, target, 'merge')).toBeNull();
     expect(octokit.graphql).toHaveBeenCalledTimes(1);
   });
+  it('asks for squash when an existing auto-merge uses another method', async () => {
+    const octokit = client(pull({ autoMergeRequest: { enabledAt: 'now', mergeMethod: 'MERGE' } }));
+    expect(await enableMergeWhenReady(octokit, project, target, 'squash')).toEqual({ merged: false, outcome: 'auto-merge' });
+    expect(octokit.graphql.mock.calls[1][1].mergeMethod).toBe('SQUASH');
+  });
+
+  it('does not schedule another write when automatic squash is already enabled', async () => {
+    const octokit = client(pull({ autoMergeRequest: { enabledAt: 'now', mergeMethod: 'SQUASH' } }));
+    expect(await enableMergeWhenReady(octokit, project, target, 'squash')).toEqual({ merged: false, outcome: 'auto-merge' });
+    expect(octokit.graphql).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes on a retained merge method when GitHub does not apply the requested one', async () => {
+    const existing = { enabledAt: 'now', mergeMethod: 'MERGE' };
+    const octokit = client(pull({ autoMergeRequest: existing }));
+    octokit.graphql.mockImplementationOnce(async () => ({ repository: { pullRequest: pull({ autoMergeRequest: existing }), mergeQueue: null } }))
+      .mockImplementationOnce(async () => ({ enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: existing } } }));
+    await expect(enableMergeWhenReady(octokit, project, target, 'squash')).rejects.toMatchObject({ code: 'SOURCE_CONTROL_MUTATION_REJECTED' });
+  });
+
   it('preserves a refusal when the state read fails', async () => {
     expect(await enableMergeWhenReady({ graphql: async () => { throw new Error('offline'); } }, project, target, 'merge')).toBeNull();
   });

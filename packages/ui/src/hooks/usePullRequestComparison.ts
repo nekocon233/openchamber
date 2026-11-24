@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PullRequestSource } from '@/lib/diff/pullRequestDiff';
-import type { ChangeRequest, SourceControlReadContext } from '@/lib/source-control/types';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import type { ChangeRequest, ChangeRequestContext, SourceControlReadContext } from '@/lib/source-control/types';
+import { captureRuntimeInstance, getRuntimeKey } from '@/lib/runtime-switch';
 import { mergeIncompleteSourceControlPage, sourceControlReadContextParts } from '@/lib/source-control/identity';
 import type { PageResult } from '@/lib/source-control/types';
 import { useI18n } from '@/lib/i18n';
@@ -271,4 +271,27 @@ export function usePullRequestComparison(
     loadMore: () => current?.status === 'ready' && current.hasMore && !loadingMore ? refresh(current) : Promise.resolve(),
     select: (pr: ChangeRequest) => saveSelection(selectionKey, sourceOf(pr)),
   };
+}
+
+export function usePullRequestAtComparedHead(
+  context: SourceControlReadContext,
+  { owner, repo, number, headSha }: { owner: string; repo: string; number: number; headSha: string },
+  listed: ChangeRequest | undefined,
+) {
+  const { sourceControl } = useRuntimeAPIs();
+  const [lookup, setLookup] = useState<ChangeRequestContext | null>(null);
+  useEffect(() => {
+    if (listed) return;
+    const isCurrent = captureRuntimeInstance();
+    let mounted = true;
+    void sourceControl.changeRequestContext(context, number, { project: { owner, name: repo } }).then((result) => {
+      if (mounted && isCurrent()) setLookup(result);
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, [context, listed, number, owner, repo, sourceControl]);
+
+  const pull = listed ?? lookup?.changeRequest;
+  if (!pull || pull.state !== 'open' || pull.draft || pull.headSha !== headSha
+      || pull.number !== number || pull.project.owner !== owner || pull.project.name !== repo) return null;
+  return { pull, stack: lookup?.stack };
 }

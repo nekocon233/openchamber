@@ -1514,6 +1514,7 @@ diffs-container {
 [data-diff-toolbar-compact] .diff-toolbar__walkthrough-label,
 [data-diff-toolbar-compact] .diff-toolbar__scope-count,
 [data-diff-toolbar-compact] .diff-toolbar__review-label,
+[data-diff-toolbar-compact] .diff-toolbar__merge-label,
 [data-diff-toolbar-compact] .diff-toolbar__expand-label {
   display: none;
 }
@@ -1522,6 +1523,7 @@ diffs-container {
 [data-diff-toolbar-compact-walkthrough] .diff-toolbar__walkthrough-button,
 [data-diff-toolbar-compact] .diff-toolbar__walkthrough-button,
 [data-diff-toolbar-compact] .diff-toolbar__review-button,
+[data-diff-toolbar-compact] .diff-toolbar__merge-button,
 [data-diff-toolbar-compact] .diff-toolbar__expand-button {
   padding-inline: 0.375rem;
 }

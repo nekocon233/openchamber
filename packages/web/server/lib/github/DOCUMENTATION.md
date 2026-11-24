@@ -621,7 +621,7 @@ The board's reviewer control selects individual users. Requested teams stay out 
 
 ### Why a refused merge can enable auto-merge
 
-The asynchronous merge runs first with the existing `bypass_rules: true`, so an actor permitted to bypass keeps that behavior. After a refusal or a failed asynchronous result, `merge-when-ready.js` reads GitHub's authoritative state. An open, unchanged, non-conflicting PR in `BLOCKED` or `UNSTABLE`, whose target branch has no merge queue, enables auto-merge with the selected method and `expectedHeadOid`. A queue branch keeps the asynchronous queue path. Authentication failures, moved heads, conflicts and unreadable state never become auto-merge requests. GitHub refusing auto-merge, including a repository where it is disabled, remains a visible refusal.
+The asynchronous merge runs first with the existing `bypass_rules: true`, so an actor permitted to bypass keeps that behavior. After a refusal or a failed asynchronous result, `merge-when-ready.js` reads GitHub's authoritative state. An open, unchanged, non-conflicting PR in `BLOCKED` or `UNSTABLE`, whose target branch has no merge queue, enables auto-merge with the selected method and `expectedHeadOid`. A queue branch keeps the asynchronous queue path. Authentication failures, moved heads, conflicts and unreadable state never become auto-merge requests. GitHub refusing auto-merge, including a repository where it is disabled, remains a visible refusal. A pending auto-merge counts as success only for the requested method and matching head. A different method triggers a request for the chosen one, and the receipt requires GitHub to confirm that method.
 
 ### Why user merge follows share tracked-items
 

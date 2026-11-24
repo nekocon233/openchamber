@@ -1,9 +1,7 @@
-import { beginPullRequestAction, usePullRequestActionPending } from './pullRequestActions';
-import { getRuntimeEndpointGeneration, getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import * as React from 'react';
 
 import { useMobileAppActions } from '@/apps/mobileAppContext';
-import { useFireworksCelebration } from '@/contexts/FireworksContext';
 import { Icon } from '@/components/icon/Icon';
 import { DiffViewIcon } from '@/components/icons/DiffIcon';
 import { ButtonTooltip } from '@/components/ui/action-toolbar';
@@ -12,48 +10,29 @@ import { REFERENCE_META_TEXT, referenceNumberLabel } from '@/components/referenc
 import type { IconName } from '@/components/icon/icons';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { reviewDraftCount, useChangeRequestReview } from '@/components/review/useChangeRequestReview';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePendingComposerReferences, type ComposerReferenceHandoff } from '@/components/chat/composer/pendingComposerReferences';
 import type { ReferencePickerItem, ReferencePickerSelection } from '@/components/references/referencePickerItems';
 import { readTrackerItemDetail } from '@/components/references/referenceSources';
 import { readTrackerDescriptor } from '@/lib/trackers/registry';
 import { resolveComposerReferences } from '@/components/references/resolveComposerReferences';
-import { readMergeMethod, rememberMergeMethod, type RememberedMergeMethod } from '@/components/views/git/mergeMethodPreference';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { RepositoryChangeRequestReference, RepositoryDiscussionReference, PullRequestStack, SourceControlReadContext } from '@/lib/api/types';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import type { ChangeRequestSubmitRequirement, DiscussionCloseReason, DraftChangeRequestInput, SetStateInput, SourceControlCapabilities } from '@/lib/source-control/types';
+import type { ChangeRequestSubmitRequirement, DiscussionCloseReason, DraftChangeRequestInput, SetStateInput } from '@/lib/source-control/types';
 import { useChangeRequestDiffServing, useSourceControlProvider } from '@/lib/source-control/providers/registry';
-import { formatChangeRequestReference } from '@/lib/source-control/providers/terminology';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import type { TrackedThread } from '@/lib/trackedItems/model';
-import { useTrackedRecords } from '@/stores/useTrackedItemsStore';
 import { useSession } from '@/sync/sync-context';
 import { useOpenSourceBoardPull, type PullLinkProps } from './useOpenSourceBoardPull';
-import { landsWithIt, mergeChoiceOf } from './mergeChoice';
+import { PullRequestMergeActions } from './PullRequestMergeActions';
+import { useSourceControlCapabilities } from '@/hooks/useSourceControlCapabilities';
 import { newMutationKey } from './mutationKey';
 
 export type SourceBoardProject = { id: string; path: string };
-
-const MERGE_METHOD_LABELS = {
-    squash: 'gitView.pr.mergeMethod.squash',
-    merge: 'gitView.pr.mergeMethod.merge',
-    rebase: 'gitView.pr.mergeMethod.rebase',
-    submit: 'gitView.pr.mergeMethod.submit',
-} as const;
-
-const MERGE_METHOD_KEYS = {
-    merge: 'sourceBoard.merge.method.merge',
-    squash: 'sourceBoard.merge.method.squash',
-    rebase: 'sourceBoard.merge.method.rebase',
-    submit: 'sourceBoard.merge.method.submit',
-} as const;
-
 
 const isStackable = (pull: RepositoryChangeRequestReference): boolean => (
     !pull.headRepo
@@ -62,35 +41,6 @@ const isStackable = (pull: RepositoryChangeRequestReference): boolean => (
 
 const selectionOf = (item: ReferencePickerItem): ReferencePickerSelection => (
     item.source === 'tracker' ? item : { source: 'repository', reference: item.reference, includeDiff: false }
-);
-
-function useCapabilities(context: SourceControlReadContext | null): SourceControlCapabilities | null {
-    const { sourceControl } = useRuntimeAPIs();
-    const [state, setState] = React.useState<{ context: SourceControlReadContext; capabilities: SourceControlCapabilities } | null>(null);
-    React.useEffect(() => {
-        if (!context) return;
-        let cancelled = false;
-        void sourceControl.capabilities(context)
-            .then((capabilities) => { if (!cancelled) setState({ context, capabilities }); })
-            .catch(() => undefined);
-        return () => { cancelled = true; };
-    }, [context, sourceControl]);
-    return state && state.context === context ? state.capabilities : null;
-}
-
-const ActionButton: React.FC<{
-    icon: IconName;
-    label: string;
-    tooltip: string;
-    onClick: () => void;
-    busy?: boolean;
-}> = ({ icon, label, tooltip, onClick, busy = false }) => (
-    <ButtonTooltip label={tooltip}>
-        <Button size="sm" variant="outline" onClick={onClick} disabled={busy}>
-            <Icon name={busy ? 'loader-4' : icon} className={busy ? 'size-3.5 animate-spin' : 'size-3.5'} />
-            {label}
-        </Button>
-    </ButtonTooltip>
 );
 
 type SourceBoardActionsProps = {
@@ -108,61 +58,19 @@ type SourceBoardActionsProps = {
     submitRequirements?: ChangeRequestSubmitRequirement[];
     submitRequirementsUnreadable?: boolean;
     mergeable?: boolean | null;
+    showSquashShortcut?: boolean;
 };
 
-export const SourceBoardActions: React.FC<SourceBoardActionsProps> = (props) => {
-    const runtimeGeneration = React.useSyncExternalStore(subscribeRuntimeEndpointChanged, getRuntimeEndpointGeneration, getRuntimeEndpointGeneration);
-    const runtimeKey = getRuntimeKey();
-    const mergePending = React.useRef(false);
-    const pull = props.item.source === 'repository' && props.item.reference.kind === 'pull' ? props.item.reference : null;
-    // A different displayed target cancels a confirmation through its owner's
-    // unmount. The operation lock outlives that view while a write settles.
-    const scopeKey = JSON.stringify([runtimeKey, runtimeGeneration, props.context, pull && {
-        provider: pull.provider, owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo, number: pull.number,
-        state: pull.state, draft: pull.draft, head: pull.head, base: pull.base, headSha: pull.headSha,
-    }]);
-    return <SourceBoardActionsView key={scopeKey} {...props} runtimeKey={runtimeKey} runtimeGeneration={runtimeGeneration} mergePending={mergePending} />;
-};
-
-const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
-    runtimeKey: string;
-    runtimeGeneration: number;
-    mergePending: React.RefObject<boolean>;
-}> = ({ item, project, context: readContext, onStartWorktree, onChanged, onMergeSubmitted, runtimeKey, runtimeGeneration, mergePending, startIn, onLeave, worktreeAvailable = Boolean(project), stack = null, onStartOnTop, submitRequirements, submitRequirementsUnreadable = false, mergeable = null }) => {
-    const context = readContext?.linked ? null : readContext;
+export const SourceBoardActions: React.FC<SourceBoardActionsProps> = ({
+    item, project, context: readContext, onStartWorktree, onChanged, onMergeSubmitted, startIn, onLeave,
+    worktreeAvailable = Boolean(project), stack, onStartOnTop, submitRequirements, submitRequirementsUnreadable, mergeable,
+    showSquashShortcut,
+}) => {
     const { t } = useI18n();
     const { sourceControl, trackers } = useRuntimeAPIs();
-    const confirmation = useConfirmDialog();
-    const { triggerFireworks } = useFireworksCelebration();
-    const [busy, setBusy] = React.useState<'merge' | 'ready' | null>(null);
-    const mounted = React.useRef(true);
-    React.useEffect(() => {
-        mounted.current = true;
-        return () => { mounted.current = false; };
-    }, []);
-    const isCurrent = () => mounted.current
-        && getRuntimeKey() === runtimeKey
-        && getRuntimeEndpointGeneration() === runtimeGeneration;
-
-    const pull: RepositoryChangeRequestReference | null = item.source === 'repository' && item.reference.kind === 'pull' ? item.reference : null;
+    const pull = item.source === 'repository' && item.reference.kind === 'pull' ? item.reference : null;
+    const openPull = pull?.state === 'open' ? pull : null;
     const descriptor = useSourceControlProvider(pull?.provider);
-    const openPull = pull && pull.state === 'open' ? pull : null;
-    const pullRef = pull ? { owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo, number: pull.number } : null;
-    const actionPending = usePullRequestActionPending(context, pullRef);
-    const trackedPulls = React.useMemo<TrackedThread<'pull'>[]>(() => openPull && context ? [{
-        provider: context.provider, instance: context.instance, accountId: context.accountId,
-        kind: 'pull', owner: openPull.sourceRepo.owner, repo: openPull.sourceRepo.repo, number: openPull.number,
-    }] : [], [context, openPull]);
-    const [liveRecord] = useTrackedRecords(trackedPulls);
-    const liveMerge = liveRecord?.type === 'pull' ? liveRecord.state : null;
-    const waitingMerge = liveMerge?.state === 'open' && (liveMerge.isInMergeQueue || liveMerge.autoMergeRequest);
-    const waitingLabel = liveMerge?.isInMergeQueue
-        ? liveMerge.mergeQueueEntry?.position != null
-            ? t('sourceBoard.merge.queuePosition', { position: liveMerge.mergeQueueEntry.position })
-            : t('sourceBoard.merge.inQueue')
-        : t('sourceBoard.merge.autoMerge');
-    const capabilities = useCapabilities(openPull ? context : null);
-
     const currentSessionId = useSessionUIStore((state) => (state.newSessionDraft?.open ? null : state.currentSessionId));
     const currentSession = useSession(currentSessionId, currentSessionId ? useSessionUIStore.getState().getDirectoryForSession(currentSessionId) ?? undefined : undefined);
 
@@ -196,185 +104,26 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
         attachToComposer({ kind: 'session', sessionId: currentSessionId });
     };
 
-    const [chosenMethod, setChosenMethod] = React.useState<RememberedMergeMethod>(readMergeMethod);
-    const { methods: mergeMethods, method: mergeMethod, unmet, hold: submitHold, blocked: submitBlocked } = mergeChoiceOf({
-        allowed: capabilities?.mergeChangeRequests ? capabilities.mergeMethods ?? [] : [],
-        remembered: chosenMethod,
-        checksRequirements: descriptor.features.submitRequirements,
-        requirements: submitRequirements,
-        requirementsUnreadable: submitRequirementsUnreadable,
-        mergeable,
-    });
-    const chooseMergeMethod = (value: string) => {
-        const method = mergeMethods.find((candidate) => candidate === value);
-        if (!method || method === 'submit') return;
-        setChosenMethod(method);
-        rememberMergeMethod(method);
-    };
-    const submits = mergeMethod === 'submit';
-    const reference = pull ? formatChangeRequestReference(descriptor, pull.number) : '';
-    const referenceOf = (number: number) => formatChangeRequestReference(descriptor, number);
-    const landsBelow = openPull ? landsWithIt({ stack, number: openPull.number, method: mergeMethod }) : [];
-    const submitsBelow = submits && landsBelow.length > 0
-        ? t(landsBelow.length === 1 ? 'sourceBoard.submit.alsoBelow.one' : 'sourceBoard.submit.alsoBelow.other', { count: landsBelow.length })
-        : null;
-
     const stackOnTop = onStartOnTop && openPull && descriptor.features.branchHeads && isStackable(openPull) ? () => onStartOnTop(openPull) : null;
     const stackOnTopLabel = t('stacks.actions.newOnTop');
 
-    const merge = async (origin?: HTMLElement) => {
-        if (!openPull || !context || !mergeMethod || submitBlocked || mergePending.current || !isCurrent()) return;
-        const action = beginPullRequestAction(context, pullRef);
-        if (!action) return;
-        mergePending.current = true;
-        let dispatched = false;
-        const canReport = () => onMergeSubmitted ? action.isRuntimeCurrent() : isCurrent();
-        const resultReference = onMergeSubmitted ? `${openPull.sourceRepo.owner}/${openPull.sourceRepo.repo} ${reference}` : reference;
-        try {
-            const methodNote = t(MERGE_METHOD_KEYS[mergeMethod], { base: openPull.base });
-            const stackNote = submits
-                ? submitsBelow
-                : landsBelow.length === 0
-                    ? null
-                    : landsBelow.length === 1
-                        ? t('stacks.merge.alsoBelow.one', { reference: referenceOf(landsBelow[0].number) })
-                        : t('stacks.merge.alsoBelow.other', { count: landsBelow.length, references: landsBelow.map((layer) => referenceOf(layer.number)).join(', ') });
-            const approved = await confirmation.confirm({
-                title: submitsBelow
-                    ? t(landsBelow.length === 1 ? 'sourceBoard.submit.confirmTitleWithChain.one' : 'sourceBoard.submit.confirmTitleWithChain.other', { reference, count: landsBelow.length })
-                    : t(`sourceBoard.merge.confirmTitle.${descriptor.terminology.changeRequest}`, { reference }),
-                message: stackNote ? `${stackNote}\n\n${methodNote}` : methodNote,
-                action: t(submits ? 'gitView.pr.mergeMethod.submit' : 'sourceBoard.actions.merge'),
-            });
-            if (!approved || !isCurrent()) return;
-            setBusy('merge');
-            const request = sourceControl.changeRequestMerge({
-                ...context,
-                idempotencyKey: newMutationKey(),
-                target: { project: { owner: openPull.sourceRepo.owner, name: openPull.sourceRepo.repo }, number: openPull.number, head: openPull.head, base: openPull.base, headSha: openPull.headSha },
-                method: mergeMethod,
-            });
-            dispatched = true;
-            onMergeSubmitted?.();
-            const receipt = await request;
-            if (!canReport()) return;
-            const { merged, outcome, message } = receipt.result;
-            if (merged) forgetLabelWrite(openPull);
-            if (merged) triggerFireworks({ kind: 'merge', volleys: 2 + landsBelow.length, origin });
-            if (submits) {
-                if (merged) toast.success(t('sourceBoard.toast.submitted', { reference: resultReference }));
-                else toast.message(t('sourceBoard.toast.notSubmitted', { reference: resultReference }), { description: message });
-            } else if (merged) {
-                toast.success(landsBelow.length === 0
-                    ? t('sourceBoard.toast.merged', { reference: resultReference })
-                    : landsBelow.length === 1
-                        ? t('stacks.toast.mergedWithBelow.one', { reference: resultReference })
-                        : t('stacks.toast.mergedWithBelow.other', { reference: resultReference, count: landsBelow.length }));
-            } else if (outcome === 'queued') {
-                toast.message(t('sourceBoard.toast.mergeQueued', { reference: resultReference }));
-            } else if (outcome === 'auto-merge') {
-                toast.message(t('sourceBoard.toast.autoMerge', { reference: resultReference }));
-            } else if (outcome === 'merging') {
-                toast.message(t('sourceBoard.toast.mergeRunning', { reference: resultReference }), { description: t('sourceBoard.toast.mergeRunningDescription') });
-            } else {
-                toast.message(t('sourceBoard.toast.notMerged', { reference: resultReference }), { description: message });
-            }
-        } catch (error) {
-            if (canReport()) toast.error(t(submits ? 'sourceBoard.toast.submitFailed' : 'sourceBoard.toast.mergeFailed', { reference: resultReference }), { description: error instanceof Error ? error.message : String(error) });
-        } finally {
-            mergePending.current = false;
-            if (mounted.current) setBusy(null);
-            action.finish();
-            if (dispatched && canReport()) onChanged();
-        }
-    };
-
-    const cancelMerge = async () => {
-        if (!openPull || !context) return;
-        setBusy('merge');
-        try {
-            const receipt = await sourceControl.changeRequestMerge({
-                ...context, idempotencyKey: newMutationKey(), method: chosenMethod, cancel: true,
-                target: { project: { owner: openPull.sourceRepo.owner, name: openPull.sourceRepo.repo }, number: openPull.number, head: openPull.head, base: openPull.base, headSha: openPull.headSha },
-            });
-            toast.success(t(receipt.result.merged ? 'sourceBoard.toast.merged' : 'sourceBoard.toast.mergeCancelled', { reference }));
-        } catch (error) {
-            toast.error(t('sourceBoard.toast.mergeCancelFailed', { reference }), { description: error instanceof Error ? error.message : String(error) });
-        } finally { setBusy(null); onChanged(); }
-    };
-
-    const maintenance = (
-        <>
-            {waitingMerge ? (
-                <>
-                    <span className="text-muted-foreground typography-small">{waitingLabel}</span>
-                    <ActionButton icon="close" label={t('sourceBoard.merge.cancel')} tooltip={t('contextTooltips.tracker.cancelMerge')} onClick={() => void cancelMerge()} busy={busy === 'merge'} />
-                </>
-            ) : openPull && !openPull.draft && mergeMethod ? (
-                <div className="flex shrink-0 items-center">
-                    <ButtonTooltip label={t(submits ? 'contextTooltips.tracker.submitTo' : 'contextTooltips.tracker.mergeInto', { branch: openPull.base })}>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            className={cn(mergeMethods.length > 1 && 'rounded-e-none')}
-                            disabled={busy === 'merge' || actionPending || submitBlocked}
-                            onClick={(event) => void merge(event.currentTarget)}
-                        >
-                            <Icon name={busy === 'merge' ? 'loader-4' : 'git-merge'} className={busy === 'merge' ? 'size-3.5 animate-spin' : 'size-3.5'} />
-                            {t(MERGE_METHOD_LABELS[mergeMethod])}
-                        </Button>
-                    </ButtonTooltip>
-                    {mergeMethods.length > 1 ? (
-                        <DropdownMenu>
-                            <ButtonTooltip label={t('contextTooltips.tracker.chooseMergeMethod')}>
-                                <DropdownMenuTrigger asChild>
-                                    <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="rounded-s-none border-s-0 px-1.5"
-                                        disabled={busy === 'merge'}
-                                        aria-label={t('sourceBoard.merge.methodAria')}
-                                    >
-                                        <Icon name="arrow-down-s" className="size-3.5" />
-                                    </Button>
-                                </DropdownMenuTrigger>
-                            </ButtonTooltip>
-                            <DropdownMenuContent align="start" className="w-56">
-                                <DropdownMenuRadioGroup value={mergeMethod} onValueChange={(value) => chooseMergeMethod(String(value))}>
-                                    {mergeMethods.map((method) => (
-                                        <DropdownMenuRadioItem key={method} value={method}>{t(MERGE_METHOD_LABELS[method])}</DropdownMenuRadioItem>
-                                    ))}
-                                </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                    ) : null}
-                </div>
-            ) : null}
-            {openPull && !openPull.draft && unmet.length > 0 ? (
-                <span
-                    className="min-w-0 max-w-[16rem] truncate typography-meta text-muted-foreground"
-                    title={unmet.map((requirement) => requirement.description ? `${requirement.name}: ${requirement.description}` : requirement.name).join('\n')}
-                >
-                    {t('sourceBoard.submit.needs', { requirements: unmet.map((requirement) => requirement.name).join(', ') })}
-                </span>
-            ) : openPull && !openPull.draft && submitHold ? (
-                <span className="min-w-0 max-w-[16rem] truncate typography-meta text-muted-foreground">
-                    {t(submitHold === 'unreadable' ? 'sourceBoard.submit.unreadable' : 'sourceBoard.submit.notSubmittable')}
-                </span>
-            ) : openPull && !openPull.draft && submitsBelow ? (
-                <span className="min-w-0 max-w-[16rem] truncate typography-meta text-muted-foreground" title={submitsBelow}>
-                    {submitsBelow}
-                </span>
-            ) : null}
-            {stackOnTop && !project ? <ActionButton icon="stack" label={stackOnTopLabel} tooltip={t('contextTooltips.tracker.startOnTop')} onClick={stackOnTop} /> : null}
-        </>
-    );
-
     return (
         <div className="flex min-h-8 flex-wrap items-center gap-2">
-            <div className="me-auto flex min-w-0 items-center gap-2">
+            <div className="me-auto flex min-w-0 flex-wrap items-center gap-2">
                 {startIn}
-                {maintenance}
+                {openPull && readContext ? (
+                    <PullRequestMergeActions pull={openPull} context={readContext} onChanged={onChanged} onMergeSubmitted={onMergeSubmitted}
+                        placement={showSquashShortcut ? 'detail' : undefined} stack={stack} submitRequirements={submitRequirements}
+                        submitRequirementsUnreadable={submitRequirementsUnreadable} mergeable={mergeable} />
+                ) : null}
+                {stackOnTop && !project ? (
+                    <ButtonTooltip label={t('contextTooltips.tracker.startOnTop')}>
+                        <Button size="sm" variant="outline" onClick={stackOnTop}>
+                            <Icon name="stack" className="size-3.5" />
+                            {stackOnTopLabel}
+                        </Button>
+                    </ButtonTooltip>
+                ) : null}
             </div>
             {project || currentSessionId ? (
                 <DropdownMenu>
@@ -425,7 +174,6 @@ const SourceBoardActionsView: React.FC<SourceBoardActionsProps & {
                     </DropdownMenuContent>
                 </DropdownMenu>
             ) : null}
-            {confirmation.dialog}
         </div>
     );
 };
@@ -576,7 +324,7 @@ const ItemStateMenuItems: React.FC<{
     const descriptor = useSourceControlProvider(repositoryItem?.provider);
     const nextState = !repositoryItem || repositoryItem.state === 'merged' ? null : repositoryItem.state === 'open' ? 'closed' : 'open';
     const openPull = repositoryItem?.kind === 'pull' && repositoryItem.state === 'open' ? repositoryItem : null;
-    const capabilities = useCapabilities(openPull ? context : null);
+    const capabilities = useSourceControlCapabilities(openPull ? context : null);
     const stateLabel = (() => {
         if (!repositoryItem || !nextState) return '';
         if (repositoryItem.kind === 'issue') return t(nextState === 'closed' ? 'sourceBoard.actions.closeIssue' : 'sourceBoard.actions.reopenIssue');

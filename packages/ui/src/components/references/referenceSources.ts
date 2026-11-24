@@ -240,7 +240,7 @@ const readContextCacheKey = (context: SourceControlReadContext): unknown[] => [
     context.linked === true,
 ];
 
-export async function refreshProjectPullListsAfterReview(sourceControl: SourceControlAPI, context: SourceControlReadContext): Promise<void> {
+export async function refreshProjectPullLists(sourceControl: SourceControlAPI, context: SourceControlReadContext): Promise<void> {
     const runtime = getRuntimeKey();
     const generation = getRuntimeEndpointGeneration();
     await sourceControl.refreshProviderReads(context, { lists: true }).catch(() => undefined);
