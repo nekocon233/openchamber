@@ -2333,8 +2333,7 @@ export function createNetworkOperations({
         if (resolvedText.trim() !== revision) throw operationError('STALE_CONFIG', 'Fetched pull request commit did not match', 409);
       }
       snapshot = await readPullRequestSnapshot({
-        headSha: plan.source.headSha,
-        mergeBaseSha: plan.source.mergeBaseSha,
+        headSha: plan.source.headSha, mergeBaseSha: plan.source.mergeBaseSha, includePatch: plan.includePatch,
         git: async (args) => {
           try {
             const output = await run({
@@ -2719,7 +2718,7 @@ export function createNetworkOperations({
   return Object.freeze({
     plan,
     issueContributorDestination: planner.issueContributorDestination,
-    async readPullRequestSnapshot({ signal, ...sourceRequest }: PullRequestSnapshotRequest & { signal?: AbortSignal | undefined }) {
+    async readPullRequestSnapshot({ signal, includePatch, ...sourceRequest }: PullRequestSnapshotRequest & { signal?: AbortSignal | undefined }) {
       const deadline = Date.now() + timeoutMs;
       signal?.throwIfAborted();
       if (!(resolvePullRequestSnapshotSource instanceof Function) || !(validatePullRequestReadContext instanceof Function)
@@ -2761,7 +2760,7 @@ export function createNetworkOperations({
       const internalPlan: PullSnapshotPlan = {
         ...publicPlan,
         directory: source.context.directory,
-        source,
+        source, includePatch,
         rawEndpoint: source.endpoint,
         transportMode: 'managed',
         credentialId,

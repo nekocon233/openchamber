@@ -183,6 +183,46 @@ describe('local pull request snapshots', () => {
     for (const directory of temporaryRepositories) await expect(fs.stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('reads metadata-only snapshots without generating the full patch', async () => {
+    const f = await fixture(4);
+    let patchCommandRan = false;
+    const r = runtime(f, {
+      intercept: (binary, args, options) => {
+        if (!args.includes('--full-index')) return undefined;
+        patchCommandRan = true;
+        return spawn(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(20 * 1024 * 1024 + 1, 65))'], options);
+      },
+    });
+    const result = await r.service.readPullRequestSnapshot({
+      context: f.source.context,
+      repo: f.source.repo,
+      number: 7,
+      includePatch: false,
+    });
+    expect(patchCommandRan).toBe(false);
+    expect(result.patch).toBe('');
+    expect(result.headSha).toBe(f.source.headSha);
+    expect(result.files.find((entry) => entry.filename === 'renamed.txt')).toMatchObject({
+      status: 'renamed',
+      previous_filename: 'old.txt',
+      additions: 0,
+      deletions: 0,
+    });
+    expect(result.files.find((entry) => entry.filename === 'binary.bin')).toMatchObject({
+      status: 'added',
+      binary: true,
+      additions: 0,
+      deletions: 0,
+    });
+    expect(result.files.find((entry) => entry.filename === '引号 "\t换行\n.txt')).toMatchObject({
+      status: 'added',
+      additions: 1,
+      deletions: 0,
+    });
+    expect(result.files.every((entry) => entry.patch === undefined)).toBe(true);
+    for (const directory of temporaryRepositories) await expect(fs.stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('redacts a rejected Git credential and removes the temporary repository', async () => {
     const f = await fixture();
     const r = runtime(f, { intercept: (binary, args, options) => args.includes('fetch')

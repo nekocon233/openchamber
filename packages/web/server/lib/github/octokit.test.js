@@ -399,4 +399,49 @@ describe('enterprise-host octokit request URLs', () => {
       globalThis.fetch = previousFetch;
     }
   });
+
+  test('scopes ETag cache entries by Accept header so JSON and raw content reads never collide', async () => {
+    const previousFetch = globalThis.fetch;
+    const seen = [];
+    globalThis.fetch = async (url, options = {}) => {
+      const headers = new Headers(options.headers);
+      const accept = headers.get('accept') ?? '';
+      const ifNoneMatch = headers.get('if-none-match');
+      seen.push({ url: String(url), accept, ifNoneMatch });
+      if (ifNoneMatch === '"same-blob-etag"') {
+        return new Response(null, { status: 304, headers: { etag: '"same-blob-etag"' } });
+      }
+      if (accept.includes('raw')) {
+        return new Response('raw file body\n', {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.github.v3.raw; charset=utf-8', etag: '"same-blob-etag"' },
+        });
+      }
+      return Response.json(
+        { type: 'file', size: 14, sha: '1'.repeat(40), encoding: 'base64', content: Buffer.from('raw file body\n').toString('base64') },
+        { headers: { etag: '"same-blob-etag"' } },
+      );
+    };
+    try {
+      const octokit = createOctokit('etag-accept-token', 'account-accept', 'github.com');
+      const jsonRead = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: 'acme', repo: 'app', path: 'src/a.ts', ref: 'a'.repeat(40),
+      });
+      const rawRead = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: 'acme', repo: 'app', path: 'src/a.ts', ref: 'a'.repeat(40),
+        headers: { accept: 'application/vnd.github.raw+json' },
+      });
+      const jsonReplay = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: 'acme', repo: 'app', path: 'src/a.ts', ref: 'a'.repeat(40),
+      });
+      expect(jsonRead.data).toMatchObject({ type: 'file', encoding: 'base64' });
+      expect(rawRead.data).toBe('raw file body\n');
+      expect(jsonReplay.data).toMatchObject({ type: 'file', encoding: 'base64' });
+      expect(seen[0].ifNoneMatch).toBeNull();
+      expect(seen[1].ifNoneMatch).toBeNull();
+      expect(seen[2].ifNoneMatch).toBe('"same-blob-etag"');
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
 });

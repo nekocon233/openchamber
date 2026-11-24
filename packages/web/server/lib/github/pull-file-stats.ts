@@ -25,7 +25,7 @@ export async function readGitHubPullFileStats({ octokit, repo, number, context, 
   const files = await readGitHubPullFiles({
     octokit, repo, number, expectedCount: before.changed_files, signal,
     readSnapshot: readSnapshot ? () => readSnapshot({
-      context, repo, number, expectedHeadSha: before.head.sha, expectedBaseSha: before.base.sha, signal,
+      context, repo, number, expectedHeadSha: before.head.sha, expectedBaseSha: before.base.sha, signal, includePatch: false,
     }) : undefined,
   });
   if (files.length !== before.changed_files || new Set(files.map(file => file.filename)).size !== files.length) {

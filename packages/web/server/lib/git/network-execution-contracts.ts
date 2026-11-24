@@ -144,9 +144,10 @@ export type PullRequestSnapshotRequest = {
   context: ProviderReadContext;
   repo: { owner: string; repo: string };
   number: number;
-  expectedHeadSha?: string;
-  expectedBaseSha?: string;
-  linked?: boolean;
+  expectedHeadSha?: string | undefined;
+  expectedBaseSha?: string | undefined;
+  linked?: boolean | undefined;
+  includePatch?: boolean | undefined;
 };
 export type PullRequestSnapshotSource = {
   context: ProviderReadContext;
@@ -162,6 +163,7 @@ export type PullSnapshotPlan = {
   transportMode: 'managed';
   credentialId: string;
   source: PullRequestSnapshotSource;
+  includePatch?: boolean | undefined;
   target: {
     operation: 'pr-snapshot';
     repositoryId: string;

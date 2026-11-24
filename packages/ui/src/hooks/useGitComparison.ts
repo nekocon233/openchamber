@@ -9,7 +9,7 @@ import type { SourceControlReadContext } from '@/lib/source-control/types';
 import { sourceControlReadContextParts } from '@/lib/source-control/identity';
 import type { WalkthroughSource } from '@/lib/walkthrough/types';
 import { useGitStore } from '@/stores/useGitStore';
-import { fetchPullRequestDiff, fetchPullRequestFile } from '@/lib/diff/pullRequestDiff';
+import { fetchPullRequestDiff, fetchPullRequestFile, fetchPullRequestFileDiff } from '@/lib/diff/pullRequestDiff';
 import { PullRequestSnapshotCache } from '@/lib/diff/pullRequestSnapshotCache';
 import { gitPushScopeKey, subscribeGitPush } from '@/lib/gitPushEvents';
 
@@ -99,17 +99,31 @@ export function useGitComparison(
   const headSha = current?.status === 'ready' ? current.headSha : null;
   const filesByPath = useMemo(() => new Map((files ?? []).map((file) => [file.path, file])), [files]);
   const fetchDiff = useCallback(async (filePath: string, contextLines = 3): Promise<GitDiffResponse & { reviewHeadSha?: string }> => {
-    const { key: targetKey, source: target, enabled: active } = sourceRef.current;
+    const { key: targetKey, source: target, enabled: active, readContext: context, authority: targetAuthority } = sourceRef.current;
     const file = filesByPath.get(filePath);
     if (!directory || targetKey !== key || !target || !file || !enabled || !active) throw new Error(t('diffView.state.failedToLoadDiff'));
     if (target.kind === 'pr') {
-      if (file.patch === undefined) throw new Error(t('diffView.state.failedToLoadDiff'));
-      return { diff: file.patch, reviewHeadSha: headSha ?? undefined };
+      if (file.patch !== undefined) {
+        return { diff: file.patch, reviewHeadSha: headSha ?? undefined };
+      }
+      if (!context) throw new Error(t('diffView.state.failedToLoadDiff'));
+      return prCache.loadFileDiff(
+        pushScope,
+        target,
+        targetAuthority,
+        file.path,
+        () => fetchPullRequestFileDiff(directory, target, context, {
+          path: file.path,
+          previousPath: file.previousPath,
+          status: file.status,
+          headSha,
+        }),
+      );
     }
     return target.kind === 'branch'
       ? getGitRangeDiff(directory, { base: target.baseRef, head: target.headRef, path: filePath, previousPath: file.previousPath, contextLines, includeWorkingTree: true })
       : getGitCommitDiff(directory, { hash: target.hash, path: filePath, previousPath: file.previousPath, contextLines });
-  }, [directory, enabled, filesByPath, headSha, key, t]);
+  }, [directory, enabled, filesByPath, headSha, key, prCache, pushScope, t]);
 
   const fetchFullFile = useCallback(async (filePath: string): Promise<{ original: string; modified: string; reviewHeadSha?: string }> => {
     const { key: targetKey, source: target, enabled: active, readContext: context } = sourceRef.current;

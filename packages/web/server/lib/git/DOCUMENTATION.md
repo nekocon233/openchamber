@@ -680,9 +680,12 @@ against current binding authority before credential resolution and immediately
 before transfer. Later pushes cannot change the fetched commit IDs.
 
 The executor creates a private temporary bare repository, fetches the head and
-merge-base commits at depth 1 through managed HTTPS, then reads the patch and
-NUL-delimited file metadata from those two trees. `pull-request-snapshot.js`
-assembles the complete snapshot. Repository-related Git environment overrides
+merge-base commits at depth 1 through managed HTTPS, then reads NUL-delimited
+file metadata (`--name-status -z`, `--numstat -z`) and, unless the caller sets
+`includePatch: false` for file-list-only reads (PR comparison lists above 3,000
+files, `/pulls/file-stats`, and diff-free PR context reads), the unified patch
+from those two trees. `pull-request-snapshot.js` assembles the snapshot and
+marks binary `--numstat` entries. Repository-related Git environment overrides
 are stripped before any temporary-repository command. Checkout, hooks, textconv,
 external diff, recursive submodules and LFS hydration never run. The user's
 checkout, index, refs, remotes and `FETCH_HEAD` stay untouched.

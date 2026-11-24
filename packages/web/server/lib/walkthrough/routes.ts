@@ -73,12 +73,25 @@ export interface PullRequestFileOptions extends Omit<PullRequestOptions, 'allowE
   expectedHeadSha?: string | undefined;
 }
 
+export interface PullRequestFileDiffOptions extends Omit<PullRequestOptions, 'allowEmpty' | 'includeRevision'> {
+  path: string;
+  previousPath?: string | undefined;
+  status: string;
+  expectedHeadSha?: string | undefined;
+}
+
 export interface WalkthroughRouteService extends Pick<WalkthroughModule,
   'getWalkthrough' | 'generateWalkthrough' | 'getRepositoryRootFor'
   | 'getGenerationStage' | 'cancelWalkthroughGeneration'> {
   getPullRequestDiff(
     directory: string, number: number, context: ProviderReadContext | undefined, options: PullRequestOptions,
   ): ReturnType<PullRequestModule['getPullRequestDiff']>;
+  getPullRequestFiles(
+    directory: string, number: number, context: ProviderReadContext | undefined, options: PullRequestOptions,
+  ): ReturnType<PullRequestModule['getPullRequestFiles']>;
+  getPullRequestFileDiff(
+    directory: string, number: number, context: ProviderReadContext | undefined, options: PullRequestFileDiffOptions,
+  ): ReturnType<PullRequestModule['getPullRequestFileDiff']>;
   getPullRequestFileContents(
     directory: string, number: number, context: ProviderReadContext | undefined, options: PullRequestFileOptions,
   ): ReturnType<PullRequestModule['getPullRequestFileContents']>;
@@ -246,6 +259,74 @@ export function registerWalkthroughRoutes(app: Application, { getWalkthroughServ
       res.type('text/plain').send(patch);
     } catch (error) {
       if (!controller.signal.aborted) respondWithError(res, error, 'Failed to load pull request diff');
+    } finally {
+      res.removeListener('close', onClose);
+    }
+  });
+
+  app.get('/api/walkthrough/pr-files', async (req, res) => {
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
+    try {
+      const query = new URL(req.originalUrl, 'http://localhost').searchParams;
+      const directory = query.get('directory')?.trim() ?? '';
+      if (!directory) return res.status(400).json({ error: 'directory parameter is required' });
+      const source = parseSource(readSource(query.get('source')));
+      if (source.kind !== 'pr') return res.status(400).json({ error: 'A pull request source is required' });
+      const readContext = await validatePullRequestContext(isPullRequestInput(source) ? source : undefined, Object.fromEntries(query), directory);
+      const { getPullRequestFiles } = await getWalkthroughService();
+      const options: PullRequestOptions = {
+        allowEmpty: true,
+        sourceRepo: source.sourceRepo ?? null,
+        signal: controller.signal,
+        includeRevision: true,
+      };
+      const result = await getPullRequestFiles(
+        readContext?.directory ?? directory,
+        source.number,
+        readContext,
+        source.revision ? { ...options, revision: source.revision } : options,
+      );
+      if (!controller.signal.aborted) res.json(result);
+    } catch (error) {
+      if (!controller.signal.aborted) respondWithError(res, error, 'Failed to load pull request files');
+    } finally {
+      res.removeListener('close', onClose);
+    }
+  });
+
+  app.get('/api/walkthrough/pr-file-diff', async (req, res) => {
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
+    try {
+      const query = new URL(req.originalUrl, 'http://localhost').searchParams;
+      const directory = query.get('directory')?.trim() ?? '';
+      if (!directory) return res.status(400).json({ error: 'directory parameter is required' });
+      const source = parseSource(readSource(query.get('source')));
+      if (source.kind !== 'pr') return res.status(400).json({ error: 'A pull request source is required' });
+      const filePath = query.get('path') ?? '';
+      if (!filePath.trim()) return res.status(400).json({ error: 'path parameter is required' });
+      const previousPathRaw = query.get('previousPath') ?? '';
+      const previousPath = previousPathRaw.trim() ? previousPathRaw : undefined;
+      const status = query.get('status') ?? 'M';
+      const expectedHeadSha = query.get('headSha') || undefined;
+      if (expectedHeadSha && !/^[0-9a-f]{40}$/i.test(expectedHeadSha)) return res.status(400).json({ error: 'Invalid pull request revision' });
+      const readContext = await validatePullRequestContext(isPullRequestInput(source) ? source : undefined, Object.fromEntries(query), directory);
+      const { getPullRequestFileDiff } = await getWalkthroughService();
+      const result = await getPullRequestFileDiff(readContext?.directory ?? directory, source.number, readContext, {
+        path: filePath,
+        previousPath,
+        status,
+        expectedHeadSha,
+        sourceRepo: source.sourceRepo ?? null,
+        revision: source.revision,
+        signal: controller.signal,
+      });
+      if (!controller.signal.aborted) res.json(result);
+    } catch (error) {
+      if (!controller.signal.aborted) respondWithError(res, error, 'Failed to load pull request file diff');
     } finally {
       res.removeListener('close', onClose);
     }

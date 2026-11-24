@@ -42,6 +42,20 @@ describe('walkthrough routes', () => {
       if (number === 99) throw Object.assign(new Error('GitHub unavailable'), { statusCode: 503 });
       return { patch: number === 1 ? '' : 'diff --git a/a.ts b/a.ts\n', meta: { headSha: 'a'.repeat(40) } };
     },
+    async getPullRequestFiles(directory, number, readContext, options) {
+      lastArgs = { directory, number, readContext, options };
+      if (number === 99) throw Object.assign(new Error('GitHub unavailable'), { statusCode: 503 });
+      return {
+        mode: 'files',
+        headSha: 'a'.repeat(40),
+        files: number === 1 ? [] : [{ path: 'a.ts', status: 'M', insertions: 1, deletions: 0, patch: 'diff --git a/a.ts b/a.ts\n' }],
+      };
+    },
+    async getPullRequestFileDiff(directory, number, readContext, { sourceRepo, ...file }) {
+      lastArgs = { directory, number, readContext, sourceRepo, file };
+      if (file.path === 'huge.json') throw Object.assign(new Error('This file is too large to show'), { statusCode: 413, code: 'file-too-large' });
+      return { diff: `diff --git a/${file.path} b/${file.path}\n@@ -1 +1 @@\n-old\n+new\n`, headSha: 'a'.repeat(40) };
+    },
     async getPullRequestFileContents(directory, number, readContext, { sourceRepo, ...file }) {
       lastArgs = { directory, number, readContext, sourceRepo, file };
       if (file.path === 'huge.bin') throw Object.assign(new Error('too large'), { statusCode: 413, code: 'file-too-large' });
@@ -254,6 +268,58 @@ describe('walkthrough routes', () => {
     })}`);
     expect(response.status).toBe(400);
     expect(lastArgs).toBeUndefined();
+  });
+
+  it('serves PR file lists and lazy per-file diffs over HTTP with binding and cancellation checks', async () => {
+    const source = { kind: 'pr', number: 42, sourceRepo: { owner: 'upstream', repo: 'project' } };
+    const baseParams = {
+      directory: '/repo',
+      source: JSON.stringify(source),
+      ...Object.fromEntries(Object.entries(PR_CONTEXT).map(([key, value]) => [key, String(value)])),
+    };
+    const filesResponse = await fetch(`${base}/api/walkthrough/pr-files?${new URLSearchParams(baseParams)}`);
+    expect(filesResponse.status).toBe(200);
+    expect(await filesResponse.json()).toEqual({
+      mode: 'files',
+      headSha: 'a'.repeat(40),
+      files: [{ path: 'a.ts', status: 'M', insertions: 1, deletions: 0, patch: 'diff --git a/a.ts b/a.ts\n' }],
+    });
+    expect(lastArgs).toEqual({
+      directory: '/repo',
+      number: 42,
+      readContext: expect.objectContaining({ accountId: PR_CONTEXT.accountId, primaryRemote: PR_CONTEXT.primaryRemote }),
+      options: { allowEmpty: true, sourceRepo: source.sourceRepo, signal: expect.any(AbortSignal), includeRevision: true },
+    });
+
+    const fileDiffResponse = await fetch(`${base}/api/walkthrough/pr-file-diff?${new URLSearchParams({
+      ...baseParams,
+      path: 'src/lazy.ts',
+      previousPath: 'src/old.ts',
+      status: 'R',
+      headSha: 'a'.repeat(40),
+    })}`);
+    expect(fileDiffResponse.status).toBe(200);
+    expect(await fileDiffResponse.json()).toMatchObject({
+      headSha: 'a'.repeat(40),
+      diff: expect.stringContaining('diff --git a/src/lazy.ts b/src/lazy.ts'),
+    });
+    expect(lastArgs.file).toMatchObject({
+      path: 'src/lazy.ts',
+      previousPath: 'src/old.ts',
+      status: 'R',
+      expectedHeadSha: 'a'.repeat(40),
+      signal: expect.any(AbortSignal),
+    });
+
+    const huge = await fetch(`${base}/api/walkthrough/pr-file-diff?${new URLSearchParams({
+      ...baseParams,
+      path: 'huge.json',
+      status: 'M',
+    })}`);
+    expect(huge.status).toBe(413);
+    expect(await huge.json()).toEqual({ error: 'This file is too large to show', code: 'file-too-large' });
+    expect((await fetch(`${base}/api/walkthrough/pr-file-diff?${new URLSearchParams({ ...baseParams, status: 'M' })}`)).status).toBe(400);
+    expect((await fetch(`${base}/api/walkthrough/pr-file-diff?${new URLSearchParams({ ...baseParams, path: 'a.ts', headSha: 'bad' })}`)).status).toBe(400);
   });
 
   it('delivers the result to a client that reconnected after a refresh', async () => {

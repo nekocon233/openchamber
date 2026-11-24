@@ -10,6 +10,7 @@ export interface PullRequestSnapshotFile {
   changes: number;
   patch?: string;
   previous_filename?: string;
+  binary?: boolean;
 }
 
 export interface PullRequestSnapshot {
@@ -22,6 +23,7 @@ export interface ReadPullRequestSnapshotOptions {
   headSha: string;
   mergeBaseSha: string;
   git: (args: string[]) => Promise<string>;
+  includePatch?: boolean | undefined;
 }
 
 const STATUS_MAP = new Map<string, PullRequestFileStatus>([
@@ -38,11 +40,11 @@ const invalidSnapshot = () => Object.assign(new Error('Pull request file statist
   status: 502,
 });
 
-function snapshotFiles(patch: string, nameStatus: string, numstat: string): PullRequestSnapshotFile[] {
+function snapshotFiles(patch: string | undefined, nameStatus: string, numstat: string): PullRequestSnapshotFile[] {
   if ((!nameStatus && patch) || (nameStatus && !nameStatus.endsWith('\0')) || (numstat && !numstat.endsWith('\0'))) {
     throw invalidSnapshot();
   }
-  const stats = new Map<string, { additions: number; deletions: number }>();
+  const stats = new Map<string, { additions: number; deletions: number; binary: boolean }>();
   const counts = numstat.split('\0');
   for (let index = 0; index < counts.length - 1; index += 1) {
     const line = counts[index];
@@ -65,9 +67,12 @@ function snapshotFiles(patch: string, nameStatus: string, numstat: string): Pull
     stats.set(filename, {
       additions: Number.parseInt(additionsText, 10) || 0,
       deletions: Number.parseInt(deletionsText, 10) || 0,
+      binary: additionsText === '-' && deletionsText === '-',
     });
   }
-  const patches = patch ? patch.split(/(?=^diff --git )/m).filter(Boolean) : [];
+  const patches = patch !== undefined
+    ? (patch ? patch.split(/(?=^diff --git )/m).filter(Boolean) : [])
+    : null;
   const names = nameStatus.split('\0');
   const files: PullRequestSnapshotFile[] = [];
   for (let index = 0; index < names.length - 1; index += 1) {
@@ -76,10 +81,10 @@ function snapshotFiles(patch: string, nameStatus: string, numstat: string): Pull
     const previousFilename = /^[RC]/.test(code) ? names[++index] : undefined;
     const filename = names[++index];
     const count = filename ? stats.get(filename) : undefined;
-    const filePatch = patches[files.length];
+    const filePatch = patches ? patches[files.length] : undefined;
     const statusCode = code[0];
     const status = statusCode ? STATUS_MAP.get(statusCode) : undefined;
-    if (!filename || !count || !status || !filePatch?.startsWith('diff --git ')) throw invalidSnapshot();
+    if (!filename || !count || !status || (patches && !filePatch?.startsWith('diff --git '))) throw invalidSnapshot();
     const file: PullRequestSnapshotFile = {
       filename,
       status,
@@ -87,21 +92,26 @@ function snapshotFiles(patch: string, nameStatus: string, numstat: string): Pull
       deletions: count.deletions,
       changes: count.additions + count.deletions,
     };
-    const hunk = filePatch.indexOf('\n@@ ');
-    if (hunk >= 0) file.patch = filePatch.slice(hunk + 1);
+    if (count.binary) file.binary = true;
+    if (filePatch) {
+      const hunk = filePatch.indexOf('\n@@ ');
+      if (hunk >= 0) file.patch = filePatch.slice(hunk + 1);
+    }
     if (previousFilename) file.previous_filename = previousFilename;
     files.push(file);
   }
-  if (files.length !== patches.length || files.length !== stats.size) throw invalidSnapshot();
+  if ((patches && files.length !== patches.length) || files.length !== stats.size) throw invalidSnapshot();
   return files;
 }
 
-export async function readPullRequestSnapshot({ headSha, mergeBaseSha, git }: ReadPullRequestSnapshotOptions): Promise<PullRequestSnapshot> {
+export async function readPullRequestSnapshot({ headSha, mergeBaseSha, git, includePatch = true }: ReadPullRequestSnapshotOptions): Promise<PullRequestSnapshot> {
   const common = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--find-renames',
     '--ignore-submodules=none', '--submodule=short'];
   const refs = [mergeBaseSha, headSha, '--'];
-  const patch = await git([...common, '--full-index', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', ...refs]);
+  const patch = includePatch
+    ? await git([...common, '--full-index', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', ...refs])
+    : undefined;
   const names = await git([...common, '--name-status', '-z', ...refs]);
   const counts = await git([...common, '--numstat', '-z', ...refs]);
-  return { patch, headSha, files: snapshotFiles(patch, names, counts) };
+  return { patch: patch ?? '', headSha, files: snapshotFiles(patch, names, counts) };
 }

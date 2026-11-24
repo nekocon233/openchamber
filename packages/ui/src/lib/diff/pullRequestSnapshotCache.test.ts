@@ -58,3 +58,50 @@ test('bounds completed snapshots without evicting an in-flight request', async (
   resolvePending(snapshot);
   await pending;
 });
+
+test('caches and deduplicates lazy per-file diffs, retries failures, and clears on refresh or push', async () => {
+  const cache = new PullRequestSnapshotCache();
+  const deferredSnapshot = {
+    headSha: 'a'.repeat(40),
+    files: [{ path: 'lazy.ts', status: 'M', insertions: 3, deletions: 1 }],
+  };
+  await cache.load('runtime/repo', source, async () => deferredSnapshot, false, 'auth-1');
+
+  let calls = 0;
+  let resolveFile: (value: { diff: string; reviewHeadSha: string }) => void = () => {};
+  const first = cache.loadFileDiff('runtime/repo', source, 'auth-1', 'lazy.ts', () => {
+    calls += 1;
+    return new Promise((resolve) => { resolveFile = resolve; });
+  });
+  const duplicate = cache.loadFileDiff('runtime/repo', source, 'auth-1', 'lazy.ts', async () => {
+    calls += 1;
+    return { diff: 'unexpected', reviewHeadSha: 'a'.repeat(40) };
+  });
+  expect(duplicate).toBe(first);
+  resolveFile({ diff: 'lazy diff v1', reviewHeadSha: 'a'.repeat(40) });
+  expect(await first).toEqual({ diff: 'lazy diff v1', reviewHeadSha: 'a'.repeat(40) });
+  expect(await cache.loadFileDiff('runtime/repo', source, 'auth-1', 'lazy.ts', async () => {
+    calls += 1;
+    return { diff: 'unexpected' };
+  })).toEqual({ diff: 'lazy diff v1', reviewHeadSha: 'a'.repeat(40) });
+  expect(calls).toBe(1);
+
+  await expect(cache.loadFileDiff('runtime/repo', source, 'auth-1', 'huge.json', async () => {
+    throw new Error('This file is too large to show');
+  })).rejects.toThrow('This file is too large to show');
+  expect(await cache.loadFileDiff('runtime/repo', source, 'auth-1', 'huge.json', async () => ({
+    diff: 'retried',
+  }))).toEqual({ diff: 'retried' });
+
+  await cache.load('runtime/repo', source, async () => deferredSnapshot, true, 'auth-1');
+  expect(await cache.loadFileDiff('runtime/repo', source, 'auth-1', 'lazy.ts', async () => {
+    calls += 1;
+    return { diff: 'lazy diff v2', reviewHeadSha: 'b'.repeat(40) };
+  })).toEqual({ diff: 'lazy diff v2', reviewHeadSha: 'b'.repeat(40) });
+  expect(calls).toBe(2);
+
+  cache.invalidate('runtime/repo');
+  expect(await cache.loadFileDiff('runtime/repo', source, 'auth-1', 'lazy.ts', async () => ({
+    diff: 'after eviction',
+  }))).toEqual({ diff: 'after eviction' });
+});

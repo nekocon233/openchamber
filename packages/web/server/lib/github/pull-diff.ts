@@ -22,7 +22,7 @@ export type GitHubPullFileEntry = {
   deletions: number;
   changes: number;
   patch?: string | null | undefined;
-  previous_filename?: string;
+  previous_filename?: string | undefined;
 };
 
 export interface ReadGitHubPullPatchInput {
@@ -75,6 +75,7 @@ const filesSchema = z.array(z.object({
   deletions: z.number().int().nonnegative(),
   changes: z.number().int().nonnegative(),
   patch: z.string().nullish(),
+  previous_filename: z.string().min(1).optional(),
 }));
 
 export async function readGitHubPullPatch({

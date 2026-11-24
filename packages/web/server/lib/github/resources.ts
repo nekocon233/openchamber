@@ -420,7 +420,7 @@ export function createGitHubResources({
       const readSnapshot = context && readPullRequestSnapshot ? async () => {
         snapshot ??= await readPullRequestSnapshot({
           context, repo: { owner: repo.owner, repo: repo.repo }, number,
-          expectedHeadSha: prData.head.sha, expectedBaseSha: prData.base.sha, signal,
+          expectedHeadSha: prData.head.sha, expectedBaseSha: prData.base.sha, signal, includePatch: Boolean(includeDiff),
         });
         return snapshot;
       } : undefined;

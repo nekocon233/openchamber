@@ -68,9 +68,19 @@ test('linked PRs preserve the workspace and normal pane while source accounts an
     if (url.pathname.endsWith('/references/status')) return Response.json({ connected: true, statuses: [] });
     if (url.pathname.endsWith('/references/detail')) return Response.json({ connected: true,
       detail: { number: Number(url.searchParams.get('number')), comments: [], commentTotal: 0, pull: null } });
-    if (url.pathname === '/api/walkthrough/pr-diff') {
+    if (url.pathname === '/api/walkthrough/pr-files') {
       const file = owner === 'other' ? 'linked-review.txt' : 'project-review.txt';
-      return new Response(`diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-before\n+after\n`);
+      return Response.json({
+        mode: 'files',
+        headSha: 'a'.repeat(40),
+        files: [{
+          path: file,
+          status: 'M',
+          insertions: 1,
+          deletions: 1,
+          patch: `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-before\n+after\n`,
+        }],
+      });
     }
     if (url.pathname.endsWith('/pr/review/pending')) return Response.json({ headSha: 'a'.repeat(40), open: true, ownPull: false, review: null });
     if (url.pathname.endsWith('/repo/upstream')) return Response.json({ connected: true, isFork: false, upstream: null });

@@ -24,7 +24,7 @@ describe('complete lightweight GitHub PR statistics', () => {
     const readSnapshot = mock(async () => ({ files: Array.from({ length: 3001 }, (_, index) => file(index)) }));
     expect((await readGitHubPullFileStats({ ...input, readSnapshot })).files).toHaveLength(3001);
     expect(listFiles).not.toHaveBeenCalled();
-    expect(readSnapshot).toHaveBeenCalledWith(expect.objectContaining({ context: input.context, expectedHeadSha: headSha, expectedBaseSha: baseSha }));
+    expect(readSnapshot).toHaveBeenCalledWith(expect.objectContaining({ context: input.context, expectedHeadSha: headSha, expectedBaseSha: baseSha, includePatch: false }));
   });
   test('a failed page and an incomplete page sequence cannot publish partial counts', async () => {
     const failure = setup();
