@@ -588,6 +588,25 @@ describe('canonical GitHub mutations', () => {
     ]);
   });
 
+  it.each([
+    ['merge', 'abc123'],
+    ['squash', 'another-head'],
+  ])('refuses to follow an existing asynchronous merge for method %s and head %s', async (method, sha) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fetch = vi.fn(async (url, options) => {
+      if (options.method === 'PUT') return jsonResponse({ status: 'pending',
+        details: { uuid: 'existing-merge', merge_method: method, expected_head_sha: sha } }, 409);
+      if (new URL(url).pathname.endsWith('/merge-async/existing-merge')) throw new Error('Unexpected poll of a different merge');
+      return jsonResponse(pullRequest());
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { app } = makeApp();
+    const response = await request(app).post('/api/source-control/github/pr/merge')
+      .send({ ...mergeBody(account.accountId), method: 'squash' }).expect(409);
+    expect(response.body.code).toBe('SOURCE_CONTROL_MUTATION_REJECTED');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('uses a separate head-bound mutation for an explicit administrator merge and replays its own receipt', async () => {
     const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
     const sha = 'a'.repeat(40);
@@ -648,7 +667,7 @@ describe('canonical GitHub mutations', () => {
         const { query, variables } = JSON.parse(options.body);
         queries.push({ query, variables });
         if (query.includes('enablePullRequestAutoMerge')) {
-          autoMergeRequest = { enabledAt: '2026-11-03T12:00:00Z', mergeMethod: 'MERGE' };
+          autoMergeRequest = { enabledAt: '2026-11-03T12:00:00Z', mergeMethod: variables.mergeMethod };
           return jsonResponse({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest } } } });
         }
         if (query.includes('disablePullRequestAutoMerge')) {
@@ -663,12 +682,12 @@ describe('canonical GitHub mutations', () => {
       return jsonResponse(pullRequest());
     }));
     const { app } = makeApp();
-    const body = mergeBody(account.accountId);
+    const body = { ...mergeBody(account.accountId), method: 'squash' };
     const enabled = await request(app).post('/api/source-control/github/pr/merge').send(body);
     expect(enabled.status).toBe(200);
     expect(queries).toHaveLength(2);
     expect(enabled.body).toMatchObject({ status: 'succeeded', result: { merged: false, outcome: 'auto-merge' } });
-    expect(queries[1].variables.sha).toBe('abc123');
+    expect(queries[1].variables).toMatchObject({ sha: 'abc123', mergeMethod: 'SQUASH' });
     const cancelled = { ...body, idempotencyKey: 'request-cancel', cancel: true };
     expect((await request(app).post('/api/source-control/github/pr/merge').send(cancelled).expect(200)).body.result)
       .toEqual({ merged: false, outcome: 'cancelled' });

@@ -1,7 +1,7 @@
 import { ForceMergePreflightError, forceMergePullRequest } from './force-merge.js';
 import { changeRequestNetworkTarget } from '../source-control/repository-network.js';
 import { reviewCommentPosition } from '../source-control/review-position.js';
-import { cancelWaitingMerge, enableMergeWhenReady, readWaitingMerge } from './merge-when-ready.js';
+import { cancelWaitingMerge, enableMergeWhenReady, hasRequestedAutoMerge, readWaitingMerge } from './merge-when-ready.js';
 import {
   invalidProviderPayload,
   isPlainObject,
@@ -189,7 +189,7 @@ const providerRejection = (cause: unknown) => {
   if (status !== 403 && status !== 404 && status !== 405 && status !== 409 && status !== 422) return cause;
   const data = failureFields(failureFields(failureFields(cause)?.response)?.data);
   const first = isArray(data?.errors) ? data.errors[0] : undefined;
-  const detail = [first, failureFields(first)?.message, data?.message].find((value): value is string => isProviderString(value) && Boolean(value.trim()));
+  const detail = [first, failureFields(first)?.message, data?.message, failureFields(cause)?.message].find((value): value is string => isProviderString(value) && Boolean(value.trim()));
   return mutationError(detail ?? 'GitHub refused the change', 'SOURCE_CONTROL_MUTATION_REJECTED', status);
 };
 
@@ -276,7 +276,6 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
     if (stacks.some((stack) => isPlainObject(stack) && Number.isSafeInteger(fieldAt(stack, 'number')))) return true;
     return stackOnParent(octokit, project, number, base, defaultBranch);
   };
-
   const MERGE_ASYNC_POLL_MS = 1000;
   const MERGE_ASYNC_WAIT_MS = 20_000;
   const isMergeAsyncStatus = (value: unknown): value is 'pending' | 'merged' | 'enqueued' | 'failed' =>
@@ -336,7 +335,8 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
         if (waiting) return waiting;
       }
       const data = failureFields(failureFields(error)?.response)?.data;
-      if (status !== 409 || !isMergeAsyncAnswer(data)) throw providerRejection(error);
+      if (status !== 409 || !isMergeAsyncAnswer(data) || fieldAt(data.details, 'merge_method') !== method
+        || fieldAt(data.details, 'expected_head_sha') !== target.headSha) throw providerRejection(error);
       answer = mergeAsyncAnswer(data);
     }
     const deadline = Date.now() + MERGE_ASYNC_WAIT_MS;
@@ -832,7 +832,7 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
       if (input.cancel) return !pull.isInMergeQueue && !pull.autoMergeRequest
         ? { state: 'succeeded', result: { merged: false, outcome: 'cancelled' } } : unknownOutcome();
       if (pull.isInMergeQueue) return { state: 'succeeded', result: { merged: false, outcome: 'queued' } };
-      if (pull.autoMergeRequest) return { state: 'succeeded', result: { merged: false, outcome: 'auto-merge' } };
+      if (hasRequestedAutoMerge(pull, target, input.method)) return { state: 'succeeded', result: { merged: false, outcome: 'auto-merge' } };
     } else if (operation === 'state') {
       if (pr.state === input.state) return { state: 'succeeded', result: { state: pr.state } };
       if (pr.state === 'open' || pr.state === 'closed') return definiteFailure('SOURCE_CONTROL_MUTATION_NOT_APPLIED');

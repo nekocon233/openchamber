@@ -1,6 +1,8 @@
 import { ReviewSubmitButton } from '@/components/review/ReviewSubmitButton';
 import { useComparisonReview } from '@/components/review/useChangeRequestReview';
+import { PullRequestComparisonMerge } from '@/components/views/git/PullRequestComparisonMerge';
 import { PullRequestNavigation } from '@/components/views/git/PullRequestNavigation';
+import { cn } from '@/lib/utils';
 import { usePullRequestNavigation } from '@/components/views/git/usePullRequestNavigation';
 
 export function useMobileChangesReview(
@@ -19,9 +21,13 @@ export function useMobileChangesReview(
   return {
     review,
     navigationButtons: <PullRequestNavigation compact navigation={navigation} />,
-    renderReviewButton: (className?: string) => review && provider ? (
-      <ReviewSubmitButton review={review} provider={provider} className={className}
-        onVerdictDispatched={navigation ? () => navigation.navigate('origin') : undefined} />
+    renderPullActions: (className?: string) => visible && (review || comparedHead) ? (
+      <div className={cn('flex shrink-0 items-center gap-1', className)}>
+        {review && provider ? <ReviewSubmitButton review={review} provider={provider}
+          onVerdictDispatched={navigation ? () => navigation.navigate('origin') : undefined} /> : null}
+        <PullRequestComparisonMerge comparison={comparison} comparedHead={comparedHead}
+          onSubmitted={() => navigation?.navigate('origin')} />
+      </div>
     ) : null,
   };
 }

@@ -83,7 +83,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
   const { useReferenceBrowser } = await import('./useReferenceBrowser');
-  const { refreshProjectPullListsAfterReview } = await import('./referenceSources');
+  const { refreshProjectPullLists } = await import('./referenceSources');
   const { revalidateReferences } = await import('./referenceCache');
   const { referencePickerItemKey } = await import('./referencePickerItems');
   const provider = githubLikeDescriptor();
@@ -136,7 +136,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(boardBrowser().pullStatusOf(pull(2, 'upstream')).status).toBe('idle');
 
     const beforeReview = listRequests().length;
-    await act(async () => refreshProjectPullListsAfterReview(apis.sourceControl, { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
+    await act(async () => refreshProjectPullLists(apis.sourceControl, { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
       repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' }));
     await until(() => current().list.items[0]?.title === 'PR after review');
     expect(listRequests()).toHaveLength(beforeReview + 1);

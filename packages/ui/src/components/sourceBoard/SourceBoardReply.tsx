@@ -8,7 +8,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { referenceNumberLabel } from '@/components/references/referencePickerItems';
-import { refreshProjectPullListsAfterReview } from '@/components/references/referenceSources';
+import { refreshProjectPullLists } from '@/components/references/referenceSources';
 import { toast } from '@/components/ui';
 import { ButtonTooltip, TooltipLabelWithShortcut } from '@/components/ui/action-toolbar';
 import { Button } from '@/components/ui/button';
@@ -93,7 +93,7 @@ export const SourceBoardReply: React.FC<{
     };
 
     const reviewCompleted = () => {
-        void refreshProjectPullListsAfterReview(sourceControl, context);
+        void refreshProjectPullLists(sourceControl, context);
         (onReviewCompleted ?? onRefresh)();
     };
 

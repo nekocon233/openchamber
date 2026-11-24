@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { refreshProjectPullListsAfterReview } from '@/components/references/referenceSources';
+import { refreshProjectPullLists } from '@/components/references/referenceSources';
 import { newMutationKey } from '@/components/sourceBoard/mutationKey';
 import { beginPullRequestAction, usePullRequestActionPending } from '@/components/sourceBoard/pullRequestActions';
 import { toast } from '@/components/ui';
@@ -214,7 +214,7 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
                             : 'review.toast.submitted', { reference });
                         if (posted) toast.success(done, { id: toastId });
                         else toast.warning(done, { id: toastId, description: t('sourceBoard.reply.toast.textNotPosted') });
-                        if (changesReviewStatus) void refreshProjectPullListsAfterReview(sourceControl, context);
+                        if (changesReviewStatus) void refreshProjectPullLists(sourceControl, context);
                     }
                     return posted;
                 } catch (error) {

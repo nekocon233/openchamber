@@ -2,6 +2,7 @@ import { useInContextPanelHeader } from "@/components/layout/contextPanelHeaderS
 import { useWorkspaceScroll, WorkspaceViewScope } from "@/hooks/useWorkspaceViewState";
 import { PullRequestNavigation } from "./git/PullRequestNavigation";
 import { usePullRequestNavigation } from "./git/usePullRequestNavigation";
+import { PullRequestComparisonMerge } from "./git/PullRequestComparisonMerge";
 import { DiffFileTypeFilter, DiffFileFilterEmpty } from "./DiffFileTypeFilter";
 import { MovablePane } from "@/components/layout/MovablePane";
 import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from "@/components/layout/contextPanelHeaderSlot";
@@ -637,6 +638,10 @@ export const DiffView: React.FC<DiffViewProps> = ({
                             labelClassName="diff-toolbar__review-label"
                             onVerdictDispatched={pullRequestNavigation ? () => pullRequestNavigation.navigate('origin') : undefined}
                         />
+                    ) : null}
+                    {visible && activeDiffScope === 'pr' && !isVSCodeRuntime() ? (
+                        <PullRequestComparisonMerge comparison={prComparison} comparedHead={comparison.headSha}
+                            onSubmitted={() => pullRequestNavigation?.navigate('origin')} />
                     ) : null}
                     {changedFiles.length > 0 && showReviewAction && (
                         <Tooltip>

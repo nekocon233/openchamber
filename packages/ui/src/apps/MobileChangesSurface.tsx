@@ -412,7 +412,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     [comparisonSource, prComparison.provider, selectedPrHead],
   );
   const comparison = useGitComparison(currentDirectory || null, comparisonSource, visible && isGitRepo === true, comparisonRevision, prComparison.readContext, prComparison.provider);
-  const { review: changeRequestReview, navigationButtons, renderReviewButton } = useMobileChangesReview(
+  const { review: changeRequestReview, navigationButtons, renderPullActions } = useMobileChangesReview(
     prComparison, currentDirectory, mode === 'pr' ? rootDirectory || null : null, visible && mode === 'pr', comparison.headSha);
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile, fetchVersions: loadComparisonVersions } = comparison;
   const treeScopeKey = JSON.stringify([ownerKey, mode, mode === 'turn' ? currentSessionId : comparison.key]);
@@ -1399,7 +1399,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
             <Icon name="route" className="size-5" />
           </Button>
         )}
-        {renderReviewButton(walkthroughTarget ? undefined : 'ms-auto')}
+        {renderPullActions(walkthroughTarget ? undefined : 'ms-auto')}
         {mode === 'working' && currentSessionId && (status?.files?.length ?? 0) > 0 ? (
           <Button
             variant="outline"

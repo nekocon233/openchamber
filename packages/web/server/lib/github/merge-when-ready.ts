@@ -14,6 +14,11 @@ interface MergeTarget {
   headSha?: string;
 }
 
+const autoMergeRequestSchema = z.object({ enabledAt: z.string().min(1), mergeMethod: z.string().min(1) });
+const enableResponseSchema = z.object({
+  enablePullRequestAutoMerge: z.object({ pullRequest: z.object({ autoMergeRequest: autoMergeRequestSchema }) }),
+});
+
 const pullSchema = z.object({
   id: z.string().min(1),
   state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
@@ -21,8 +26,13 @@ const pullSchema = z.object({
   mergeable: z.string(),
   mergeStateStatus: z.string(),
   isInMergeQueue: z.boolean(),
-  autoMergeRequest: z.object({ enabledAt: z.string(), mergeMethod: z.string() }).nullable(),
+  autoMergeRequest: autoMergeRequestSchema.nullable(),
 });
+
+export const hasRequestedAutoMerge = (pull: z.infer<typeof pullSchema>, target: MergeTarget, method: string | undefined): boolean => (
+  pull.state === 'OPEN' && pull.headRefOid === target.headSha
+    && Boolean(method && pull.autoMergeRequest?.mergeMethod === method.toUpperCase())
+);
 
 export async function readWaitingMerge(octokit: Octokit, project: MergeProject, target: MergeTarget) {
   const data = await octokit.graphql(`query($owner: String!, $repo: String!, $number: Int!, $base: String!) {
@@ -44,19 +54,21 @@ export async function enableMergeWhenReady(octokit: Octokit, project: MergeProje
   try { waiting = await readWaitingMerge(octokit, project, target); }
   catch { return null; }
   const { pull, hasQueue } = waiting;
-  if (hasQueue || pull.state !== 'OPEN' || pull.headRefOid !== target.headSha
+  if (hasQueue || pull.isInMergeQueue || pull.state !== 'OPEN' || pull.headRefOid !== target.headSha
     || pull.mergeable === 'CONFLICTING' || !['BLOCKED', 'UNSTABLE'].includes(pull.mergeStateStatus)) return null;
-  if (!pull.autoMergeRequest) {
+  const mergeMethod = method.toUpperCase();
+  if (!hasRequestedAutoMerge(pull, target, method)) {
     const data = await octokit.graphql<unknown>(`mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!, $sha: GitObjectID!) {
       enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod, expectedHeadOid: $sha }) {
-        pullRequest { autoMergeRequest { enabledAt } }
+        pullRequest { autoMergeRequest { enabledAt mergeMethod } }
       }
-    }`, { id: pull.id, mergeMethod: method.toUpperCase(), sha: target.headSha });
-    const enabled = hasProperty(data, 'enablePullRequestAutoMerge') ? data.enablePullRequestAutoMerge : undefined;
-    const result = hasProperty(enabled, 'pullRequest') ? enabled.pullRequest : undefined;
-    const request = hasProperty(result, 'autoMergeRequest') ? result.autoMergeRequest : undefined;
-    if (!(hasProperty(request, 'enabledAt') && request.enabledAt)) {
-      throw invalidProviderPayload('GitHub did not confirm auto-merge');
+    }`, { id: pull.id, mergeMethod, sha: target.headSha });
+    const parsed = enableResponseSchema.safeParse(data);
+    if (!parsed.success) throw invalidProviderPayload('GitHub did not confirm auto-merge');
+    if (parsed.data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest.mergeMethod !== mergeMethod) {
+      throw Object.assign(new Error('GitHub kept a different auto-merge method. Cancel auto-merge and try again.'), {
+        status: 409, code: 'SOURCE_CONTROL_MUTATION_REJECTED',
+      });
     }
   }
   return { merged: false, outcome: 'auto-merge' as const };

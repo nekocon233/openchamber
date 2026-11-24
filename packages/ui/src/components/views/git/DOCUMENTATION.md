@@ -57,6 +57,10 @@ operation contracts belong to the runtime APIs and source-control modules.
 - Project and linked PR previews hand Changes and Walkthrough the checkout
   directory used by the preview. The repository ID stays in the read context
   as the binding's identity across worktrees.
+- The squash shortcut in Changes requires the compared head and a matching
+  open, non-draft PR in the bound repository context. An exact lookup supplies
+  the target when the comparison picker's page lacks that head. The merge
+  confirmation reads stack detail when the comparison has no stack answer.
 - A created change request is associated with the open session only when that
   session works in the Git view's directory. The view can show another worktree.
 - An automatically detected base can arrive after the form opens and updates
