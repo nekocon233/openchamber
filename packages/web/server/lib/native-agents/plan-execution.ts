@@ -2,13 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { NativeAgentError, invalidRequestError } from './errors.js';
-import { newNativeClientUserMessageId } from './ids.js';
+import { decodeNativeSessionId, nativeBackendOfProviderId, newNativeClientUserMessageId } from './ids.js';
 import { AGY_PLAN_QUESTION_PREFIX } from './antigravity/interaction-signals.js';
+import type { AgentModel } from './agent-configuration.js';
+import type { ConversationNativeMessagePage } from './conversations/history.js';
 import type { NativeMessageRecord, NativeToolPart } from './records.js';
 import type { PromptPart } from './prompt-parts.js';
 import type { QuestionOutcome, QuestionRegistry, QuestionRepliedOutcome, QuestionRequest, QuestionToolLink } from './questions.js';
 
 export type PlanExitKind = 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit';
+export type PlanExecutionRoute = 'reply' | 'resume' | 'handoff';
+export type PlanExecutionShellTasks = { subagentModel: AgentModel | null };
 
 export const planExecutionChoiceSchema = z.object({
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }),
@@ -71,12 +75,15 @@ export interface PlanExecutionContinuation {
   agent: 'build' | 'plan';
   preserveSelection: boolean;
   instructions?: string | undefined;
+  subagentModel?: AgentModel | null | undefined;
 }
 
 export interface PlanExecutionPromptCallbacks {
   requestId: string;
   logicalMessageId: string;
   expectedRevision?: number | undefined;
+  retainSource: boolean;
+  preserveShellTasks?: boolean | undefined;
   onDispatched: () => Promise<void>;
   onRefused: () => Promise<void>;
 }
@@ -97,11 +104,11 @@ export interface NativePlanExecutionOptions {
     directory: string,
     requestId: string,
     execution: PlanExecutionChoice,
-    handoff: boolean,
+    route: PlanExecutionRoute,
     approves: boolean,
-  ) => Promise<void>;
+  ) => Promise<PlanExecutionShellTasks | void>;
   readHistory: (sessionId: string, directory: string, request: PlanReferenceRequest) => Promise<NativeMessageRecord[]>;
-  yieldSource: (sessionId: string, directory: string, signal: AbortSignal) => Promise<void>;
+  yieldSource: (sessionId: string, directory: string, signal: AbortSignal, route: Exclude<PlanExecutionRoute, 'reply'>) => Promise<void>;
   prompt: (
     sessionId: string,
     continuation: PlanExecutionContinuation,
@@ -131,6 +138,30 @@ const unavailable = (): NativeAgentError => new NativeAgentError('The original p
 const unknown = (): NativeAgentError => new NativeAgentError('The plan execution may have been accepted. Check its history before retrying.', {
   status: 409, code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN',
 });
+
+export const readNativePlanHistory = async (
+  loadMessages: (sessionId: string, directory: string, page: { limit: number; before?: string | undefined }) => Promise<ConversationNativeMessagePage>,
+  sessionId: string,
+  directory: string,
+  request?: PlanReferenceRequest,
+): Promise<NativeMessageRecord[]> => {
+  const records: NativeMessageRecord[] = [];
+  const cursors = new Set<string>();
+  let before: string | undefined;
+  do {
+    const page = await loadMessages(sessionId, directory, { limit: 200, before });
+    records.unshift(...page.records);
+    if (page.metadataComplete === false || (page.complete === false && !page.cursor)) {
+      throw new NativeAgentError('The native plan history is incomplete', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
+    }
+    if (request && page.records.some((record) => record.parts.some((part) => part.type === 'tool'
+      && (request.tool ? part.callID === request.tool.callID : part.tool === 'plan_exit')))) break;
+    before = page.cursor ?? undefined;
+    if (before && cursors.has(before)) throw new NativeAgentError('Native plan history paging made no progress', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
+    if (before) cursors.add(before);
+  } while (before);
+  return records;
+};
 
 export const readNativePlanReference = (
   request: PlanReferenceRequest,
@@ -217,10 +248,13 @@ export const createNativePlanExecution = ({
     if (!approves && !context.transferred) throw invalidRequestError('An execution model requires approval');
     const source = state?.source ?? planExecutionChoiceSchema.parse(await sourceSelection(request.sessionID, directory));
     const execution = approves ? planExecutionChoiceSchema.parse(outcome.execution) : source;
-    const handoff = context.transferred || Boolean(state) || !sameModel(source, execution);
-    await validate(request.sessionID, directory, request.id, execution, handoff, approves);
+    const needsContinuation = context.transferred || state !== null || !sameModel(source, execution);
+    const targetBackend = nativeBackendOfProviderId(execution.model.providerID);
+    const sourceBackend = decodeNativeSessionId(request.sessionID)?.backend;
+    const route = !needsContinuation ? 'reply' : targetBackend === sourceBackend ? 'resume' : 'handoff';
+    const shellTasks = await validate(request.sessionID, directory, request.id, execution, route, approves);
     if (actions.isCurrent && !actions.isCurrent()) throw new NativeAgentError('The plan approval is no longer pending', { status: 404, code: 'NATIVE_QUESTION_NOT_FOUND' });
-    if (!handoff) {
+    if (route === 'reply') {
       await interactions.record(request, outcome);
       await actions.deliver();
       return { execution };
@@ -253,7 +287,7 @@ export const createNativePlanExecution = ({
       if (actions.isCurrent && !actions.isCurrent()) throw new NativeAgentError('The plan approval is no longer pending', { status: 404, code: 'NATIVE_QUESTION_NOT_FOUND' });
       await interactions.record(request, outcome);
       await actions.transfer();
-      await yieldSource(request.sessionID, directory, controller.signal);
+      await yieldSource(request.sessionID, directory, controller.signal, route);
       controller.signal.throwIfAborted();
       const continuation: PlanExecutionContinuation = {
         directory,
@@ -263,6 +297,7 @@ export const createNativePlanExecution = ({
         variant: execution.variant,
         agent: approves ? 'build' : 'plan',
         preserveSelection: true,
+        subagentModel: shellTasks?.subagentModel,
       };
       if (approves) {
         continuation.instructions = [
@@ -274,6 +309,8 @@ export const createNativePlanExecution = ({
         requestId: request.id,
         logicalMessageId: nextState.logicalMessageID,
         expectedRevision: approves ? execution.expectedRevision : undefined,
+        retainSource: route === 'resume',
+        preserveShellTasks: Boolean(shellTasks),
         onDispatched: async () => {
           if (dispatched) return;
           controller.signal.throwIfAborted();

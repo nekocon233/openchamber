@@ -42,6 +42,7 @@ Sections: Runtimes and backends, Platform scope, Localization, Composer, Session
 
 - No cross-session message bus (#3757). Agents already send to and read other sessions through the `openchamber` tool.
 - Chats are isolated sessions.
+- Model and effort changes within one CLI keep the original native session, including on plan approval. Switching CLIs uses a conversation handoff.
 - No built-in Recent section. Users build their own sidebar sections, a Recent one included.
 - The desktop tool rail uses equal spacing and a single order for built-in and extension buttons.
 - Session lists omit the built-in Projects heading in every grouping. Project rows and named custom groups are visible in their chosen order.

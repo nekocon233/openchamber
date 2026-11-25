@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { claudeLaunchModel, claudeModels } from '../catalog.js';
 import type { NativeCatalogModel } from '../catalog.js';
@@ -11,7 +12,7 @@ import { fetchKimiQuota, isKimiCodingEndpoint } from '../../quota/providers/kimi
 import { buildResult } from '../../quota/utils/index.js';
 import type { QuotaResult } from '../../quota/utils/contracts.js';
 
-const effortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 const CLAUDE_CODE_EFFECTIVE_OUTPUT_LIMIT = 128_000;
 const MIN_AUTO_COMPACT_WINDOW = 32_000;
 const COMPACT_OUTPUT_LIMIT = 65_536;
@@ -23,7 +24,7 @@ const connectionModelSchema = z.object({
   contextWindow: z.number().int().min(1024).max(10_000_000),
   outputLimit: z.number().int().min(1).max(1_000_000),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
-  efforts: z.array(effortSchema).max(5),
+  efforts: z.array(claudeEffortSchema).max(5),
 });
 const connectionModelsSchema = z.array(connectionModelSchema).min(1).max(50)
   .refine((models) => new Set(models.map((model) => model.id)).size === models.length);
@@ -299,4 +300,27 @@ export const redactClaudeConnectionError = (message: string, launch?: ClaudeConn
     if (key) redacted = redacted.replaceAll(key, '[redacted]');
   }
   return redacted;
+};
+
+export type ClaudeLiveConfig = {
+  model: string | null;
+  effort: string | null;
+  permissionMode: 'bypassPermissions' | 'plan';
+  launch?: ClaudeConnectionLaunch | undefined;
+};
+
+export const applyClaudeLiveConfig = async (live: { query: Query; config: ClaudeLiveConfig }, config: ClaudeLiveConfig): Promise<void> => {
+  if (config.model !== live.config.model) {
+    await live.query.setModel(config.model ?? undefined);
+    live.config = { ...live.config, model: config.model };
+  }
+  if (config.effort !== live.config.effort) {
+    const effort = config.effort === null ? null : claudeEffortSchema.safeParse(config.effort).data;
+    if (effort !== undefined) {
+      await live.query.applyFlagSettings({ effortLevel: effort });
+      live.config = { ...live.config, effort };
+    }
+  }
+  if (config.permissionMode !== live.config.permissionMode) await live.query.setPermissionMode(config.permissionMode);
+  live.config = config;
 };

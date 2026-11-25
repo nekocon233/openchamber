@@ -184,12 +184,13 @@ back to DSH's explicit approve label rather than inferring it from ordering.
 Question settlement waits for DSH's reply acknowledgement. A delivery failure
 keeps the same question retryable; concurrent replies cannot deliver twice.
 
-An execution-model handoff transfers the application decision without answering
-DSH's approve label. The serialized `stop` path drains the planning source before
-execution starts elsewhere. Its pending-question identity stays held until native
-cancellation, preventing a projection replay from offering it again. The shared
-plan-execution journal and answer metadata own recovery; see the parent native
-module's Plan execution model selection section.
+An approval with changed execution settings uses the serialized `stop` path to
+drain the planning turn before starting Build. Another DeepSeek model continues
+on the same native session via `session/selectModel` and `session/prompt`.
+An approval targeting another CLI uses unified handoff. The pending-question
+identity stays held until native cancellation, preventing projection replay from
+offering it again. The shared plan-execution journal and answer metadata own
+recovery.
 
 Commands are discovered for an existing session and dispatched through
 `commands/execute`. The permission command is excluded. Undo/redo use the shared

@@ -87,6 +87,25 @@ export type ConversationManifest = z.infer<typeof manifestSchema>;
 export type ConversationAdmission = NonNullable<ConversationManifest['admission']>;
 export type ConversationManifestInput = z.input<typeof manifestSchema>;
 
+export const buildRollback = (manifest: ConversationManifest): ConversationRollback => {
+  const rollback: ConversationRollback = {
+    segments: structuredClone(manifest.segments),
+    active: manifest.active,
+  };
+  if (manifest.cut !== undefined) rollback.cut = manifest.cut;
+  if (manifest.checkpoint !== undefined) rollback.checkpoint = manifest.checkpoint;
+  return rollback;
+};
+
+export const restoreRollback = (current: ConversationManifest, rollback: ConversationRollback): void => {
+  current.segments = rollback.segments;
+  current.active = rollback.active;
+  if (rollback.cut !== undefined) current.cut = rollback.cut;
+  else delete current.cut;
+  if (rollback.checkpoint !== undefined) current.checkpoint = rollback.checkpoint;
+  else delete current.checkpoint;
+};
+
 export type ConversationCreateInput = Partial<Omit<ConversationManifestInput, 'directory' | 'selection'>> & {
   directory: string;
   selection: ConversationSelection;

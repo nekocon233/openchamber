@@ -63,12 +63,12 @@ import { createNativeEventPublisher } from './publisher.js';
 import type { NativeChecklistSnapshot, NativePublishedEvent } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
 import { createNativeInteractions } from './interactions.js';
-import { createNativePlanExecution, planExecutionChoiceSchema } from './plan-execution.js';
-import type { NativePlanExecution, PlanExecutionChoice, PlanReferenceRequest } from './plan-execution.js';
+import { createNativePlanExecution, planExecutionChoiceSchema, readNativePlanHistory } from './plan-execution.js';
+import type { NativePlanExecution, PlanExecutionChoice } from './plan-execution.js';
 import { unconfirmedSessionRecord, unknownError } from './records.js';
 import type { NativeMessageRecord, NativeSessionRecord } from './records.js';
 import { createNativeRegistry } from './registry.js';
-import type { RegistrySessionInput } from './registry.js';
+import type { RegistryAgentConfiguration, RegistrySessionInput } from './registry.js';
 import { createNativeReverts } from './revert.js';
 import type { PendingRevert, RevertResult, RevertTurnInput } from './revert.js';
 import { createSnapshotStore } from './snapshots.js';
@@ -1528,34 +1528,19 @@ export const createNativeAgentsRuntime = ({
     now,
   });
 
-  const readPlanHistory = async (
-    sessionId: string,
-    directory: string,
-    request: PlanReferenceRequest | null = null,
-  ): Promise<NativeMessageRecord[]> => {
-    const records: NativeMessageRecord[] = [];
-    const cursors = new Set<string>();
-    let before: string | undefined;
-    do {
-      const page = await native.loadMessages(sessionId, directory, { limit: 200, before });
-      records.unshift(...page.records);
-      if (page.metadataComplete === false || (page.complete === false && !page.cursor)) {
-        throw new NativeAgentError('The native plan history is incomplete', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
-      }
-      if (request && page.records.some((record) => record.parts.some((part) => part.type === 'tool'
-        && (request.tool ? part.callID === request.tool.callID : part.tool === 'plan_exit')))) break;
-      before = page.cursor ?? undefined;
-      if (before && cursors.has(before)) throw new NativeAgentError('Native plan history paging made no progress', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
-      if (before) cursors.add(before);
-    } while (before);
-    return records;
+  const captureClaudeShellTasks = async (id: string, modelID: string, agents: RegistryAgentConfiguration | undefined) => {
+    if (agents?.unavailable) return undefined;
+    const subagentModel = agents?.subagent ?? null;
+    const toolKey = subagentModel ? delegation?.toolKeyForSelection(id, subagentModel) : '';
+    if (toolKey == null || !claudeLive.canReuseConnection(id, await claudeConnections.resolve(modelID), toolKey)) return undefined;
+    return { subagentModel };
   };
 
   planExecution = createNativePlanExecution({
     registry,
     questions,
     interactions,
-    readHistory: readPlanHistory,
+    readHistory: (sessionId, directory, request) => readNativePlanHistory(native.loadMessages, sessionId, directory, request),
     sourceSelection: async (sessionId, directory) => {
       const latest = [...(await registry.sendRecords(sessionId)).values()].at(-1);
       const session = await native.getSession(sessionId, directory);
@@ -1564,27 +1549,33 @@ export const createNativeAgentsRuntime = ({
         variant: latest ? latest.variant : session.model?.variant,
       });
     },
-    validate: async (sessionId, directory, requestId, execution, handoff, approves) => {
+    validate: async (sessionId, directory, requestId, execution, route, approves) => {
       const session = await native.getSession(sessionId, directory);
       if (session.parentID) throw invalidRequestError('Subagent plans use their parent execution model');
-      const unified = conversations ? await conversations.validatePlanExecution(sessionId, directory, requestId, execution, handoff, approves) : false;
+      const captureShellTasks = route === 'resume' && decode(sessionId).backend === NATIVE_BACKEND_CLAUDE
+        ? (agents: RegistryAgentConfiguration | undefined) => captureClaudeShellTasks(sessionId, execution.model.modelID, agents)
+        : undefined;
+      const unified = await conversations?.validatePlanExecution(sessionId, directory, requestId, execution, route, approves, captureShellTasks);
       const backend = nativeBackendOfProviderId(execution.model.providerID);
       if (!backend || (!unified && backend !== decode(sessionId).backend)) throw invalidRequestError('The execution model does not belong to this session');
-      if (!handoff) return;
+      if (route === 'reply') return;
       const partition = (await native.catalog()).backends[backend];
       const models: ReadonlyArray<CatalogModelDescriptor> = partition?.status === 'ok' ? partition.models : [];
       const model = models.find((candidate) => candidate.id === execution.model.modelID || candidate.aliases?.some((alias) => alias.id === execution.model.modelID)) ?? null;
       if (!model) throw new NativeAgentError('The selected execution model is unavailable. Select another model and retry.', { status: 409, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE' });
       if (execution.variant && !nativeModelSupportsVariant(model, execution.variant)) throw invalidRequestError('The execution model does not support this thinking effort');
+      const shellTasks = unified ? unified.shellTasks : await captureShellTasks?.((await registry.getSession(sessionId))?.agentConfiguration);
       if (!unified) {
         const tasks = await native.backgroundTasks();
-        if (tasks[sessionId]?.tasks.length || questions.list(directory).some((question) => question.sessionID === sessionId && question.id !== requestId)) throw sessionBusyError();
+        if (tasks[sessionId]?.tasks.some((task) => !shellTasks || task.type !== 'local_bash')
+          || questions.list(directory).some((question) => question.sessionID === sessionId && question.id !== requestId)) throw sessionBusyError();
         for (const [id, status] of Object.entries(await native.statuses(directory))) {
           if (id !== sessionId && status.type !== 'idle' && liveFor(id).childSession(id)?.parentID === sessionId) throw sessionBusyError();
         }
       }
+      return shellTasks;
     },
-    yieldSource: async (sessionId, directory, signal) => {
+    yieldSource: async (sessionId, directory, signal, route) => {
       signal.throwIfAborted();
       const backend = decode(sessionId).backend;
       if (backend === NATIVE_BACKEND_DEEPSEEK) { await deepseek.stop(sessionId, directory); return; }
@@ -1597,7 +1588,7 @@ export const createNativeAgentsRuntime = ({
         ]);
       } finally { if (timer !== undefined) clearTimeout(timer); }
       signal.throwIfAborted();
-      await sourceLifecycle[backend].retire(sessionId);
+      if (route === 'handoff') await sourceLifecycle[backend].retire(sessionId);
     },
     prompt: (sessionId, request, signal, approval) => {
       if (!conversations) return prompt(sessionId, request, signal);
@@ -1606,7 +1597,7 @@ export const createNativeAgentsRuntime = ({
     confirm: async (sessionId, directory, state) => {
       const unified = conversations ? await conversations.planExecutionOutcome(sessionId, directory, state) : null;
       if (unified !== null) return unified;
-      return (await readPlanHistory(sessionId, directory)).some((record) => record.info.role === 'user' && record.info.id === state.messageID) ? 'accepted' : 'unknown';
+      return (await readNativePlanHistory(native.loadMessages, sessionId, directory)).some((record) => record.info.role === 'user' && record.info.id === state.messageID) ? 'accepted' : 'unknown';
     },
     failed: (directory, sessionId, error) => publisher.error(directory, sessionId, unknownError(error instanceof Error ? error.message : 'Could not recover plan execution')),
   });
