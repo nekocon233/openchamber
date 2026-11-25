@@ -760,7 +760,7 @@ describe('Claude live compaction', () => {
     { type: 'result', subtype: 'success', is_error: false, num_turns: 0, queued_turn_count: 0 },
   ];
 
-  it('shows a compaction as its marker and summary, named as a history read names them', async () => {
+  it('shows a running compaction, then replaces it with the canonical marker and summary matching history', async () => {
     const events = [];
     const inputs = [];
     const sdk = {
@@ -787,13 +787,227 @@ describe('Claude live compaction', () => {
     await waitFor(() => payloads(events, 'session.idle').length > 0);
 
     expect(inputs[0].message.content).toEqual([{ type: 'text', text: '/compact' }]);
-    const published = [...new Set(payloads(events, 'message.updated').map((payload) => payload.properties.info.id))];
+    const updates = payloads(events, 'message.updated').map((payload) => payload.properties.info);
+    expect(updates[0]).toMatchObject({ id: 'ncl_k_status-1', role: 'compaction', status: 'running', reason: 'manual' });
+    expect(payloads(events, 'message.removed').map((payload) => payload.properties.messageID)).toEqual(['ncl_k_status-1']);
     const history = createClaudeProjection({ sessionId: SESSION_ID, cwd: DIRECTORY });
     history.applyEntry({ type: 'system', uuid: '63ff2b53-e3c4-4ba7-a8ce-fbf9d4faa62b', timestamp: '2026-09-24T14:04:48.860Z' });
     history.applyEntry({ ...compactFrames[2], isCompactSummary: true, is_meta: true });
-    expect(published).toEqual(history.records().map((record) => record.info.id));
-    expect(published).toEqual(['ncl_k_63ff2b53-e3c4-4ba7-a8ce-fbf9d4faa62b', 'ncl_k_63ff2b53-e3c4-4ba7-a8ce-fbf9d4faa62b_summary']);
+    expect(live.liveRecords(SESSION_ID).map((record) => record.info.id)).toEqual(history.records().map((record) => record.info.id));
+    expect(live.liveRecords(SESSION_ID).map((record) => record.info.id)).toEqual(['ncl_k_63ff2b53-e3c4-4ba7-a8ce-fbf9d4faa62b', 'ncl_k_63ff2b53-e3c4-4ba7-a8ce-fbf9d4faa62b_summary']);
     expect(payloads(events, 'session.error')).toEqual([]);
+    await live.shutdown();
+  });
+
+  it('projects a failed manual /compact as a failed compaction notice matching history, not a synthetic assistant reply', async () => {
+    const events = [];
+    const failedFrames = [
+      { type: 'system', subtype: 'status', status: 'compacting', uuid: 'status-start' },
+      { type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'Error during compaction: summarization produced empty response', uuid: 'status-end' },
+      {
+        type: 'assistant',
+        uuid: 'c519f4c0-fdb1-4739-b8f6-dd38c65e9764',
+        timestamp: '2026-11-25T15:17:25.253Z',
+        parent_tool_use_id: null,
+        local_command_source: '<local-command-stderr>Error during compaction: summarization produced empty response</local-command-stderr>',
+        local_command_run: { command: 'compact', args: '' },
+        local_command_outcome: { kind: 'failed' },
+        message: { id: '2769f829-efce-4d7f-81e9-4bfa05dbeed1', model: '<synthetic>', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Error during compaction: summarization produced empty response' }] },
+      },
+      { type: 'result', subtype: 'success', is_error: false, local_command: 'compact', result: 'Error during compaction: summarization produced empty response', num_turns: 0, queued_turn_count: 0 },
+    ];
+    const immediateFailureFrames = [
+      {
+        type: 'assistant',
+        uuid: '657d4813-19d1-4bb3-bb1c-5f2e2ed3acb9',
+        timestamp: '2026-11-25T15:18:00.000Z',
+        parent_tool_use_id: null,
+        local_command_source: '<local-command-stderr>Error: No messages to compact</local-command-stderr>',
+        local_command_run: { command: 'compact', args: '' },
+        local_command_outcome: { kind: 'failed' },
+        message: { id: 'synthetic-empty', model: '<synthetic>', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Error: No messages to compact' }] },
+      },
+      { type: 'result', subtype: 'success', is_error: false, local_command: 'compact', result: '', num_turns: 0, queued_turn_count: 0 },
+    ];
+    let turn = 0;
+    const sdk = {
+      query: ({ prompt }) => {
+        const input = prompt[Symbol.asyncIterator]();
+        async function* run() {
+          for (const frames of [failedFrames, immediateFailureFrames]) {
+            await input.next();
+            turn += 1;
+            for (const frame of frames) yield frame;
+          }
+          await input.next();
+        }
+        return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
+      },
+    };
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => sdk,
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      buildEnv: () => ({}),
+      hasTranscript: async () => true,
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      questions: createQuestionRegistry({ publish: () => {} }),
+    });
+
+    await sendPrompt(live, { content: null, sdkContent: [{ type: 'text', text: '/compact' }] });
+    await waitFor(() => payloads(events, 'session.idle').length === 1);
+    await sendPrompt(live, { content: null, sdkContent: [{ type: 'text', text: '/compact' }] });
+    await waitFor(() => payloads(events, 'session.idle').length === 2);
+
+    expect(turn).toBe(2);
+    expect(payloads(events, 'message.removed').map((payload) => payload.properties.messageID)).toEqual(['ncl_k_status-start']);
+    expect(live.liveRecords(SESSION_ID).map((record) => record.info)).toEqual([
+      expect.objectContaining({
+        id: 'ncl_k_c519f4c0-fdb1-4739-b8f6-dd38c65e9764',
+        role: 'compaction',
+        status: 'failed',
+        reason: 'manual',
+        error: { name: 'UnknownError', data: { message: 'Error during compaction: summarization produced empty response' } },
+      }),
+      expect.objectContaining({
+        id: 'ncl_k_657d4813-19d1-4bb3-bb1c-5f2e2ed3acb9',
+        role: 'compaction',
+        status: 'failed',
+        reason: 'manual',
+        error: { name: 'UnknownError', data: { message: 'Error: No messages to compact' } },
+      }),
+    ]);
+    expect(payloads(events, 'session.error')).toEqual([]);
+    await live.shutdown();
+  });
+
+  it('settles failed auto-compaction and interrupted compaction without leaving a running notice or orphaned error bubble', async () => {
+    const events = [];
+    const autoFailFrames = [
+      { type: 'system', subtype: 'status', status: 'compacting', uuid: 'auto-1' },
+      { type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'Compaction failed · conversation could not be reduced below the context limit', uuid: 'auto-2' },
+      { type: 'assistant', uuid: 'reply-1', timestamp: '2026-11-25T15:20:00.000Z', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Continuing.' }] } },
+      { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 0 },
+    ];
+    const interruptedCompactFrames = [
+      { type: 'system', subtype: 'status', status: 'compacting', uuid: 'manual-stop' },
+      { type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_tools', errors: [], queued_turn_count: 0 },
+    ];
+    const sdk = {
+      query: ({ prompt }) => {
+        const input = prompt[Symbol.asyncIterator]();
+        async function* run() {
+          for (const frames of [autoFailFrames, interruptedCompactFrames]) {
+            await input.next();
+            for (const frame of frames) yield frame;
+          }
+          await input.next();
+        }
+        return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
+      },
+    };
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => sdk,
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      buildEnv: () => ({}),
+      hasTranscript: async () => true,
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      questions: createQuestionRegistry({ publish: () => {} }),
+    });
+
+    await sendPrompt(live, { content: { kind: 'text', text: 'Keep going' }, sdkContent: [{ type: 'text', text: 'Keep going' }] });
+    await waitFor(() => payloads(events, 'session.idle').length === 1);
+    await sendPrompt(live, { content: null, sdkContent: [{ type: 'text', text: '/compact' }] });
+    await waitFor(() => payloads(events, 'session.idle').length === 2);
+
+    const records = live.liveRecords(SESSION_ID).map((record) => record.info);
+    expect(records.filter((info) => info.role === 'compaction')).toEqual([
+      expect.objectContaining({
+        id: 'ncl_k_auto-1',
+        status: 'failed',
+        reason: 'auto',
+        error: { name: 'UnknownError', data: { message: 'Compaction failed · conversation could not be reduced below the context limit' } },
+      }),
+      expect.objectContaining({
+        id: 'ncl_k_manual-stop',
+        status: 'failed',
+        reason: 'manual',
+        error: { name: 'MessageAbortedError', data: { message: 'aborted' } },
+      }),
+    ]);
+    expect(records.filter((info) => info.role === 'assistant' && info.error)).toEqual([]);
+    await live.shutdown();
+  });
+
+  it('replaces a canceled /compact with its canonical local_command entry and keeps manual reason after a folded prompt or CLI turn', async () => {
+    const events = [];
+    const canceledEntryUuid = 'c0c4b038-0437-4659-8d7b-f38107731d70';
+    let step = 0;
+    const sdk = {
+      query: ({ prompt }) => {
+        const input = prompt[Symbol.asyncIterator]();
+        async function* run() {
+          // Turn 1: P1 runs, P2 is folded into P1, and /compact is queued behind it.
+          await input.next();
+          await input.next();
+          await input.next();
+          step = 1;
+          yield { type: 'assistant', uuid: 'p1-reply', timestamp: '2026-11-25T16:40:00.000Z', parent_tool_use_id: null, message: { id: 'msg_p1', model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Handled P1 and P2.' }] } };
+          yield { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 1 };
+
+          // CLI-initiated background notification turn before queued /compact runs.
+          step = 2;
+          yield { type: 'assistant', uuid: 'bg-reply', timestamp: '2026-11-25T16:40:05.000Z', parent_tool_use_id: null, message: { id: 'msg_bg', model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Background update.' }] } };
+          yield { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 1 };
+
+          // Queued /compact starts, then is canceled by interrupt (real Claude Code 2.1.330 frames).
+          step = 3;
+          yield { type: 'system', subtype: 'status', status: 'compacting', uuid: 'status-cancel' };
+          yield { type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'API Error: Request was aborted.', uuid: 'status-cancel-end' };
+          yield {
+            type: 'assistant',
+            uuid: canceledEntryUuid,
+            timestamp: '2026-11-25T16:41:10.833Z',
+            parent_tool_use_id: null,
+            local_command_source: '<local-command-stdout>Compaction canceled.</local-command-stdout>',
+            message: { id: 'synthetic-cancel', model: '<synthetic>', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Compaction canceled.' }] },
+          };
+          yield { type: 'result', subtype: 'success', is_error: false, local_command: 'compact', result: '', queued_turn_count: 0 };
+          await input.next();
+        }
+        return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
+      },
+    };
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => sdk,
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      buildEnv: () => ({}),
+      hasTranscript: async () => true,
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      questions: createQuestionRegistry({ publish: () => {} }),
+    });
+
+    await sendPrompt(live, { content: { kind: 'text', text: 'P1' }, sdkContent: [{ type: 'text', text: 'P1' }] });
+    await sendPrompt(live, { content: { kind: 'text', text: 'P2' }, sdkContent: [{ type: 'text', text: 'P2' }] });
+    await sendPrompt(live, { content: null, sdkContent: [{ type: 'text', text: '/compact' }] });
+    await waitFor(() => payloads(events, 'session.idle').length === 1);
+
+    expect(step).toBe(3);
+    const updates = payloads(events, 'message.updated').map((payload) => payload.properties.info);
+    expect(updates.find((info) => info.id === 'ncl_k_status-cancel')).toMatchObject({ role: 'compaction', status: 'running', reason: 'manual' });
+    expect(payloads(events, 'message.removed').map((payload) => payload.properties.messageID)).toEqual(['ncl_k_status-cancel']);
+    const compactions = live.liveRecords(SESSION_ID).filter((record) => record.info.role === 'compaction').map((record) => record.info);
+    expect(compactions).toEqual([
+      expect.objectContaining({
+        id: `ncl_k_${canceledEntryUuid}`,
+        status: 'failed',
+        reason: 'manual',
+        error: { name: 'UnknownError', data: { message: 'Compaction canceled.' } },
+      }),
+    ]);
+    expect(live.liveRecords(SESSION_ID).filter((record) => record.info.role === 'assistant').map((record) => record.parts[0]?.text)).toEqual([
+      'Handled P1 and P2.',
+      'Background update.',
+    ]);
     await live.shutdown();
   });
 });

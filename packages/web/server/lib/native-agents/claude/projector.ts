@@ -14,8 +14,6 @@ import {
 } from '../ids.js';
 import {
   buildAssistantMessage,
-  buildCompactionMessage,
-  buildCompactionPart,
   buildFilePart,
   buildReasoningPart,
   buildTextPart,
@@ -36,6 +34,10 @@ import type {
   NativeToolPart,
   NativeUserMessage,
 } from '../records.js';
+import {
+  COMPACT_COMMAND,
+  createClaudeCompactionTracker,
+} from './compaction.js';
 import { mapClaudeToolResult, mapClaudeToolUse } from './tools.js';
 import type { SlimClaudeToolResult } from './tools.js';
 import { promptTextAttachmentFile, readPromptTextBlock } from '../prompt-parts.js';
@@ -61,6 +63,15 @@ const entrySchema = z.object({
   toolUseResult: opaqueJson.optional(),
   origin: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
   subtype: z.string().optional(),
+  status: z.string().nullish(),
+  compact_result: z.string().optional(),
+  compact_error: z.string().optional(),
+  content: z.string().optional(),
+  commandRun: z.object({ command: z.string() }).passthrough().optional().catch(undefined),
+  commandOutcome: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
+  local_command_run: z.object({ command: z.string() }).passthrough().optional().catch(undefined),
+  local_command_outcome: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
+  local_command_source: z.string().optional(),
   compactMetadata: z.object({ trigger: z.string() }).passthrough().optional().catch(undefined),
   compact_metadata: z.object({ trigger: z.string() }).passthrough().optional().catch(undefined),
 }).passthrough();
@@ -195,12 +206,6 @@ type AssistantState = {
   usage: UsageAccumulator;
 };
 
-type PendingCompactionBoundary = {
-  uuid: string;
-  timestamp: string | undefined;
-  trigger: string | null;
-};
-
 export type ClaudeSendRecord = {
   modelID: string;
   variant?: string | undefined;
@@ -246,8 +251,9 @@ export interface ClaudeProjection {
   applyToolResults: (rawEntry: ClaudeRawEntry) => void;
   applyStreamEvent: (rawFrame: ClaudeRawEntry) => ClaudeStreamOutcome;
   applyResult: (rawMetadata: ClaudeResultMetadata) => string[];
+  queueTurn: (blocks: ReadonlyArray<ClaudePromptBlock>) => void;
   startUserPrompt: (messageId: string, content: ClaudePromptContent) => string[];
-  finishTurn: (outcome: { error: NativeErrorInfo | null; planKept?: boolean | undefined }) => string[];
+  finishTurn: (outcome: { error: NativeErrorInfo | null; planKept?: boolean | undefined; queuedTurns?: number | undefined; localCommand?: string | undefined }) => string[];
   record: (messageId: string) => NativeMessageRecord | null;
   openAssistantId: () => string | null;
   records: () => NativeMessageRecord[];
@@ -259,7 +265,6 @@ const isNoResponseNotice = (message: ParsedAssistantMessage): boolean => message
 
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
-const COMPACT_COMMAND = '/compact';
 const LOCAL_COMMAND_OUTPUT = /^\s*<local-command-std(?:out|err)>/;
 
 const typedCommandOf = (text: string): string | null => {
@@ -363,7 +368,6 @@ export const createClaudeProjection = ({
   let currentAssistant: AssistantState | null = null;
   let lastCreated = 0;
   let lastEntryTime = live ? now() : 0;
-  let pendingBoundary: PendingCompactionBoundary | null = null;
 
   const monotonicTime = (timestamp?: string): number => {
     const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
@@ -390,6 +394,13 @@ export const createClaudeProjection = ({
     return record;
   };
 
+  const removeRecord = (id: string): boolean => {
+    if (!recordById.delete(id)) return false;
+    const index = records.findIndex((existing) => existing.info.id === id);
+    if (index !== -1) records.splice(index, 1);
+    return true;
+  };
+
   const addAssistantRecord = (info: NativeAssistantMessage): AssistantRecord => {
     const record = addRecord(info);
     assistantRecordById.set(info.id, record);
@@ -402,6 +413,27 @@ export const createClaudeProjection = ({
     else record.parts[index] = part;
     return part;
   };
+
+  const compaction = createClaudeCompactionTracker({
+    sessionId,
+    cwd,
+    defaultAgent: DEFAULT_AGENT,
+    live,
+    hasRecord: (id) => recordById.has(id),
+    addRecord,
+    addAssistantRecord,
+    removeRecord,
+    upsertPart: (record, part) => { upsertPart(record, part); },
+    createdAfterPrevious,
+    monotonicTime,
+    liveTime,
+    openCompletedAnchor: (info) => {
+      const record = addRecord({ ...info, time: { created: createdAfterPrevious(info.time.created) } });
+      currentUser = record;
+      currentAssistant = null;
+      return record;
+    },
+  });
 
   const startUserMessage = (messageId: string, time: number): UserOrCompactionRecord => {
     const sent = sendRecordFor(messageId);
@@ -521,42 +553,18 @@ export const createClaudeProjection = ({
     return { record, part: upsertPart(record, finished) };
   };
 
-  const applyUserEntry = (entry: ParsedEntry, changed: string[]): void => {
+  const applyUserEntry = (entry: ParsedEntry, changed: string[], syntheticSummary = false): void => {
     const time = monotonicTime(entry.timestamp);
     const message = userMessageSchema.safeParse(entry.message);
     if (!message.success) return;
     const content = message.data.content;
 
-    if (entry.isCompactSummary === true) {
-      const boundary = currentUser;
-      if (!boundary) return;
-      const created = createdAfterPrevious(time);
-      const summary = addAssistantRecord(buildAssistantMessage({
-        id: `${boundary.info.id}_summary`,
-        sessionID: sessionId,
-        parentID: boundary.info.id,
-        created,
-        completed: created,
-        providerID: NATIVE_PROVIDER_CLAUDE,
-        modelID: '',
-        agent: DEFAULT_AGENT,
-        cwd,
-        tokens: EMPTY_TOKENS,
-        finish: 'stop',
-        summary: true,
-      }));
+    if (entry.isCompactSummary === true || syntheticSummary) {
+      if (!currentUser) return;
       const text = content.kind === 'text'
         ? content.text
         : content.blocks.map((block) => textBlock.safeParse(block).data?.text ?? '').join('\n');
-      upsertPart(summary, buildTextPart({
-        id: blockPartId(summary.info.id, 0),
-        sessionID: sessionId,
-        messageID: summary.info.id,
-        text,
-        start: time,
-        end: time,
-      }));
-      changed.push(summary.info.id);
+      compaction.recordSummary(currentUser.info.id, text, time, changed);
       return;
     }
 
@@ -636,9 +644,15 @@ export const createClaudeProjection = ({
 
   const applyAssistantEntry = (entry: ParsedEntry, changed: string[]): void => {
     const parsed = assistantMessageSchema.safeParse(entry.message);
+    const fallbackText = parsed.success
+      ? parsed.data.content.map((block) => textBlock.safeParse(block).data?.text ?? '').join('\n').trim()
+      : '';
+    if (compaction.tryFailedAssistantCommand(entry, fallbackText, changed)) return;
     if (!parsed.success) return;
     const message = parsed.data;
     if (isNoResponseNotice(message)) return;
+    compaction.clearFailedLive();
+    compaction.noteTurnActivity();
     const time = monotonicTime(entry.timestamp);
     const assistant = ensureAssistant(message, time);
     if (message.stop_reason) assistant.finish = FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other';
@@ -726,6 +740,7 @@ export const createClaudeProjection = ({
   const applyStreamEvent = (event: ParsedStreamEvent, time: number): ClaudeStreamOutcome => {
     const none: ClaudeStreamOutcome = { changed: [], delta: null };
     if (event.type === 'message_start') {
+      compaction.noteTurnActivity();
       const startMessage = messageStartEventSchema.safeParse(event).data?.message;
       const rawUsage = rawUsageOf(startMessage);
       const message = assistantMessageSchema.safeParse(startMessage);
@@ -782,35 +797,6 @@ export const createClaudeProjection = ({
       return { changed: [messageID], delta: null };
     }
     return none;
-  };
-
-  const openCompaction = ({ uuid, timestamp, trigger }: PendingCompactionBoundary, changed: string[]): void => {
-    const record = startUserMessage(`ncl_k_${uuid}`, monotonicTime(timestamp));
-    record.info = buildCompactionMessage({
-      id: record.info.id,
-      sessionID: sessionId,
-      created: record.info.time.created,
-      status: 'completed',
-      auto: trigger === 'auto',
-    });
-    upsertPart(record, buildCompactionPart({
-      id: userTextPartId(record.info.id, 0),
-      sessionID: sessionId,
-      messageID: record.info.id,
-      auto: trigger === 'auto',
-    }));
-    changed.push(record.info.id);
-  };
-
-  const applySystemEntry = (entry: ParsedEntry, changed: string[]): void => {
-    if (entry.message !== undefined && entry.message !== null) return;
-    if (entry.subtype === undefined) {
-      pendingBoundary = { uuid: entry.uuid, timestamp: entry.timestamp, trigger: null };
-      return;
-    }
-    if (entry.subtype !== 'compact_boundary') return;
-    const trigger = (entry.compactMetadata ?? entry.compact_metadata)?.trigger ?? null;
-    openCompaction({ uuid: entry.uuid, timestamp: entry.timestamp, trigger }, changed);
   };
 
   const settleTools = (reason: string): string[] => {
@@ -885,12 +871,15 @@ export const createClaudeProjection = ({
       if (!parsed.success) return [];
       const entry = parsed.data;
       const changed: string[] = [];
-      const boundary = pendingBoundary;
-      pendingBoundary = null;
-      if (boundary && entry.type === 'user' && entry.isCompactSummary === true) openCompaction(boundary, changed);
-      if (entry.type === 'user') applyUserEntry(entry, changed);
+      const boundary = compaction.takePendingBoundary();
+      const syntheticSummary = entry.type !== 'system'
+        && compaction.consumeSyntheticSummary(entry.type === 'user' && entry.isSynthetic === true);
+      if (boundary && entry.type === 'user' && (entry.isCompactSummary === true || syntheticSummary)) {
+        compaction.openCompleted(boundary, changed);
+      }
+      if (entry.type === 'user') applyUserEntry(entry, changed, syntheticSummary);
       else if (entry.type === 'assistant') applyAssistantEntry(entry, changed);
-      else applySystemEntry(entry, changed);
+      else compaction.applySystemEntry(entry, changed);
       return changed;
     },
 
@@ -921,6 +910,10 @@ export const createClaudeProjection = ({
       return applyResultMetadata(rawMetadata);
     },
 
+    queueTurn(blocks) {
+      compaction.queueTurn(blocks);
+    },
+
     startUserPrompt(messageId, content) {
       const time = liveTime();
       const streaming = currentAssistant;
@@ -930,17 +923,18 @@ export const createClaudeProjection = ({
       return [record.info.id];
     },
 
-    finishTurn({ error, planKept = false }) {
+    finishTurn({ error, planKept = false, queuedTurns = 0, localCommand }) {
       const time = liveTime();
       const changed = error === null ? [] : settleTools(error.name === 'MessageAbortedError' ? 'Interrupted' : error.data.message);
       const messageError = planKept && error?.name === 'MessageAbortedError' ? null : error;
+      const settledCompaction = compaction.finishTurn(messageError, queuedTurns, localCommand, changed);
       if (currentAssistant) {
         const info = currentAssistant.record.info;
         if (info.finish === undefined && currentAssistant.finish !== null) info.finish = currentAssistant.finish;
         if (info.time.completed === undefined) info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
         if (messageError !== null && info.error === undefined) info.error = messageError;
         changed.push(info.id);
-      } else if (messageError !== null && currentUser) {
+      } else if (messageError !== null && currentUser && !settledCompaction) {
         let record = recordById.get(`${currentUser.info.id}_error`);
         if (!record) {
           const created = createdAfterPrevious(time);

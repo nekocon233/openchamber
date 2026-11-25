@@ -490,7 +490,9 @@ kept open between turns.
   the turn, and any other count updates only the final assistant. The frame's
   aggregate usage never describes one message. Its `modelUsage` also stamps the
   effective `contextWindow` when the model is unambiguous. Only `assistant` and
-  `user` frames and the `compact_boundary` system frame reach `applyEntry`. A Task call announces the subagent session with
+  `user` frames, the `compact_boundary` system frame, and compaction lifecycle
+  `status` system frames reach `applyEntry` (with `claude/compaction.ts` owning
+  the compaction tracker and transcript recovery). A Task call announces the subagent session with
   `session.created`. `claude/subagents.js` routes child frames by
   `parent_tool_use_id` to an independent projection and publishes that child's
   messages, reasoning, tools and deltas through the same event hub. Full-frame
@@ -926,15 +928,36 @@ separate capped launch for this command, so a manual compaction requested
 while a turn or background task is running fails with
 `NATIVE_CONNECTION_BUSY` instead of replacing that process.
 
-- Claude's live `compact_boundary` frame opens the marker, the synthetic user
-  frame after it is the summary, and replayed local-command output is
-  skipped, so live records match a later history read.
+- Claude's live `status: 'compacting'` frame opens a provisional `running`
+  compaction notice (`ncl_k_<status uuid>`). When `compact_boundary` arrives,
+  the provisional notice is removed via `message.removed` and replaced with the
+  canonical `completed` marker (`ncl_k_<boundary uuid>`), followed by the
+  synthetic summary user frame; replayed local-command output is skipped, so
+  live records match a later history read. When manual `/compact` fails or is
+  canceled, a live `status` frame with `compact_result: 'failed'` marks the
+  provisional notice `failed` with its `compact_error`, and the subsequent
+  failed or canceled `/compact` `local_command` assistant frame replaces it with
+  the canonical `failed` compaction notice (`ncl_k_<entry uuid>`) instead of
+  projecting a synthetic assistant reply. A turn that ends or aborts while
+  compaction is still running settles that compaction notice to `failed`.
+  Live-only compaction failures that Claude Code does not persist to its
+  transcript (such as a failed auto-compaction `status` frame or a process crash
+  before a `local_command` entry is written) remain visible while the live
+  session stays open and are absent from a cold transcript reload.
 - History shows other slash commands as typed (`/cost`, a skill) under the
-  prompt's own id; `/compact` shows only as its marker, and local-command
-  output is left out. Only a command entry marked `isCompletedLocalCommand`
-  came from a prompt. The CLI writes the same tags unmarked for commands it
-  runs itself, such as the `/model` a model switch between turns records, and
-  those stay out of the conversation.
+  prompt's own id; `/compact` shows only as its marker, and ordinary
+  local-command output is left out. Because `getSessionMessages` strips fields
+  from `system` entries and omits a trailing `system` leaf, `claude/store.ts`
+  and `claude/compaction.ts` restore failed and canceled `/compact` `system`
+  entries (`subtype: 'local_command'`, either `commandRun.command === 'compact'`
+  with `commandOutcome.kind === 'failed'` or a child of `<command-name>/compact</command-name>`
+  carrying `<local-command-stderr>` or `<local-command-stdout>Compaction canceled.</local-command-stdout>`)
+  from the raw transcript for both pre-compaction segments and the current tail
+  so reloaded history matches the live `ncl_k_<entry uuid>` failure notice. Only a
+  command entry marked `isCompletedLocalCommand` came from a prompt. The CLI
+  writes the same tags unmarked for commands it runs itself, such as the
+  `/model` a model switch between turns records, and those stay out of the
+  conversation.
 - A Codex `contextCompaction` item becomes the marker `ncx_k_<TK>_<item id>`.
   A /compact runs as a turn of its own, so a compaction that follows the
   turn's prompt is marked `auto`.

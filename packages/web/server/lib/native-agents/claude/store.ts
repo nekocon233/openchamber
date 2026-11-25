@@ -16,6 +16,15 @@ import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
 import type { NativeMessageRecord, NativeSessionRecord } from '../records.js';
 import type { NativeRegistry, RegistrySessionEntry } from '../registry.js';
 import type { ClaudeConnections } from './connections.js';
+import {
+  addFailedCompactions,
+  compactionBoundaryUuid,
+  emptyFailedCompactions,
+  isCompactCommandEntry,
+  readEarlierCompactionEntries,
+  withFailedCompactions,
+} from './compaction.js';
+import type { FailedCompactionIndex } from './compaction.js';
 import { createClaudeProjection } from './projector.js';
 import type { ClaudeRawEntry, ClaudeSendRecord } from './projector.js';
 import type { ClaudeSdkModule } from './sdk.js';
@@ -77,14 +86,6 @@ const rawToolResultEntrySchema = z.object({
   toolUseResult: opaqueJson.optional(),
 });
 
-const rawChainEntrySchema = z.object({
-  uuid: z.string(),
-  type: z.string(),
-  subtype: z.string().optional(),
-}).passthrough();
-
-const compactSummarySchema = z.object({ isCompactSummary: z.literal(true) }).passthrough();
-
 type StatisticsContent =
   | { kind: 'text'; text: string }
   | { kind: 'blocks'; blocks: JsonValue[] };
@@ -141,7 +142,6 @@ const toolMessageSchema = z.object({
 
 type ParsedSessionInfo = z.infer<typeof sessionInfoSchema>;
 type ParsedChainEntry = z.infer<typeof chainEntrySchema>;
-type ParsedRawChainEntry = z.infer<typeof rawChainEntrySchema>;
 
 type EarlierProjection = {
   boundaryUuid: string;
@@ -269,15 +269,9 @@ const statisticsEntry = (raw: SessionMessage): SlimStatisticsEntry | null => {
   return base;
 };
 
-const entryUuidOf = (entry: SessionMessage | undefined): string | null => {
+const entryUuidOf = (entry: ClaudeRawEntry | undefined): string | null => {
   const parsed = chainEntrySchema.safeParse(entry);
   return parsed.success ? parsed.data.uuid : null;
-};
-
-const compactionBoundaryUuid = (entries: ReadonlyArray<SessionMessage>): string | null => {
-  const first = chainEntrySchema.safeParse(entries[0]);
-  if (!first.success || first.data.type !== 'system') return null;
-  return compactSummarySchema.safeParse(entries[1]).success ? first.data.uuid : null;
 };
 
 const usesToolIn = (tools: ReadonlySet<string>) => (entry: SessionMessage): boolean => {
@@ -439,27 +433,31 @@ export const createClaudeSessionStore = ({
     return results;
   };
 
-  const structuredToolResults = async (
+  const transcriptSupplement = async (
     sdk: ClaudeSdkModule,
     entries: ReadonlyArray<SessionMessage>,
     sessionUuid: string,
     directory: string,
     includeSubagents: boolean,
-  ): Promise<{ results: Map<string, SlimClaudeToolResult>; complete: boolean }> => {
+  ): Promise<{ results: Map<string, SlimClaudeToolResult>; failedCompactions: FailedCompactionIndex; complete: boolean }> => {
     const results = new Map<string, SlimClaudeToolResult>();
-    if (!entries.some(usesStructuredResultTool)) return { results, complete: true };
+    const failedCompactions = emptyFailedCompactions();
+    const needsToolResults = entries.some(usesStructuredResultTool);
+    const needsCompactOutcomes = entries.some(isCompactCommandEntry);
+    if (!needsToolResults && !needsCompactOutcomes) return { results, failedCompactions, complete: true };
     try {
       await sdk.importSessionToStore(sessionUuid, {
         append: async (_key, rawEntries) => {
-          addStructuredResults(results, rawEntries);
+          if (needsToolResults) addStructuredResults(results, rawEntries);
+          if (needsCompactOutcomes) addFailedCompactions(failedCompactions, rawEntries);
         },
         load: async () => null,
       }, { dir: directory, includeSubagents });
     } catch (error) {
-      console.warn('[native-agents] Claude supplemental tool results unavailable for session', sessionUuid, error);
-      return { results, complete: false };
+      console.warn('[native-agents] Claude supplemental transcript data unavailable for session', sessionUuid, error);
+      return { results, failedCompactions, complete: false };
     }
-    return { results, complete: true };
+    return { results, failedCompactions, complete: true };
   };
 
   const readRawTranscript = async (sdk: ClaudeSdkModule, sessionUuid: string, directory: string): Promise<SessionStoreEntry[] | null> => {
@@ -610,47 +608,6 @@ export const createClaudeSessionStore = ({
     return childSessions.map((child) => ({ ...child, time: { ...child.time, archived: archivedAt } }));
   };
 
-  const earlierEntries = async (
-    sdk: ClaudeSdkModule,
-    sessionUuid: string,
-    directory: string,
-    raw: ReadonlyArray<SessionStoreEntry>,
-    boundaryUuid: string,
-  ): Promise<SessionMessage[]> => {
-    const boundaries = new Map<string, ParsedRawChainEntry>();
-    const positions = new Map<string, number>();
-    raw.forEach((value, index) => {
-      const entry = rawChainEntrySchema.safeParse(value);
-      if (!entry.success) return;
-      positions.set(entry.data.uuid, index);
-      if (entry.data.type === 'system' && entry.data.subtype === 'compact_boundary') boundaries.set(entry.data.uuid, entry.data);
-    });
-    const segments: SessionMessage[][] = [];
-    const visited = new Set<string>();
-    let boundary = boundaries.get(boundaryUuid);
-    while (boundary && !visited.has(boundary.uuid)) {
-      visited.add(boundary.uuid);
-      const cut = raw.slice(0, positions.get(boundary.uuid));
-      const segment = await sdk.getSessionMessages(sessionUuid, {
-        dir: directory,
-        includeSystemMessages: true,
-        sessionStore: { append: async () => {}, load: async () => cut },
-      });
-      segments.unshift(segment);
-      const firstUuid = entryUuidOf(segment[0]);
-      boundary = firstUuid !== null ? boundaries.get(firstUuid) : undefined;
-    }
-    const seen = new Set<string>();
-    const entries: SessionMessage[] = [];
-    for (const entry of segments.flat()) {
-      const uuid = entryUuidOf(entry);
-      if (uuid === null || seen.has(uuid)) continue;
-      seen.add(uuid);
-      entries.push(entry);
-    }
-    return entries;
-  };
-
   const projectEarlier = async ({
     sdk,
     sessionId,
@@ -659,6 +616,7 @@ export const createClaudeSessionStore = ({
     raw,
     boundaryUuid,
     editResults,
+    failedCompactions,
     sendRecords,
     subagents,
     contextWindowFor,
@@ -670,12 +628,16 @@ export const createClaudeSessionStore = ({
     raw: ReadonlyArray<SessionStoreEntry>;
     boundaryUuid: string;
     editResults: ReadonlyMap<string, SlimClaudeToolResult>;
+    failedCompactions: FailedCompactionIndex;
     sendRecords: ReadonlyMap<string, ClaudeSendRecord>;
     subagents: ReadonlyMap<string, string>;
     contextWindowFor: (modelID: string | null) => number;
   }): Promise<EarlierProjection | null> => {
     try {
-      const entries = await earlierEntries(sdk, sessionUuid, directory, raw, boundaryUuid);
+      const entries = withFailedCompactions(
+        withStructuredResults(await readEarlierCompactionEntries(sdk, sessionUuid, directory, raw, boundaryUuid), editResults),
+        failedCompactions,
+      );
       const uuids = new Set<string>();
       for (const entry of entries) {
         const uuid = entryUuidOf(entry);
@@ -683,7 +645,7 @@ export const createClaudeSessionStore = ({
       }
       return {
         boundaryUuid,
-        records: project({ sessionId, directory, entries: withStructuredResults(entries, editResults), sendRecords, subagents, contextWindowFor }),
+        records: project({ sessionId, directory, entries, sendRecords, subagents, contextWindowFor }),
         uuids,
       };
     } catch (error) {
@@ -719,20 +681,33 @@ export const createClaudeSessionStore = ({
       const boundaryUuid = compactionBoundaryUuid(entries);
       const reusable = boundaryUuid !== null && cached?.value.earlier?.boundaryUuid === boundaryUuid ? cached.value.earlier : null;
       const raw = boundaryUuid !== null && reusable === null ? await readRawTranscript(sdk, decoded.sessionUuid, directory) : null;
-      const supplement = raw === null
-        ? await structuredToolResults(sdk, entries, decoded.sessionUuid, directory, false)
-        : { results: addStructuredResults(new Map(), raw), complete: true };
-      const editResults = supplement.results;
-      const earlier = reusable ?? (raw === null || boundaryUuid === null ? null : await projectEarlier({
-        sdk, sessionId, sessionUuid: decoded.sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents, contextWindowFor,
+      const rawSupplement = raw === null ? null : {
+        results: addStructuredResults(new Map(), raw),
+        failedCompactions: addFailedCompactions(emptyFailedCompactions(), raw),
+        complete: true,
+      };
+      const earlier = reusable ?? (raw === null || rawSupplement === null || boundaryUuid === null ? null : await projectEarlier({
+        sdk,
+        sessionId,
+        sessionUuid: decoded.sessionUuid,
+        directory,
+        raw,
+        boundaryUuid,
+        editResults: rawSupplement.results,
+        failedCompactions: rawSupplement.failedCompactions,
+        sendRecords,
+        subagents,
+        contextWindowFor,
       }));
-      const current = earlier === null ? entries : entries.filter((entry) => {
+      const currentEntries = earlier === null ? entries : entries.filter((entry) => {
         const uuid = entryUuidOf(entry);
         return uuid === null || !earlier.uuids.has(uuid);
       });
+      const supplement = rawSupplement ?? await transcriptSupplement(sdk, currentEntries, decoded.sessionUuid, directory, false);
+      const current = withFailedCompactions(withStructuredResults(currentEntries, supplement.results), supplement.failedCompactions);
       const records = [
         ...(earlier?.records ?? []),
-        ...project({ sessionId, directory, entries: withStructuredResults(current, editResults), sendRecords, subagents, contextWindowFor }),
+        ...project({ sessionId, directory, entries: current, sendRecords, subagents, contextWindowFor }),
       ];
       const value: CachedHistoryValue = {
         records,
@@ -783,7 +758,7 @@ export const createClaudeSessionStore = ({
         const raw = await readRawTranscript(sdk, decoded.sessionUuid, directory);
         if (raw === null) complete = false;
         else {
-          const earlier = await earlierEntries(sdk, decoded.sessionUuid, directory, raw, boundary);
+          const earlier = await readEarlierCompactionEntries(sdk, decoded.sessionUuid, directory, raw, boundary);
           const seen = new Set<string>();
           for (const entry of earlier) {
             const uuid = entryUuidOf(entry);

@@ -575,6 +575,48 @@ describe('Claude compaction projection', () => {
     expect(auto[0].parts).toEqual([expect.objectContaining({ type: 'compaction', auto: true })]);
     expect(other).toEqual([]);
   });
+
+  it('projects failed /compact local_command records identically from history and live assistant frames', () => {
+    const fromHistory = projectHistory([
+      {
+        type: 'system',
+        subtype: 'local_command',
+        uuid: 'c519f4c0-fdb1-4739-b8f6-dd38c65e9764',
+        timestamp: at(45),
+        content: '<local-command-stderr>Error during compaction: summarization produced empty response</local-command-stderr>',
+        commandRun: { command: 'compact', args: '' },
+        commandOutcome: { kind: 'failed' },
+      },
+    ]);
+    const fromLive = projectHistory([
+      {
+        type: 'assistant',
+        uuid: 'c519f4c0-fdb1-4739-b8f6-dd38c65e9764',
+        timestamp: at(45),
+        local_command_source: '<local-command-stderr>Error during compaction: summarization produced empty response</local-command-stderr>',
+        local_command_run: { command: 'compact', args: '' },
+        local_command_outcome: { kind: 'failed' },
+        message: {
+          id: 'synthetic-1',
+          model: '<synthetic>',
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'Error during compaction: summarization produced empty response' }],
+        },
+      },
+    ]);
+    expect(fromLive).toEqual(fromHistory);
+    expect(fromHistory).toHaveLength(1);
+    expect(fromHistory[0].info).toMatchObject({
+      id: 'ncl_k_c519f4c0-fdb1-4739-b8f6-dd38c65e9764',
+      role: 'compaction',
+      status: 'failed',
+      reason: 'manual',
+      summary: '',
+      error: { name: 'UnknownError', data: { message: 'Error during compaction: summarization produced empty response' } },
+    });
+    expect(fromHistory[0].parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
+  });
 });
 
 describe('Claude tools the renderers do not know', () => {

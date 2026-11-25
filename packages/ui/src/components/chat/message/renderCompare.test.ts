@@ -84,6 +84,13 @@ describe('running compaction', () => {
     expect(areRenderRelevantMessagesEqual({ info: running, parts: [] }, { info: grown, parts: [] })).toBe(false);
   });
 
+  test('re-renders when compaction error details arrive or change', () => {
+    const failed = { ...running, status: 'failed' as const, error: { type: 'UnknownError', message: 'Empty summary' } };
+    const updated = { ...failed, error: { type: 'UnknownError', message: 'Context too long' } };
+    expect(areRenderRelevantMessagesEqual({ info: failed, parts: [] }, { info: updated, parts: [] })).toBe(false);
+    expect(areRenderRelevantMessagesEqual({ info: failed, parts: [] }, { info: { ...failed, error: { ...failed.error } }, parts: [] })).toBe(true);
+  });
+
   test('preserves an equivalent rebuilt record', () => {
     expect(areRenderRelevantMessagesEqual({ info: running, parts: [] }, { info: { ...running }, parts: [] })).toBe(true);
   });

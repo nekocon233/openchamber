@@ -124,6 +124,8 @@ const areRenderRelevantMessageInfoEqual = (left: Message, right: Message): boole
     && (left.role !== 'compaction' || right.role !== 'compaction' || left.summary === right.summary)
     && (left.role !== 'compaction' || right.role !== 'compaction'
       || (left.model?.providerID === right.model?.providerID && left.model?.id === right.model?.id))
+    && (left.role !== 'compaction' || right.role !== 'compaction'
+      || (left.error?.type === right.error?.type && left.error?.message === right.error?.message))
     && (left as { mode?: unknown }).mode === (right as { mode?: unknown }).mode
     && (left as { agent?: unknown }).agent === (right as { agent?: unknown }).agent
     && (left as { providerID?: unknown }).providerID === (right as { providerID?: unknown }).providerID
