@@ -98,7 +98,7 @@ function PullRequestMergeActionsView({
     const activeMerge = live?.state === 'open' ? live : null;
     const queued = activeMerge?.isInMergeQueue === true;
     const autoMerge = activeMerge?.autoMergeRequest;
-    const squashScheduled = !queued && autoMerge?.mergeMethod === 'SQUASH';
+    const cancelAutoMerge = !queued && context.provider === 'github' ? autoMerge ?? undefined : undefined;
     const waitingLabel = queued
         ? activeMerge.mergeQueueEntry?.position != null
             ? t('sourceBoard.merge.queuePosition', { position: activeMerge.mergeQueueEntry.position })
@@ -134,6 +134,7 @@ function PullRequestMergeActionsView({
     const merge = async (method: MergeMethod, origin: HTMLElement) => {
         if (!openPull || openPull.draft || !mergeMethods.includes(method) || submitBlocked || mergePending.current || !isCurrent()) return;
         const submits = method === 'submit';
+        const cancel = method === 'squash' ? cancelAutoMerge : undefined;
         const action = beginPullRequestAction(context, pullRef);
         if (!action) return;
         mergePending.current = true;
@@ -164,8 +165,8 @@ function PullRequestMergeActionsView({
                 title: submits && submitsBelow
                     ? t(landsBelow.length === 1 ? 'sourceBoard.submit.confirmTitleWithChain.one' : 'sourceBoard.submit.confirmTitleWithChain.other', { reference, count: landsBelow.length })
                     : t(`sourceBoard.merge.confirmTitle.${descriptor.terminology.changeRequest}`, { reference }),
-                message: stackNote ? `${stackNote}\n\n${methodNote}` : methodNote,
-                action: t(toolbar ? MERGE_METHOD_LABELS.squash : submits ? MERGE_METHOD_LABELS.submit : 'sourceBoard.actions.merge'),
+                message: [stackNote, cancel ? t('sourceBoard.merge.cancelBeforeSquash') : null, methodNote].filter(Boolean).join('\n\n'),
+                action: t(toolbar || cancel ? MERGE_METHOD_LABELS.squash : submits ? MERGE_METHOD_LABELS.submit : 'sourceBoard.actions.merge'),
             });
             if (!approved || !isCurrent()) return;
             setBusy(true);
@@ -174,6 +175,7 @@ function PullRequestMergeActionsView({
                 idempotencyKey: newMutationKey(),
                 target,
                 method,
+                cancel,
             });
             dispatched = true;
             onMergeSubmitted?.();
@@ -195,6 +197,10 @@ function PullRequestMergeActionsView({
                 toast.message(t('sourceBoard.toast.mergeQueued', { reference: resultReference }));
             } else if (outcome === 'auto-merge') {
                 toast.message(t('sourceBoard.toast.autoMerge', { reference: resultReference }));
+            } else if (outcome === 'cancelled') {
+                toast.error(t('sourceBoard.toast.mergeFailed', { reference: resultReference }), {
+                    description: t('sourceBoard.toast.mergeCancelled', { reference: resultReference }),
+                });
             } else if (outcome === 'merging') {
                 toast.message(t('sourceBoard.toast.mergeRunning', { reference: resultReference }), { description: t('sourceBoard.toast.mergeRunningDescription') });
             } else {
@@ -234,10 +240,10 @@ function PullRequestMergeActionsView({
     const squashLabel = t(MERGE_METHOD_LABELS.squash);
     const squashAvailable = openPull && !openPull.draft && (!toolbar || !live?.draft) && !queued && mergeMethods.includes('squash');
     const squashButton = squashAvailable ? (
-        <ButtonTooltip label={squashScheduled ? waitingLabel : t(MERGE_METHOD_KEYS.squash, { base: pull.base })}>
+        <ButtonTooltip label={t(MERGE_METHOD_KEYS.squash, { base: pull.base })}>
             <Button size={toolbar && isMobile ? 'lg' : 'sm'} variant="outline"
                 className={toolbar && !isMobile ? 'diff-toolbar__merge-button' : undefined} aria-label={squashLabel}
-                disabled={pending || squashScheduled} onClick={(event) => void merge('squash', event.currentTarget)}>
+                disabled={pending} onClick={(event) => void merge('squash', event.currentTarget)}>
                 {mergeIcon}
                 <span className={toolbar && !isMobile ? 'diff-toolbar__merge-label' : undefined}>{squashLabel}</span>
             </Button>
@@ -250,8 +256,8 @@ function PullRequestMergeActionsView({
         <>
             {queued || autoMerge ? (
                 <>
-                    <span className="text-muted-foreground typography-small">{waitingLabel}{squashScheduled ? ` · ${squashLabel}` : null}</span>
-                    {autoMerge && !squashScheduled ? squashButton : null}
+                    <span className="text-muted-foreground typography-small">{waitingLabel}</span>
+                    {autoMerge ? squashButton : null}
                     <ButtonTooltip label={t('contextTooltips.tracker.cancelMerge')}>
                         <Button size="sm" variant="outline" disabled={pending} onClick={() => void cancelMerge()}>
                             <Icon name={busy ? 'loader-4' : 'close'} className={cn('size-3.5', busy && 'animate-spin')} />

@@ -1,7 +1,7 @@
 import { ForceMergePreflightError, forceMergePullRequest } from './force-merge.js';
 import { changeRequestNetworkTarget } from '../source-control/repository-network.js';
 import { reviewCommentPosition } from '../source-control/review-position.js';
-import { cancelWaitingMerge, enableMergeWhenReady, hasRequestedAutoMerge, readWaitingMerge } from './merge-when-ready.js';
+import { enableMergeWhenReady, hasRequestedAutoMerge, mergeWithWaitingState, readWaitingMerge } from './merge-when-ready.js';
 import {
   invalidProviderPayload,
   isPlainObject,
@@ -25,7 +25,7 @@ import type { MutationCompletion, MutationRecord, MutationResult } from '../sour
 import type { GitHubResourceOptions } from './resources.js';
 import type { GitHubEnvelope, Octokit, RestEndpointMethodTypes } from './contracts.js';
 import type { PullInput } from './mappers.js';
-import type { MutationTarget, MergeMethod, Credential } from './mutation-input.js';
+import type { MutationTarget, MergeMethod, Credential, AutoMergeRequest } from './mutation-input.js';
 import {
   isArray,
   DISCUSSION_CLOSE_REASONS,
@@ -61,7 +61,7 @@ interface GitHubMutationOptions {
 export interface GitHubMutationInput {
   action?: PendingReviewAction;
   title?: string | undefined; body?: string | undefined; draft?: boolean | undefined; remote?: string | undefined;
-  headRemote?: string | undefined; head?: string | undefined; base?: string | undefined; method?: MergeMethod; cancel?: boolean; force?: true;
+  headRemote?: string | undefined; head?: string | undefined; base?: string | undefined; method?: MergeMethod; cancel?: boolean; cancelAutoMerge?: AutoMergeRequest; force?: true;
   labels?: string[]; reviewers?: string[]; replyTo?: string | undefined; state?: ItemState; reason?: SourceControlJson | undefined;
   commentId?: number | string; answer?: boolean; threadId?: string; resolved?: boolean; verdict?: SourceControlJson | undefined;
   path?: string; side?: ReviewPosition['side']; line?: number; startLine?: number;
@@ -305,9 +305,9 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
     }
     return { merged: data.merged };
   };
-  const mergePullRequest = async (octokit: Octokit, project: Project, target: MergeTarget, method: MergeMethod): Promise<MutationResult> => {
+  const mergePullRequest = async (octokit: Octokit, project: Project, target: MergeTarget, method: MergeMethod, previous?: AutoMergeRequest): Promise<MutationResult> => {
     const whenReady = async () => {
-      try { return await enableMergeWhenReady(octokit, project, target, method); }
+      try { return await enableMergeWhenReady(octokit, project, target, method, previous); }
       catch (error) { throw graphqlRejection(error); }
     };
     const route = { owner: project.owner, repo: project.name, pull_number: target.number };
@@ -825,14 +825,14 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
     const current = await octokit.rest.pulls.get({ owner: project.owner, repo: project.name, pull_number: requireField(target.number, 'number') });
     const pr = requireMutationPullRequest(current?.data, 'GitHub returned an invalid pull request', octokit);
     if (operation === 'merge') {
-      if (input.force && !targetMatches(target, pr)) return unknownOutcome();
+      if ((input.force || input.cancelAutoMerge) && !targetMatches(target, pr)) return unknownOutcome();
       if (pr.merged === true || isProviderString(pr.merged_at)) return { state: 'succeeded', result: { merged: true } };
       if (input.force) return unknownOutcome();
       const { pull } = await readWaitingMerge(octokit, project, target);
       if (input.cancel) return !pull.isInMergeQueue && !pull.autoMergeRequest
         ? { state: 'succeeded', result: { merged: false, outcome: 'cancelled' } } : unknownOutcome();
       if (pull.isInMergeQueue) return { state: 'succeeded', result: { merged: false, outcome: 'queued' } };
-      if (hasRequestedAutoMerge(pull, target, input.method)) return { state: 'succeeded', result: { merged: false, outcome: 'auto-merge' } };
+      if (hasRequestedAutoMerge(pull, target, input.method, input.cancelAutoMerge)) return { state: 'succeeded', result: { merged: false, outcome: 'auto-merge' } };
     } else if (operation === 'state') {
       if (pr.state === input.state) return { state: 'succeeded', result: { state: pr.state } };
       if (pr.state === 'open' || pr.state === 'closed') return definiteFailure('SOURCE_CONTROL_MUTATION_NOT_APPLIED');
@@ -1007,11 +1007,10 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
         if (input.force) return forceMergePullRequest({
           octokit, nodeId: requireField(providerTarget.nodeId, 'pull request node id'), target, method: requireField(input.method, 'method'),
         });
-        if (input.cancel) {
-          try { return await cancelWaitingMerge(octokit, project, target); }
-          catch (error) { throw graphqlRejection(error); }
-        }
-        return mergePullRequest(octokit, project, target, requireField(input.method, 'method'));
+        return mergeWithWaitingState(octokit, project, target, input, {
+          merge: () => mergePullRequest(octokit, project, target, requireField(input.method, 'method'), input.cancelAutoMerge),
+          rethrowGraphql: (error) => { throw graphqlRejection(error); },
+        });
       case 'labels':
       case 'issue-labels':
         return setLabels(octokit, project, number(), labels());

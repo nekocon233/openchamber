@@ -696,6 +696,77 @@ describe('canonical GitHub mutations', () => {
     expect(queries).toHaveLength(count);
   });
 
+  it.each([
+    ['squash', 'merged', { merged: true }, ['disable', 'squash']],
+    ['merge', 'blocked', { merged: false, outcome: 'auto-merge' }, ['disable', 'squash', 'enable']],
+    ['squash', 'refused', { merged: false, outcome: 'cancelled' }, ['disable', 'squash', 'enable']],
+  ])('replaces a waiting %s auto-merge before squash and records %s', async (prior, finish, result, expectedWrites) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const selected = { enabledAt: '2026-11-25T08:25:39Z', mergeMethod: prior.toUpperCase() };
+    let autoMergeRequest = selected;
+    const writes = [];
+    const pull = { id: 'PR_7', state: 'OPEN', headRefOid: 'abc123', baseRefName: 'main', isDraft: false,
+      mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED', isInMergeQueue: false };
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
+      if (new URL(url).pathname === '/graphql') {
+        const { query, variables } = JSON.parse(options.body);
+        if (query.includes('disablePullRequestAutoMerge')) {
+          writes.push('disable');
+          expect(variables.id).toBe(pull.id);
+          autoMergeRequest = null;
+          return jsonResponse({ data: { disablePullRequestAutoMerge: { pullRequest: { ...pull, autoMergeRequest } } } });
+        }
+        if (query.includes('enablePullRequestAutoMerge')) {
+          writes.push('enable');
+          expect(variables).toMatchObject({ id: pull.id, mergeMethod: 'SQUASH', sha: 'abc123' });
+          if (finish === 'refused') return jsonResponse({ errors: [{ message: 'Auto merge is not allowed for this repository' }] });
+          autoMergeRequest = { enabledAt: '2026-11-25T08:26:22Z', mergeMethod: variables.mergeMethod };
+          return jsonResponse({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest } } } });
+        }
+        return jsonResponse({ data: { repository: { mergeQueue: null, squashMergeAllowed: true, viewerPermission: 'WRITE',
+          pullRequest: { ...pull, autoMergeRequest } } } });
+      }
+      if (options.method === 'PUT') {
+        expect(autoMergeRequest).toBeNull();
+        const input = JSON.parse(options.body);
+        expect(input).toEqual({ merge_method: 'squash', sha: 'abc123', bypass_rules: true });
+        writes.push(input.merge_method);
+        return jsonResponse({ status: finish === 'merged' ? 'merged' : 'failed', details: { message: 'Required reviews are missing' } });
+      }
+      return jsonResponse(pullRequest({ draft: false }));
+    }));
+    const { app } = makeApp();
+    const path = '/api/source-control/github/pr/merge';
+    const body = { ...mergeBody(account.accountId), method: 'squash', cancel: selected };
+    expect((await request(app).post(path).send(body).expect(200)).body.result).toEqual(result);
+    expect((await request(app).post(path).send(body).expect(200)).body.replayed).toBe(true);
+    await request(app).post(path).send({ ...body, cancel: false }).expect(409);
+    expect(writes).toEqual(expectedWrites);
+  });
+
+  it.each(['changed', 'queue', 'squash-disabled'])('preserves a waiting PR when replacement finds %s', async (condition) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const requested = { enabledAt: '2026-11-25T08:25:39Z', mergeMethod: 'SQUASH' };
+    const repository = {
+      mergeQueue: condition === 'queue' ? { id: 'QUEUE' } : null, squashMergeAllowed: condition !== 'squash-disabled', viewerPermission: 'WRITE',
+      pullRequest: { id: 'PR_7', state: 'OPEN', headRefOid: 'abc123', baseRefName: 'main', isDraft: false,
+        mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED', isInMergeQueue: false,
+        autoMergeRequest: condition === 'changed' ? { ...requested, enabledAt: '2026-11-25T09:00:00Z' } : requested },
+    };
+    const fetch = vi.fn(async (url, options) => {
+      if (new URL(url).pathname === '/graphql' && JSON.parse(options.body).query.startsWith('query')) {
+        return jsonResponse({ data: { repository } });
+      }
+      if (options.method !== 'GET') throw new Error('Attempted write on an unconfirmed PR');
+      return jsonResponse(pullRequest({ draft: false }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { app } = makeApp();
+    await request(app).post('/api/source-control/github/pr/merge').send({ ...mergeBody(account.accountId), method: 'squash', cancel: requested })
+      .expect(condition === 'squash-disabled' ? 403 : 409);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('reports an accepted merge as running when following it fails, and passes on a refusal GitHub explains', async () => {
     const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
     let refuse = false;

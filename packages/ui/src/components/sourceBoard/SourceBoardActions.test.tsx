@@ -38,6 +38,8 @@ const { useSessionUIStore } = await import('@/sync/session-ui-store');
 const { rememberMergeMethod } = await import('@/components/views/git/mergeMethodPreference');
 const { SourceBoardActions } = await import('./SourceBoardActions');
 const { toast } = await import('@/components/ui/toast');
+const { useTrackedItemsStore } = await import('@/stores/useTrackedItemsStore');
+const { trackedItemKey } = await import('@/lib/trackedItems/model');
 
 const CONTEXT: SourceControlReadContext = {
     provider: 'github', instance: 'github.com', directory: '/fixture/repository', repositoryId: 'repository-one',
@@ -156,6 +158,32 @@ test('only the standard merge action is offered when the server advertises force
     expect(mergeCalls[0].idempotencyKey.length).toBeGreaterThan(0);
     expect(refreshes).toBe(1);
     expect(completions).toEqual([0]);
+});
+
+test('a scheduled squash keeps the squash button available and uses the plain auto-merge label', async () => {
+    const waiting = { enabledAt: '2026-11-25T08:25:39Z', mergeMethod: 'SQUASH' };
+    const item = { provider: CONTEXT.provider, instance: CONTEXT.instance, accountId: CONTEXT.accountId,
+        kind: 'pull' as const, owner: PULL.sourceRepo.owner, repo: PULL.sourceRepo.repo, number: PULL.number };
+    const state = { owner: item.owner, repo: item.repo, number: item.number, title: PULL.title, state: 'open' as const,
+        draft: false, headSha: PULL.headSha, mergeable: true, mergeableState: 'blocked', checks: null, autoMergeRequest: waiting };
+    try {
+        await act(async () => useTrackedItemsStore.getState().apply('source-board-one', [{
+            key: trackedItemKey(item), record: { type: 'pull', item, state, fetchedAt: Date.now() },
+        }]));
+        await render();
+        expect([...host.querySelectorAll('span')].some(span => span.textContent === 'Auto-merge on')).toBe(true);
+        const squash = button('Squash and merge');
+        expect(squash.disabled).toBe(false);
+        await click(squash);
+        expect(dialog().textContent).toContain('The current auto-merge will be cancelled');
+        expect(mergeCalls).toHaveLength(0);
+        await click(button('Squash and merge', dialog()));
+        await settle();
+        expect(mergeCalls).toHaveLength(1);
+        expect(mergeCalls[0]).toMatchObject({ method: 'squash', cancel: waiting, target: { number: PULL.number, headSha: PULL.headSha } });
+    } finally {
+        await act(async () => useTrackedItemsStore.setState({ records: {} }));
+    }
 });
 
 test('canceling the merge confirmation never dispatches or refreshes', async () => {

@@ -220,7 +220,7 @@ type PostBody =
   | { disabled: boolean }
   | CreateBody
   | UpdateBody
-  | (MutationBody<SourceControlExistingMutationTarget> & { method: MergeChangeRequestInput['method']; cancel?: boolean; force?: boolean })
+  | (MutationBody<SourceControlExistingMutationTarget> & { method: MergeChangeRequestInput['method']; cancel?: MergeChangeRequestInput['cancel']; force?: boolean })
   | (MutationBody<SourceControlExistingMutationTarget> & { body: string })
   | (MutationBody<SourceControlExistingMutationTarget> & { threadId: string; body: string })
   | (MutationBody<SourceControlExistingMutationTarget> & { threadId: string; resolved: boolean })
@@ -1330,13 +1330,13 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
     },
     changeRequestMerge: async (payload: MergeChangeRequestInput) => {
       const identity = normalizeIdentity(payload);
-      if (payload.force !== undefined && payload.force !== true && payload.force !== false) {
+      if (payload.force !== undefined && payload.force !== true && payload.force !== false)
         throw new SourceControlRequestError('Force merge must be a boolean', 'INVALID_SOURCE_CONTROL_MUTATION_CONTEXT');
+      if (identity.provider !== 'github' && (payload.force === true || (payload.cancel && payload.cancel !== true))) {
+        if (payload.force === true) throw new SourceControlRequestError('Force merge is not supported by this provider', 'SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED');
+        throw new SourceControlRequestError('Replacing auto-merge is unavailable for this provider', 'SOURCE_CONTROL_CAPABILITY_UNSUPPORTED');
       }
-      if (payload.force === true && identity.provider !== 'github') {
-        throw new SourceControlRequestError('Force merge is not supported by this provider', 'SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED');
-      }
-      const body: MutationBody<SourceControlExistingMutationTarget> & { method: MergeChangeRequestInput['method']; cancel?: boolean; force?: boolean } = {
+      const body: MutationBody<SourceControlExistingMutationTarget> & { method: MergeChangeRequestInput['method']; cancel?: MergeChangeRequestInput['cancel']; force?: boolean } = {
         ...mutationBody(payload, identity, 'existing'),
         method: payload.method,
         cancel: payload.cancel,

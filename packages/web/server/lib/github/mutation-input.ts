@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { digestMutationInput } from '../source-control/mutation-executor.js';
 import { reviewCommentPosition } from '../source-control/review-position.js';
 import { isProviderString } from './mappers.js';
@@ -11,6 +12,9 @@ import type { NormalizedGitHubMutation, GitHubMutationInput } from './mutations.
 export type MutationTarget = SourceControlMutationTarget;
 
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
+
+const cancelAutoMergeSchema = z.strictObject({ enabledAt: z.iso.datetime(), mergeMethod: z.enum(['MERGE', 'SQUASH', 'REBASE']) });
+export type AutoMergeRequest = { enabledAt: string; mergeMethod: string };
 
 export type Credential = { accountId: string; credentialRevision: number };
 
@@ -114,7 +118,13 @@ export function normalizeOperation(operation: string, body: SourceControlJsonObj
   if (operation === 'merge') {
     const method = requiredText(body.method, 'method');
     if (!isMergeMethod(method)) throw mutationError('merge method is invalid');
-    if (body.cancel !== undefined && body.cancel !== true && body.cancel !== false) throw mutationError('cancel is invalid');
+    if (body.cancel !== undefined && body.cancel !== true && body.cancel !== false) {
+      const cancel = cancelAutoMergeSchema.safeParse(body.cancel);
+      if (!cancel.success || method !== 'squash' || body.force === true) throw mutationError('cancel is invalid');
+      requiredText(context.target.headSha, 'target headSha');
+      requiredText(context.target.base, 'target base');
+      return { input: { method, cancelAutoMerge: cancel.data }, digest: (target) => digestOf({ target, method, cancelAutoMerge: cancel.data }) };
+    }
     if (body.force === true) {
       if (body.cancel === true) throw mutationError('Cannot force and cancel the same merge');
       requiredText(context.target.headSha, 'target headSha');

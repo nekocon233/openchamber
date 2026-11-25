@@ -159,8 +159,7 @@ fresh owner read even when another capability caused the revision change.
 
 ## Pull-request merge actions
 
-`SourceBoardActions` owns merge controls for the board, project PR preview and
-branch preview. The merge control uses the selected method. On GitHub it
+`PullRequestMergeActions` owns the shared merge controls for the board, Changes and PR previews. The merge control uses the selected method. On GitHub it
 requests any rule exemption the account already holds and reports whether the
 merge completed, entered the queue or will run when checks pass. The server
 continues to accept explicit administrator merge requests from older clients.
@@ -410,7 +409,7 @@ GitLab keeps its existing review flow.
 
 ## Merge queue and providers
 
-GitHub live summaries carry optional `isInMergeQueue`, `mergeQueueEntry` and `autoMergeRequest` fields through tracked-items and the branch-status store. `SourceBoardActions`, shared by the board, tracker and branch preview, reads its PR's tracked state with the reading account and shows the waiting state with Cancel. Existing surfaces retain ownership of visibility-scoped client interest; the actions add no declaration. Background user merge follows belong to the server and do not consume the client's 300-item interest budget. Cancel uses the merge mutation's optional `cancel` intent, sent only when the provider reported waiting-merge fields. Other hosts keep their existing merge controls.
+GitHub live summaries carry optional `isInMergeQueue`, `mergeQueueEntry` and `autoMergeRequest` fields through tracked-items and the branch-status store. `SourceBoardActions`, shared by the board, tracker and branch preview, reads its PR's tracked state with the reading account and shows the waiting state with Cancel. The Changes toolbar declares client interest for the displayed PR while visible. Board and preview actions use their existing view's interest. Background user merge follows belong to the server and do not consume the client's 300-item interest budget. The merge mutation uses `cancel: true` for the waiting-state Cancel action. The squash action sends the observed auto-merge timestamp and method in `cancel` when the user confirms cancelling that GitHub request before merging. Other hosts keep their existing merge controls.
 
 `providers/` owns what the UI knows about each source-control provider. The
 connected server describes its providers as plain data

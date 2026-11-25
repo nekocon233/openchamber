@@ -39,6 +39,13 @@ describe('GitHub merge when ready', () => {
     expect(octokit.graphql).toHaveBeenCalledTimes(1);
   });
 
+  it('asks GitHub to re-enable squash when the cancelled request still appears in a waiting read', async () => {
+    const cancelled = { enabledAt: '2026-11-25T08:25:39Z', mergeMethod: 'SQUASH' };
+    const octokit = client(pull({ autoMergeRequest: cancelled }));
+    expect(await enableMergeWhenReady(octokit, project, target, 'squash', cancelled)).toEqual({ merged: false, outcome: 'auto-merge' });
+    expect(octokit.graphql.mock.calls[1][1]).toMatchObject({ mergeMethod: 'SQUASH', sha: target.headSha });
+  });
+
   it('passes on a retained merge method when GitHub does not apply the requested one', async () => {
     const existing = { enabledAt: 'now', mergeMethod: 'MERGE' };
     const octokit = client(pull({ autoMergeRequest: existing }));

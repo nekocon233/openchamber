@@ -714,7 +714,7 @@ export interface UpdateDiscussionInput extends SourceControlMutationContext<Sour
 export interface MergeChangeRequestInput extends SourceControlMutationContext<SourceControlExistingMutationTarget> {
   method: MergeMethod;
   force?: boolean;
-  cancel?: boolean;
+  cancel?: boolean | { enabledAt: string; mergeMethod: string };
 }
 
 export type ReadyChangeRequestInput = SourceControlMutationContext<SourceControlExistingMutationTarget>;
