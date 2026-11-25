@@ -99,10 +99,14 @@ other conversations in the same directory able to send. Claude and Antigravity i
 a new backend starts. Queued sends capture their configuration and use
 `preserveSelection` so delivery cannot replace a later composer choice. The
 UI rechecks server readiness before claiming queued work. The proposing source owns the plan decision. Approval may capture an execution
-model and expected selection revision. Model-changing approvals first let that
-source yield, then enter `automaticPrompt` with a stable logical delivery ID.
-Only the approving question is excluded from the quiet-source check; other
-questions, children and background work retain their protection. Acceptance
+model and expected selection revision. Changed execution settings first let the
+planning turn yield, then enter `automaticPrompt` with a stable logical
+delivery ID. Same-CLI execution keeps the source and uses its native transcript.
+Cross-CLI execution retires the source and transfers context to the new backend.
+The approving question is excluded from the activity check. A Claude query
+that can keep its launch connection also keeps its background shell tasks.
+The check protects other questions, children and other active background work.
+Acceptance
 updates the next model and Build selection only at the captured revision.
 An application-owned answer can settle on a retained planning source after
 backend handoff; other events from inactive sources stay excluded.

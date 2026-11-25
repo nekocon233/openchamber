@@ -77,7 +77,7 @@ describe('Codex plan decisions through the native runtime', () => {
   });
 
   it('retries an explicit execution approval after a definite Codex refusal', async () => {
-    const { runtime, root, directory, session, selection, question, registry, sends } = await createHarness({ withCombination: true });
+    const { runtime, root, directory, session, selection, question, registry, sends, requests } = await createHarness({ withCombination: true });
     const marker = path.join(directory, 'fail-build');
     fs.writeFileSync(marker, '');
     const execution = { model: selection.model, variant: 'high-ultrafast', expectedRevision: 0 };
@@ -91,6 +91,8 @@ describe('Codex plan decisions through the native runtime', () => {
     await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
     expect(sends()).toHaveLength(3);
     expect(sends().at(-1)).toMatchObject({ effort: 'high', serviceTier: 'ultrafast' });
+    expect(sends().at(-1).threadId).toBe(sends()[0].threadId);
+    expect(requests().some((request) => request.method === 'thread/unsubscribe')).toBe(false);
     expect((await runtime.getSession(session.id, directory)).model.variant).toBe('high-ultrafast');
     expect(await runtime.questions(directory)).toEqual([]);
   });

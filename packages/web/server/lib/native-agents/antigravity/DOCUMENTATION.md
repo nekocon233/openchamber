@@ -594,12 +594,12 @@ reads do not block chat. The shared memory contract is in
 
 ## Execution model on plan approval
 
-A plan approval may transfer to the shared execution owner when the selected
-model differs from the proposal's captured model. The native AGY decision is
-settled without starting its own continuation. The shared owner keeps the human
-choice and delivery identity, then uses normal admission for the selected model.
-The parent native module's Plan execution model selection section owns recovery
-and uncertain-delivery behavior. Native skipped question outcomes remain intact.
+Approving with a different AGY model or effort settles the native decision and
+uses normal AGY admission on the same conversation. The idle process resumes
+with the new model, effort and Build mode. An approval targeting another CLI
+uses unified handoff. The shared execution owner keeps the choice and delivery
+identity, and handles recovery as described in the parent native module's Plan
+execution model selection section.
 
 ## Quota
 

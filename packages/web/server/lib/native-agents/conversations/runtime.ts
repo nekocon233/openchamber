@@ -25,11 +25,10 @@ import {
 } from '../ids.js';
 import type { NativeBackend, NativeProviderId } from '../ids.js';
 import { JsonRpcError } from '../codex/rpc.js';
-import { createConversationStore, conversationSelectionSchema } from './store.js';
+import { buildRollback, createConversationStore, conversationSelectionSchema, restoreRollback } from './store.js';
 import type {
   ConversationCreateInput,
   ConversationManifest,
-  ConversationRollback,
   ConversationSegment,
   ConversationSelection,
 } from './store.js';
@@ -47,13 +46,13 @@ import type { ConversationHistory, ConversationNativeMessagePage, ConversationPa
 import { prepareConversationContext } from './context.js';
 import type { ContextCatalogModel, ContextSmallModelService } from './context.js';
 import { agentConfigurationWriteSchema } from '../agent-configuration.js';
-import type { AgentConfigurationWrite, AgentModel } from '../agent-configuration.js';
+import type { AgentConfiguration, AgentConfigurationWrite, AgentModel } from '../agent-configuration.js';
 import { conversationTitlePreview, createConversationAutoTitles } from './auto-title.js';
 import type { AutoTitleSmallModelService } from './auto-title.js';
 import { antigravityChecklistSnapshot } from '../antigravity/checklist.js';
 import type { NativeChecklistSnapshot, NativePublishedEvent } from '../publisher.js';
 import type { PromptPart } from '../prompt-parts.js';
-import type { PlanExecutionActiveState, PlanExecutionChoice, PlanExecutionResult } from '../plan-execution.js';
+import type { PlanExecutionActiveState, PlanExecutionChoice, PlanExecutionResult, PlanExecutionRoute, PlanExecutionShellTasks } from '../plan-execution.js';
 import type { QuestionRequest } from '../questions.js';
 import type { NativeMessageInfo, NativePart, NativeSessionRecord } from '../records.js';
 import type { NativeRegistry } from '../registry.js';
@@ -143,6 +142,8 @@ export interface ConversationApprovalHook {
   logicalMessageId?: string | undefined;
   expectedRevision?: number | undefined;
   allowedForeground?: string | undefined;
+  retainSource?: boolean | undefined;
+  preserveShellTasks?: boolean | undefined;
   onDispatched?: (() => Promise<void>) | undefined;
   onRefused?: (() => Promise<void>) | undefined;
 }
@@ -346,9 +347,10 @@ export interface NativeConversationsController<Native extends ConversationNative
     directory: string,
     requestId: string,
     execution: PlanExecutionChoice,
-    handoff: boolean,
+    route: PlanExecutionRoute,
     approves?: boolean,
-  ) => Promise<boolean>;
+    captureShellTasks?: (agents: AgentConfiguration | undefined) => Promise<PlanExecutionShellTasks | undefined>,
+  ) => Promise<{ shellTasks: PlanExecutionShellTasks | undefined } | null>;
   planExecutionOutcome: (
     source: string,
     directory: string,
@@ -409,25 +411,6 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
       owned.add(segment.sessionId);
       owners.set(segment.sessionId, { id: segment.ownerId, segmentId: segment.id });
     }
-  };
-
-  const restoreRollback = (current: ConversationManifest, rollback: ConversationRollback): void => {
-    current.segments = rollback.segments;
-    current.active = rollback.active;
-    if (rollback.cut !== undefined) current.cut = rollback.cut;
-    else delete current.cut;
-    if (rollback.checkpoint !== undefined) current.checkpoint = rollback.checkpoint;
-    else delete current.checkpoint;
-  };
-
-  const buildRollback = (manifest: ConversationManifest): ConversationRollback => {
-    const rollback: ConversationRollback = {
-      segments: structuredClone(manifest.segments),
-      active: manifest.active,
-    };
-    if (manifest.cut !== undefined) rollback.cut = manifest.cut;
-    if (manifest.checkpoint !== undefined) rollback.checkpoint = manifest.checkpoint;
-    return rollback;
   };
 
   const update = async (id: string, change: (current: ConversationManifest) => ConversationManifest): Promise<ConversationManifest> => {
@@ -495,18 +478,19 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
 
   const sourceRoot = (id: string): string => childRoots.get(id) ?? id;
 
-  const hasLiveWork = (manifest: ConversationManifest, allowedForeground: string | null = null): boolean => {
+  const hasLiveWork = (manifest: ConversationManifest, approval: ConversationApprovalHook | null = null): boolean => {
     if (native.hasActiveDelegations?.(manifest.id)) return true;
     const active = activeOf(manifest);
     if (!active) return false;
-    if ((active.sessionId !== allowedForeground && foreground.has(active.sessionId)) || (background.get(active.sessionId)?.length ?? 0) > 0) return true;
+    if (active.sessionId !== approval?.allowedForeground && foreground.has(active.sessionId)) return true;
+    if (background.get(active.sessionId)?.some((task) => !approval?.preserveShellTasks || task.type !== 'local_bash')) return true;
     for (const child of childRoots.keys()) if (sourceRoot(child) === active.sessionId
       && (foreground.has(child) || (background.get(child)?.length ?? 0) > 0 || (waiting.get(child)?.size ?? 0) > 0)) return true;
     return false;
   };
 
   const blocked = (manifest: ConversationManifest, approval: ConversationApprovalHook | null = null): boolean => {
-    if (hasLiveWork(manifest, approval?.allowedForeground ?? null)) return true;
+    if (hasLiveWork(manifest, approval)) return true;
     const activeSessionId = activeOf(manifest)?.sessionId;
     const requests = activeSessionId ? waiting.get(activeSessionId) : undefined;
     if (!approval) return Boolean(requests?.size);
@@ -742,6 +726,7 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
       status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT',
     });
     const switching = !old || old.backend !== backend || manifest.cut !== undefined || old.ownerId !== id || old.through !== undefined;
+    if (switching && approval?.retainSource) throw invalidRequestError('The original planning session is no longer active');
     if (switching || approval) await assertQuiet(manifest, approval);
     if (!request.preserveSelection && !automaticSource && JSON.stringify(manifest.selection) !== JSON.stringify(target)) {
       manifest = await update(id, (current) => ({ ...current, selection: target, selectionRevision: current.selectionRevision + 1 }));
@@ -1488,20 +1473,25 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
       directory: string,
       requestId: string,
       execution: PlanExecutionChoice,
-      handoff: boolean,
+      route: PlanExecutionRoute,
       approves = true,
-    ): Promise<boolean> {
+      captureShellTasks?: (agents: AgentConfiguration | undefined) => Promise<PlanExecutionShellTasks | undefined>,
+    ) {
       await load();
       const owner = owners.get(source);
-      if (!owner) { assertStandalone(source); return false; }
+      if (!owner) { assertStandalone(source); return null; }
       checkPolicy();
       const manifest = get(owner.id, directory);
-      if (activeOf(manifest)?.sessionId !== source) throw invalidRequestError('The original planning session is no longer active');
+      const active = activeOf(manifest);
+      if (active?.sessionId !== source || (route === 'resume' && (manifest.cut || active.ownerId !== manifest.id || active.through !== undefined))) {
+        throw invalidRequestError('The original planning session is no longer active');
+      }
       if (approves && execution.expectedRevision !== manifest.selectionRevision) throw new NativeAgentError('The conversation selection changed. Reload and retry.', {
         status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT',
       });
-      if (handoff) await assertQuiet(manifest, { requestId, allowedForeground: source });
-      return true;
+      const shellTasks = await captureShellTasks?.(manifest.agents);
+      if (route !== 'reply') await assertQuiet(manifest, { requestId, allowedForeground: source, preserveShellTasks: Boolean(shellTasks) });
+      return { shellTasks };
     },
     async planExecutionOutcome(
       source: string,

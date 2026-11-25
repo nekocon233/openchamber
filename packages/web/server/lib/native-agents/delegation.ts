@@ -131,6 +131,7 @@ export interface NativeDelegation {
   promote: (sourceID: string) => void;
   hasActive: (parentID: string) => boolean;
   usedInTurn: (sourceID: string) => boolean;
+  toolKeyForSelection: (sourceID: string, selection: AgentModel | null) => string | null;
   canDelete: (parentID: string) => boolean;
   assertDeletion: (parentID: string) => Promise<void>;
   removeChildren: (parentID: string, retained?: ReadonlySet<string>) => Promise<void>;
@@ -515,6 +516,11 @@ export const createNativeDelegation = ({
     usedInTurn(sourceID) {
       const context = contexts.get(sourceID);
       return Boolean(context && [...jobs.values()].some((job) => job.sourceID === sourceID && job.callID.startsWith(`${context.messageID}:`)));
+    },
+    toolKeyForSelection(sourceID, selection) {
+      if (!selection) return '';
+      const context = contexts.get(sourceID);
+      return context && !context.revoked && JSON.stringify(context.selection) === JSON.stringify(selection) ? context.tools.key : null;
     },
     canDelete(parentID) {
       return loaded && ![...jobs.values()].some((job) => job.parentID === parentID && job.childID && job.phase !== 'deleted' && !this.canDeleteBackend(nativeBackendOfProviderId(job.selection.model.providerID)));

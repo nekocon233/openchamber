@@ -13,8 +13,8 @@ import type { QuestionRegistry } from '../questions.js';
 import type { NativeErrorInfo, NativeMessageRecord, NativeSessionRecord, NativeTextPart } from '../records.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
 import type { ClaudeProjection, ClaudePromptContent, ClaudeSendRecord } from './projector.js';
-import { prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
-import type { ClaudeConnectionLaunch, PreparedClaudeConnection } from './connections.js';
+import { applyClaudeLiveConfig, claudeEffortSchema, prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
+import type { ClaudeConnectionLaunch, ClaudeLiveConfig, PreparedClaudeConnection } from './connections.js';
 import { claudeChecklistSource, createClaudeChecklists, todosFromTodoWrite } from './tasks.js';
 import type { ClaudeChecklists, ClaudeTaskItem } from './tasks.js';
 import { claudeTaskOutputRoot, createClaudeBackgroundTasks } from './background-tasks.js';
@@ -34,7 +34,6 @@ const PLAN_DECLINED = 'The user did not approve implementation. Keep the session
 const QUESTION_DISMISSED = 'The user dismissed the question without answering.';
 
 const opaqueJson = z.custom<JsonValue>(() => true);
-const effortLevelSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
 const exitPlanInput = z.object({ plan: z.string().optional() });
 
@@ -105,13 +104,6 @@ type TrackedTaskToolUse = {
   name: string;
   owner: string;
   todos: ClaudeTaskItem[] | null;
-};
-
-export type ClaudeLiveConfig = {
-  model: string | null;
-  effort: string | null;
-  permissionMode: 'bypassPermissions' | 'plan';
-  launch?: ClaudeConnectionLaunch | undefined;
 };
 
 export type ClaudeLiveRewind = {
@@ -185,6 +177,7 @@ export interface ClaudeLiveSessionsOptions {
 
 export interface ClaudeLiveSessions {
   prompt: (input: ClaudeLivePromptInput) => Promise<void>;
+  canReuseConnection: (sessionId: string, launch: ClaudeConnectionLaunch, toolKey: string) => boolean;
   stopBackgroundTasks: (sessionId: string) => Promise<boolean>;
   abort: (sessionId: string) => Promise<boolean>;
   closeConnection: (prefix: string) => Promise<void>;
@@ -714,7 +707,7 @@ export const createClaudeLiveSessions = ({
       }
     }
     if (config.model !== null) options.model = config.model;
-    const parsedEffort = config.effort !== null ? effortLevelSchema.safeParse(config.effort) : null;
+    const parsedEffort = config.effort !== null ? claudeEffortSchema.safeParse(config.effort) : null;
     if (parsedEffort?.success) options.effort = parsedEffort.data;
     if (resume) options.resume = sessionUuid;
     else options.sessionId = sessionUuid;
@@ -748,18 +741,12 @@ export const createClaudeLiveSessions = ({
     return live;
   };
 
-  const applyConfig = async (live: LiveSession, config: ClaudeLiveConfig): Promise<void> => {
-    if (config.model !== live.config.model) await live.query.setModel(config.model ?? undefined);
-    if (config.effort !== live.config.effort) {
-      const parsedEffort = config.effort === null ? null : effortLevelSchema.safeParse(config.effort);
-      if (parsedEffort === null) await live.query.applyFlagSettings({ effortLevel: null });
-      else if (parsedEffort.success) await live.query.applyFlagSettings({ effortLevel: parsedEffort.data });
-    }
-    if (config.permissionMode !== live.config.permissionMode) await live.query.setPermissionMode(config.permissionMode);
-    live.config = config;
-  };
-
   return {
+    canReuseConnection(sessionId, launch, toolKey) {
+      const live = sessions.get(sessionId);
+      return Boolean(live && !live.closing && live.toolKey === toolKey && (live.config.launch?.key ?? 'default') === launch.key);
+    },
+
     async prompt({ sessionId, directory, messageId, content, sdkContent, config, send, rewind = null, signal = null }) {
       return serializePrompt(sessionId, async () => {
         signal?.throwIfAborted();
@@ -792,7 +779,7 @@ export const createClaudeLiveSessions = ({
         }
         let created = false;
         if (live) {
-          await applyConfig(live, config);
+          await applyClaudeLiveConfig(live, config);
         } else {
           await exits.get(sessionId);
           live = await start({ sessionId, sessionUuid: decoded.sessionUuid, directory, config, rewind });

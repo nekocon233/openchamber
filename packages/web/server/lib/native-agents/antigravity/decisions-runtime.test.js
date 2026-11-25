@@ -140,6 +140,21 @@ describe('Antigravity decisions through the native runtime', () => {
     expect(harness.requests()).toHaveLength(2);
   });
 
+  it('resumes the same Antigravity conversation with the selected approval effort', async () => {
+    const harness = await setup({ unified: true });
+    const question = await harness.waiting('decision-plan');
+    const before = await harness.runtime.getSession(harness.session.id, harness.directory);
+    await harness.runtime.replyQuestion(question.id, [['build']], {
+      model: harness.selection.model, variant: 'low', expectedRevision: before.metadata.openchamber.native.revision,
+    });
+    await harness.idle();
+    const after = await harness.runtime.getSession(harness.session.id, harness.directory);
+    expect(after.metadata.openchamber.native.sourceSessionID).toBe(before.metadata.openchamber.native.sourceSessionID);
+    expect(harness.requests()).toHaveLength(2);
+    expect(harness.requests()[1]).toMatchObject({ mode: 'accept-edits', model: 'gemini-test', effort: 'low' });
+    expect(await harness.runtime.questions(harness.directory)).toEqual([]);
+  });
+
   it('projects unified custom and multiple answers into the same question history', async () => {
     const harness = await setup({ unified: true });
     const question = await harness.waiting('decision-questions', 'build');

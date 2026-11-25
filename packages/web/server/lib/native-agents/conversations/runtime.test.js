@@ -563,7 +563,7 @@ describe('unified native backend contract', () => {
     expect(held.model.providerID).toBe('claude-native');
     expect(held.metadata.openchamber.native.agents).toBeUndefined();
   });
-  it.each(pairs)('executes an approved %s plan on %s and settles the logical approval after handoff', async (from, to) => {
+  it.each([...pairs, ...NATIVE_BACKENDS.map((backend) => [backend, backend])])('executes an approved %s plan on %s with the selected model', async (from, to) => {
     const h = await setup();
     const session = await h.conversation(from);
     h.hold();
@@ -585,7 +585,10 @@ describe('unified native backend contract', () => {
     execution = createNativePlanExecution({
       registry: h.registry, questions, interactions: { record: async () => {} },
       sourceSelection: async () => ({ model: selection(from).model, variant: 'high' }),
-      validate: (...args) => h.controller.validatePlanExecution(...args),
+      validate: async (id, directory, requestId, selected, route, approves) => {
+        const captureShellTasks = from === 'claude' && route === 'resume' ? async () => ({ subagentModel: null }) : undefined;
+        return (await h.controller.validatePlanExecution(id, directory, requestId, selected, route, approves, captureShellTasks))?.shellTasks;
+      },
       readHistory: async () => h.sources.get(source).records,
       yieldSource: async () => h.complete(source),
       prompt: (...args) => h.controller.automaticPrompt(...args),
@@ -601,20 +604,27 @@ describe('unified native backend contract', () => {
     });
     const [question] = await h.api.questions(h.directory);
     const current = await h.api.getSession(session.id, h.directory);
-    const selected = { model: selection(to).model, variant: 'high', expectedRevision: current.metadata.openchamber.native.revision };
+    const model = from === to ? { ...selection(to).model, modelID: `${to}-build` } : selection(to).model;
+    const selected = { model, variant: 'high', expectedRevision: current.metadata.openchamber.native.revision };
     await expect(h.api.replyQuestion(question.id, [['build']], { ...selected, expectedRevision: selected.expectedRevision + 1 }))
       .rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT' });
     expect(outcomes).toEqual([]);
     expect(h.requests).toHaveLength(1);
-    h.native.backgroundTasks = async () => ({ [source]: { directory: h.directory, tasks: [{ id: 'background', type: 'local_bash', description: 'Still working' }] } });
+    const shellCanContinue = from === 'claude' && from === to;
+    h.native.backgroundTasks = async () => ({ [source]: { tasks: [{ id: 'background', type: shellCanContinue ? 'local_agent' : 'local_bash', description: 'Still working' }] } });
     await expect(h.api.replyQuestion(question.id, [['build']], selected)).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
     expect(outcomes).toEqual([]);
-    h.native.backgroundTasks = async () => ({});
+    h.native.backgroundTasks = async () => shellCanContinue
+      ? { [source]: { tasks: [{ id: 'background', type: 'local_bash', description: 'Preview server' }] } }
+      : {};
     await h.api.replyQuestion(question.id, [['build']], selected);
     expect(outcomes).toEqual(['transferred']);
     expect(h.requests).toHaveLength(2);
     const target = h.requests[1];
-    expect(target.id).not.toBe(source);
+    if (from === to) {
+      expect(target.id).toBe(source);
+      expect(h.operations).not.toContain(`retire:${source}`);
+    } else expect(target.id).not.toBe(source);
     expect(target.request.model).toEqual(selected.model);
     expect(target.request.agent).toBe('build');
     expect(target.request.instructions).toContain('# Approved native plan');

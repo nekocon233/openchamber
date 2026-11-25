@@ -47,7 +47,7 @@ const setup = async (backend = 'claude', existing = null, restore = false) => {
     sourceSelection: async () => choice(backend, 'current'),
     validate: async () => { calls.push('validate'); },
     readHistory: async () => records,
-    yieldSource: async () => { calls.push('yield'); },
+    yieldSource: async (_id, _directory, _signal, route) => { calls.push(route); },
     prompt: async (source, request, signal, approval) => {
       await approval.onDispatched();
       calls.push('prompt');
@@ -98,10 +98,11 @@ describe('native plan execution model', () => {
   });
 
   for (const from of NATIVE_BACKENDS) for (const to of NATIVE_BACKENDS) {
-    it(`yields ${from} before execution on ${to}`, async () => {
+    it(`continues an approved ${from} plan on ${to}`, async () => {
       const context = await setup(from);
       const result = await context.questions.reply(context.request.id, [['build']], choice(to));
-      expect(context.calls).toEqual(['validate', 'record', 'transferred', 'yield', 'prompt']);
+      expect(context.calls).toEqual(['validate', 'record', 'transferred', from === to ? 'resume' : 'handoff', 'prompt']);
+      expect(context.sent[0].approval.retainSource).toBe(from === to);
       expect(context.sent[0].request).toMatchObject({ model: choice(to).model, variant: 'high', agent: 'build', parts: [] });
       expect(context.sent[0].request.instructions).toContain('# Approved plan');
       expect(result.execution).toEqual(choice(to));

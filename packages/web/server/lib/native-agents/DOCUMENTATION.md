@@ -751,13 +751,24 @@ containing the native model, effort and, for unified conversations, the expected
 selection revision. Only an exact `build` approval accepts that field. Ordinary
 questions and older clients retain their answer protocol.
 
-`plan-execution.js` owns model-changing approvals. It validates the source and
-target before taking over the question. The internal `transferred` outcome lets
-the proposing CLI yield without approving implementation there. Claude suppresses
-only the handoff's aborted-message notice; DeepSeek cancels and drains its native
-execution. Codex and Antigravity post-turn decisions stop their original
-continuation. The selected model then receives a Build prompt through the normal
-native admission path, including unified context transfer when the backend changes.
+`plan-execution.js` validates the source and selected execution settings before
+releasing the decision. When those settings match the planning turn, the CLI
+receives its normal approval. Changed settings start a Build turn on the same
+native session. Claude yields the permission request and keeps its compatible
+query. DeepSeek cancels and drains the planning turn in its session. Codex and
+Antigravity start their next native turn after the post-turn decision. A
+different CLI uses unified handoff and retires the planning source.
+
+### Why Claude applies execution effort on a new turn
+
+Claude captures thinking effort when it starts a turn. Its SDK can change the
+model during plan approval, but the new effort only applies on the next turn.
+OpenChamber ends the planning turn, suppresses its approval-related stopped
+notice and sends the Build prompt with the selected model and effort. Background
+shell tasks continue while the next turn reuses the launch connection and
+delegation tool configuration. Live
+children, other questions and work requiring the old query to stay open still
+block a change that would interrupt them.
 
 The registry's private `planExecution` journal retains the source call, model
 choices, stable delivery identities and `open`, `preparing`, `dispatching` or
@@ -768,7 +779,7 @@ locks the chosen model through `executionPending` until native history confirms
 it. A malformed journal becomes `unavailable` and blocks further sends for that
 source without removing the native session.
 
-Background work, children and other questions still block a handoff. Selection
+Background work, children and other questions block cross-CLI handoff. Selection
 revisions protect newer composer choices. After acceptance the selected execution
 model becomes the next selection only when its captured revision is unchanged.
 Question settlement and application-owned answer metadata can update the retained
