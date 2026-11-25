@@ -20,7 +20,7 @@ interface MergeFollowOptions {
 interface MergeMutation {
   context: Pick<ProviderMutationContext, 'provider' | 'instance' | 'accountId'>;
   kind: string;
-  input: { cancel?: unknown; method?: unknown };
+  input: { cancel?: unknown; cancelAutoMerge?: unknown; method?: unknown };
 }
 type SucceededMutation = MergeMutation & { replayed: boolean; record: MutationRecord };
 type TrackedService = Pick<ReturnType<typeof createTrackedItemsService>, 'setServerInterest' | 'subscribe' | 'refresh'>;
@@ -131,7 +131,7 @@ export function createMergeFollowRuntime({ dataDir, notify, now = Date.now }: Me
       return serialize(async () => { await loaded; interest(); attachedService().refresh([...entries.values()].map((entry) => entry.item)); });
     },
     onMutationStarting({ context, kind, input, target }: MergeMutation & { target?: ResolvedMutationTarget }) {
-      if (context.provider !== 'github' || kind !== 'change-request-merge' || !input.cancel || !target) return null;
+      if (context.provider !== 'github' || kind !== 'change-request-merge' || (!input.cancel && !input.cancelAutoMerge) || !target) return null;
       const item = parseTrackedItem({ provider: 'github', kind: 'pull', instance: context.instance, accountId: context.accountId,
         owner: target.project.owner, repo: target.project.name, number: target.number });
       if (!item) return null;
@@ -155,7 +155,8 @@ export function createMergeFollowRuntime({ dataDir, notify, now = Date.now }: Me
       return serialize(async () => {
         await loaded;
         const key = trackedItemKey(item);
-        if (input.cancel || record.result?.merged) {
+        if (input.cancel || record.result?.merged || record.result?.outcome === 'cancelled') {
+          if (input.cancelAutoMerge) trackedItems?.refresh([item]);
           const previous = entries.get(key);
           if (!previous) return;
           entries.delete(key);
