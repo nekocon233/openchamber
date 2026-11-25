@@ -59,6 +59,7 @@ const resultFrameSchema = z.object({
   result: z.string().optional(),
   errors: z.array(z.string()).optional(),
   terminal_reason: z.string().nullish(),
+  local_command: z.string().optional(),
   queued_turn_count: z.number().optional(),
   usage: opaqueJson.nullish(),
   modelUsage: opaqueJson.nullish(),
@@ -138,7 +139,7 @@ export type ClaudeBackgroundTaskDirectorySnapshot = Record<string, {
 
 export interface ClaudeLivePublisher extends Pick<
   NativeEventPublisher,
-  'records' | 'delta' | 'status' | 'session' | 'error' | 'backgroundTasks' | 'checklist' | 'forget'
+  'records' | 'delta' | 'status' | 'session' | 'error' | 'backgroundTasks' | 'checklist' | 'forget' | 'emit'
 > {
   tasks: (directory: string, sessionID: string, snapshot: ClaudeBackgroundTaskSnapshot) => void;
 }
@@ -212,7 +213,6 @@ type LiveSessionCore = {
   closing: boolean;
   idleTimer: ReturnType<typeof setTimeout> | null;
   idleWaiters: Array<() => void>;
-  compactSummaryNext: boolean;
   taskToolUses: Map<string, TrackedTaskToolUse>;
   childChecklists: Set<string>;
   exited: Promise<void>;
@@ -326,6 +326,7 @@ export const createClaudeLiveSessions = ({
     for (const id of new Set(messageIds)) {
       const record = live.projection.record(id);
       if (record) records.push(record);
+      else publisher.emit(live.directory, 'message.removed', { sessionID: live.sessionId, messageID: id });
     }
     publisher.records(live.directory, live.sessionId, records);
   };
@@ -433,7 +434,7 @@ export const createClaudeLiveSessions = ({
     const error = turnErrorOf(frame, live.config.launch);
     const planKept = live.turnStopReason === 'keep-planning' || live.turnStopReason === 'plan-execution';
     live.turnStopReason = null;
-    publishRecords(live, live.projection.finishTurn({ error, planKept }));
+    publishRecords(live, live.projection.finishTurn({ error, planKept, queuedTurns: frame.queued_turn_count ?? 0, localCommand: frame.local_command }));
     if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
     const reply = live.projection.records().findLast((record) => record.info.role === 'assistant');
     const lastText = reply?.parts.findLast((part): part is NativeTextPart => part.type === 'text');
@@ -460,16 +461,13 @@ export const createClaudeLiveSessions = ({
       return;
     }
     if (frame.type === 'system') {
-      if (frame.subtype !== 'compact_boundary') return;
-      live.compactSummaryNext = true;
+      if (frame.subtype !== 'compact_boundary' && frame.subtype !== 'status') return;
       publishRecords(live, live.projection.applyEntry(frame));
       return;
     }
     if (frame.type === 'assistant' || frame.type === 'user') {
       if (frame.type === 'user' && 'isReplay' in frame && frame.isReplay === true) return;
-      const summary = frame.type === 'user' && live.compactSummaryNext && frame.isSynthetic === true;
-      live.compactSummaryNext = false;
-      const changed = live.projection.applyEntry(summary ? { ...frame, isCompactSummary: true } : frame);
+      const changed = live.projection.applyEntry(frame);
       publishRecords(live, changed);
       live.subagents.announce(live.sessionId, live.projection, changed);
       return;
@@ -660,7 +658,6 @@ export const createClaudeLiveSessions = ({
       closing: false,
       idleTimer: null,
       idleWaiters: [],
-      compactSummaryNext: false,
       taskToolUses: new Map(),
       childChecklists: new Set(),
       exited,
@@ -791,6 +788,7 @@ export const createClaudeLiveSessions = ({
         }
         live.lastActive = now();
         live.sends.set(messageId, send);
+        live.projection.queueTurn(sdkContent);
         if (content !== null) publishRecords(live, live.projection.startUserPrompt(messageId, content));
         live.input.push({
           type: 'user',

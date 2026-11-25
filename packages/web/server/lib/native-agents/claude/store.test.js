@@ -495,6 +495,79 @@ describe('Claude history before the last compaction', () => {
     await expect(store.rewindTarget(SESSION_ID, DIRECTORY, 'ncl_u_88888888-8888-4888-8888-888888888888')).rejects.toMatchObject({ code: 'NATIVE_MESSAGE_NOT_FOUND' });
     expect(await store.rewindTarget(SESSION_ID, DIRECTORY, `ncl_u_${U4}`)).toMatchObject({ resumeAt: 's2' });
   });
+
+  it('restores failed /compact entries at the tail, in place, and before a later compaction without duplicating preserved entries', async () => {
+    const compactCmd = (uuid, minute) => ({
+      type: 'user',
+      uuid,
+      timestamp: at(minute),
+      isCompletedLocalCommand: true,
+      message: { role: 'user', content: '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>' },
+    });
+    const rawFailedCompact = (uuid, parentUuid, minute, text) => ({
+      type: 'system',
+      subtype: 'local_command',
+      uuid,
+      parentUuid,
+      timestamp: at(minute),
+      content: `<local-command-stderr>${text}</local-command-stderr>`,
+      commandRun: { command: 'compact', args: '' },
+      commandOutcome: { kind: 'failed' },
+    });
+
+    const { store, state } = createCompactedHarness();
+    const cmd1 = compactCmd('cmd-fail-1', 8);
+    const fail1 = rawFailedCompact('fail-1', 'cmd-fail-1', 8, 'Error during compaction: summarization produced empty response');
+    const cmd2 = compactCmd('cmd-fail-2', 13);
+    const fail2 = rawFailedCompact('fail-2', 'cmd-fail-2', 13, 'Error: No messages to compact');
+
+    // Case 1: fail1 happened right before b2 (omitted at the tail of cut a3,
+    // and carried into current as a stripped system entry); fail2 is at the
+    // very tail of current and omitted by getSessionMessages altogether.
+    state.raw = [u1, a1, u2, a2, rawBoundary('b1', 5, 's1'), s1, u3, a3, cmd1, fail1, rawBoundary('b2', 9, 's2'), s2, u4, a4, cmd2, fail2];
+    state.segments['fail-1'] = [readBoundary('b1', 5), s1, u2, a2, u3, a3, cmd1];
+    state.current = [readBoundary('b2', 9), s2, cmd1, readBoundary('fail-1', 8), u4, a4, cmd2];
+
+    const history = await store.loadHistory(SESSION_ID, DIRECTORY);
+    const compactions = history.records.filter((record) => record.info.role === 'compaction').map((record) => ({
+      id: record.info.id,
+      status: record.info.status,
+      error: record.info.error?.data.message ?? null,
+    }));
+    expect(compactions).toEqual([
+      { id: 'ncl_k_b1', status: 'completed', error: null },
+      { id: 'ncl_k_fail-1', status: 'failed', error: 'Error during compaction: summarization produced empty response' },
+      { id: 'ncl_k_b2', status: 'completed', error: null },
+      { id: 'ncl_k_fail-2', status: 'failed', error: 'Error: No messages to compact' },
+    ]);
+
+    // Case 2: a subsequent prompt makes getSessionMessages return fail2 as a
+    // stripped system entry in place; it stays singular and keeps its error.
+    // Also verify a canceled /compact (stdout "Compaction canceled." without
+    // commandRun/commandOutcome) is restored after its /compact parent.
+    const cmd3 = compactCmd('cmd-cancel-3', 15);
+    const cancel3 = {
+      type: 'system',
+      subtype: 'local_command',
+      uuid: 'cancel-3',
+      parentUuid: 'cmd-cancel-3',
+      timestamp: at(15),
+      content: '<local-command-stdout>Compaction canceled.</local-command-stdout>',
+    };
+    state.raw = [...state.raw, prompt(U5, 14, 'after failure'), cmd3, cancel3];
+    state.current = [readBoundary('b2', 9), s2, cmd1, readBoundary('fail-1', 8), u4, a4, cmd2, readBoundary('fail-2', 13), prompt(U5, 14, 'after failure'), cmd3];
+    state.info = { ...state.info, lastModified: 2000, fileSize: 2200 };
+    const afterPrompt = await store.loadHistory(SESSION_ID, DIRECTORY);
+    const afterCompactions = afterPrompt.records.filter((record) => record.info.role === 'compaction').map((record) => ({
+      id: record.info.id,
+      status: record.info.status,
+      error: record.info.error?.data.message ?? null,
+    }));
+    expect(afterCompactions).toEqual([
+      ...compactions,
+      { id: 'ncl_k_cancel-3', status: 'failed', error: 'Compaction canceled.' },
+    ]);
+  });
 });
 
 describe('Claude subagent tool outcomes', () => {
