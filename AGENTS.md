@@ -23,18 +23,18 @@ Do not start editing before every matching skill and required reference is read.
 
 ## Development Workflow
 
-Use this workflow for repository changes unless the user explicitly requests a different workflow.
+Use this workflow for repository changes unless the user explicitly requests a different workflow. Land changes directly on `main` from an isolated worktree; do not open a pull request or wait on GitHub CI unless the user explicitly asks for one.
 
-1. **Isolate.** Fetch the target remote's `main` and create a new worktree with a new task branch from it before editing. Keep task edits, validation, and commits in that worktree. Continue follow-up work for the same task there.
-2. **Open a PR.** After validation and the required second look, commit only the task's changes, push the task branch, and create a new PR targeting `main`. Follow *Pull Request Handoff*.
-3. **Merge.** Resolve required checks and review findings, then merge the PR into `main` under the repository's merge rules. Verify the merged state and report the PR link and merge commit. If blocked, report the specific blocker and current PR state.
+1. **Isolate.** Run `git fetch origin main` and create a new worktree with a new task branch from `origin/main` before editing. Keep task edits, validation, and commits in that worktree until merged.
+2. **Validate and commit.** Complete local validation and the required second look in the worktree, then commit only the task's changes on the task branch.
+3. **Merge to `main`.** Stay in the task worktree so conflicts never touch the primary checkout: run `git fetch origin main`, `git switch --detach origin/main`, and `git merge <task-branch>`, then re-run affected validation if `origin/main` moved. Push directly without `--force` using `git push origin HEAD:main`; if rejected because `origin/main` advanced, repeat from `git fetch origin main`. Run `git branch -d <task-branch>` in the worktree, then from outside it run `git -C <main-checkout> worktree remove <worktree>`, and fast-forward the primary checkout with `git -C <main-checkout> fetch origin main && git -C <main-checkout> merge --ff-only origin/main` only when it is clean and on `main`; leave a dirty checkout untouched. Verify `origin/main` contains the commit, then report the landed commit hash and any blocker or un-synced local checkout.
 
 ## Working a Change
 
 Every fix and feature goes through these steps, in order. What counts as proof, and where to run each kind of change, is in `openchamber-change-discipline` (*Proof*, *Where to run it*).
 
 1. **Reproduce.** Make the failure happen the way a user hits it, in the runtime that runs the code; for a feature, see what that runtime does today where the feature goes. Unreproduced goes to the report with what you tried before any fix.
-2. **Fix the cause.** The smallest change that removes it. A correctness problem you trip over is fixed in the same change when the fix is small, wherever it sits; one that would visibly grow the change or needs a maintainer decision goes to the report or its own pull request.
+2. **Fix the cause.** The smallest change that removes it. A correctness problem you trip over is fixed in the same change when the fix is small, wherever it sits; one that would visibly grow the change or needs a maintainer decision goes to the report or a separate follow-up change.
 3. **Prove it.** Run the same reproduction and watch it pass. Report what you ran and saw; a case you noticed and did not run is unfinished work, never a line in the report.
 4. **Second look.** The `review-changes` agent on the diff (`.opencode/agent/review-changes.md`), or a reviewer on another model where your tool has no such agent; one-line and text-only edits go without. Answer findings per `openchamber-change-discipline` (*Answering Review Findings*).
 5. **Hand off.** Complete *Development Workflow* and report the outcome.
@@ -59,7 +59,7 @@ Every native agent must support unified conversations when it is integrated. Rea
 ## Always-On Constraints
 
 - Do not modify `../opencode`; it is a separate repository.
-- User-requested repository changes authorize the Git and GitHub operations required by *Development Workflow*. Other Git or GitHub operations require an explicit user request.
+- User-requested repository changes authorize the Git operations required by *Development Workflow*. Other Git or GitHub operations, including pull requests, require an explicit user request.
 - Do not add dependencies unless explicitly requested.
 - Never add or log secrets, bearer tokens, pairing credentials, or sensitive user data.
 - Launch Google Chrome for automation with `--disable-features=MacAppCodeSignClone` (`scripts/perf/cdp.mjs` does). Without it each launch on macOS copies the 1.4 GB app into `$TMPDIR`, and a killed browser leaves the copy.
@@ -98,7 +98,7 @@ implementation skills unless a specialized subsystem has to be interpreted.
 
 ## Pull Request Handoff
 
-Before creating or updating a pull request, read `CONTRIBUTING.md` (*Pull Requests*) and fill `.github/PULL_REQUEST_TEMPLATE.md` with evidence for the final HEAD.
+Only when the user explicitly asks to create or update a pull request, read `CONTRIBUTING.md` (*Pull Requests*) and fill `.github/PULL_REQUEST_TEMPLATE.md` with evidence for the final HEAD.
 
 A **product decision** belongs to the maintainer and is settled before the code,
 never inside the diff. A product decision is anything where two reasonable people
