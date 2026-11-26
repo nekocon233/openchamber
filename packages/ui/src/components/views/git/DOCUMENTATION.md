@@ -59,8 +59,10 @@ operation contracts belong to the runtime APIs and source-control modules.
   as the binding's identity across worktrees.
 - The squash shortcut in Changes requires the compared head and a matching
   open, non-draft PR in the bound repository context. An exact lookup supplies
-  the target when the comparison picker's page lacks that head. The merge
-  confirmation reads stack detail when the comparison has no stack answer.
+  the target when the comparison picker's page lacks that head. Clicking the
+  squash shortcut dispatches directly without confirmation or a blocking stack
+  detail read; non-squash merge confirmations in PR detail still read stack
+  detail when detail has no stack answer yet.
 - A created change request is associated with the open session only when that
   session works in the Git view's directory. The view can show another worktree.
 - An automatically detected base can arrive after the form opens and updates

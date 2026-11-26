@@ -40,6 +40,8 @@ const { SourceBoardActions } = await import('./SourceBoardActions');
 const { toast } = await import('@/components/ui/toast');
 const { useTrackedItemsStore } = await import('@/stores/useTrackedItemsStore');
 const { trackedItemKey } = await import('@/lib/trackedItems/model');
+const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
+const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
 
 const CONTEXT: SourceControlReadContext = {
     provider: 'github', instance: 'github.com', directory: '/fixture/repository', repositoryId: 'repository-one',
@@ -61,6 +63,7 @@ let mergeGate: Promise<void> | null = null;
 let mergeFailure: Error | null = null;
 let mergeResult: SourceControlMergeMutationResult;
 let mergeCalls: MergeChangeRequestInput[] = [];
+let detailCalls = 0;
 let refreshes = 0;
 let completions: number[] = [];
 let sourceControl: SourceControlAPI;
@@ -71,13 +74,14 @@ const deferred = () => {
     return { promise, release };
 };
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-const render = async (pull = PULL, context: SourceControlReadContext | null = CONTEXT, returnOnSubmit = true) => {
+const render = async (pull = PULL, context: SourceControlReadContext | null = CONTEXT, returnOnSubmit = true, showSquashShortcut = false) => {
     root ??= createRoot(host);
     await act(async () => root?.render(
         <I18nProvider><RuntimeAPIContext.Provider value={apis}><SyncProvider sdk={sdk} directory="">
             <SourceBoardActions item={{ source: 'repository', reference: pull }} project={null} context={context}
                 onStartWorktree={() => { throw new Error('This test must never start a worktree'); }} onChanged={() => { refreshes++; }}
-                onMergeSubmitted={returnOnSubmit ? () => { completions.push(refreshes); } : undefined} />
+                onMergeSubmitted={returnOnSubmit ? () => { completions.push(refreshes); } : undefined}
+                showSquashShortcut={showSquashShortcut} />
         </SyncProvider></RuntimeAPIContext.Provider></I18nProvider>,
     ));
     await settle();
@@ -96,7 +100,7 @@ const dialog = () => {
 const confirm = () => click(button('Merge', dialog()));
 
 beforeEach(() => {
-    capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; mergeResult = { merged: true }; mergeCalls = []; refreshes = 0; completions = [];
+    capabilityFailure = false; capabilityGate = null; mergeGate = null; mergeFailure = null; mergeResult = { merged: true }; mergeCalls = []; detailCalls = 0; refreshes = 0; completions = [];
     initializeRuntimeEndpoint({ apiBaseUrl: 'http://source-board.test', runtimeKey: 'source-board-one' });
     useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
     rememberMergeMethod('squash');
@@ -112,6 +116,16 @@ beforeEach(() => {
                 mergeChangeRequests: true, forceMergeChangeRequests: true, mergeMethods: ['merge', 'squash', 'rebase'], ci: true,
             };
             return capabilities;
+        },
+        referenceDetail: async () => {
+            detailCalls++;
+            return {
+                connected: true,
+                detail: {
+                    number: PULL.number, comments: [], commentTotal: 0,
+                    pull: { changedFiles: 1, additions: 1, deletions: 0, reviewDecision: null, reviewers: [], commits: [], commitTotal: 0, stack: null },
+                },
+            };
         },
         changeRequestMerge: async input => {
             mergeCalls.push(structuredClone(input));
@@ -160,7 +174,7 @@ test('only the standard merge action is offered when the server advertises force
     expect(completions).toEqual([0]);
 });
 
-test('a scheduled squash keeps the squash button available and uses the plain auto-merge label', async () => {
+test('a scheduled squash keeps the squash button available and dispatches directly without confirmation', async () => {
     const waiting = { enabledAt: '2026-11-25T08:25:39Z', mergeMethod: 'SQUASH' };
     const item = { provider: CONTEXT.provider, instance: CONTEXT.instance, accountId: CONTEXT.accountId,
         kind: 'pull' as const, owner: PULL.sourceRepo.owner, repo: PULL.sourceRepo.repo, number: PULL.number };
@@ -175,31 +189,57 @@ test('a scheduled squash keeps the squash button available and uses the plain au
         const squash = button('Squash and merge');
         expect(squash.disabled).toBe(false);
         await click(squash);
-        expect(dialog().textContent).toContain('The current auto-merge will be cancelled');
-        expect(mergeCalls).toHaveLength(0);
-        await click(button('Squash and merge', dialog()));
         await settle();
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
         expect(mergeCalls).toHaveLength(1);
         expect(mergeCalls[0]).toMatchObject({ method: 'squash', cancel: waiting, target: { number: PULL.number, headSha: PULL.headSha } });
+        expect(detailCalls).toBe(0);
     } finally {
         await act(async () => useTrackedItemsStore.setState({ records: {} }));
     }
 });
 
+test('detail squash shortcut dispatches immediately without confirmation or stack lookup while merge commits still confirm', async () => {
+    const previous = useSourceControlProviderRegistry.getState();
+    const github = { ...githubLikeDescriptor(), features: { ...githubLikeDescriptor().features, referenceDetail: true } };
+    useSourceControlProviderRegistry.setState({ ordered: [github], byId: new Map([[github.id, github]]), status: 'ready', holdsList: true });
+    try {
+        rememberMergeMethod('merge');
+        await render(PULL, CONTEXT, true, true);
+        await click(button('Squash and merge'));
+        await settle();
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(detailCalls).toBe(0);
+        expect(mergeCalls).toHaveLength(1);
+        expect(mergeCalls[0]).toMatchObject({ method: 'squash', target: { number: PULL.number, headSha: PULL.headSha } });
+        expect(completions).toEqual([0]);
+
+        await click(button('Create a merge commit'));
+        expect(detailCalls).toBe(1);
+        expect(dialog().textContent).toContain('Merge pull request #17?');
+        expect(mergeCalls).toHaveLength(1);
+        await click(button('Cancel', dialog()));
+        expect(mergeCalls).toHaveLength(1);
+    } finally {
+        await act(async () => { useSourceControlProviderRegistry.setState(previous); });
+    }
+});
+
 test('canceling the merge confirmation never dispatches or refreshes', async () => {
+    rememberMergeMethod('merge');
     await render();
-    await click(button('Squash and merge'));
+    await click(button('Create a merge commit'));
     await click(button('Cancel', dialog()));
     expect(mergeCalls).toEqual([]);
     expect(refreshes).toBe(0);
     expect(completions).toEqual([]);
-    expect(button('Squash and merge').disabled).toBe(false);
+    expect(button('Create a merge commit').disabled).toBe(false);
 });
 
 test('a queued merge returns on dispatch and refreshes when its result arrives', async () => {
     mergeResult = { merged: false, outcome: 'queued' };
-    await render(); await click(button('Squash and merge'));
-    await click(button('Merge', dialog())); await settle();
+    await render(); await click(button('Squash and merge')); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(mergeCalls).toHaveLength(1);
     expect(refreshes).toBe(1);
     expect(completions).toEqual([0]);
@@ -208,7 +248,7 @@ test('a queued merge returns on dispatch and refreshes when its result arrives',
 test('dispatch returns before delivery and a reopened detail cannot submit the same PR twice', async () => {
     const gate = deferred(); mergeGate = gate.promise;
     await render(); await click(button('Squash and merge'));
-    await click(button('Merge', dialog()));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(mergeCalls).toHaveLength(1);
     expect(completions).toEqual([0]);
     expect(refreshes).toBe(0);
@@ -226,7 +266,7 @@ test('a failure after returning keeps repository-labelled feedback and releases 
     const gate = deferred(); mergeGate = gate.promise;
     mergeFailure = new Error('Background merge was refused');
     await render(); await click(button('Squash and merge'));
-    await click(button('Merge', dialog()));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(completions).toEqual([0]);
     await act(async () => root?.unmount()); root = null;
     await act(async () => { gate.release(); }); await settle();
@@ -247,13 +287,12 @@ test('loading or failed capabilities leave merge unavailable', async () => {
     expect(mergeCalls).toEqual([]);
 });
 
-test('repeated clicks share one confirmation and dispatch', async () => {
+test('repeated squash clicks dispatch once without confirmation', async () => {
     const gate = deferred(); mergeGate = gate.promise;
     await render();
     const merge = button('Squash and merge');
     await act(async () => { merge.click(); merge.click(); merge.click(); });
-    expect(dialog().textContent).toContain('Merge pull request #17?');
-    await confirm(); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(button('Squash and merge').disabled).toBe(true);
     expect(mergeCalls).toHaveLength(1);
     await act(async () => { gate.release(); }); await settle();
@@ -261,14 +300,30 @@ test('repeated clicks share one confirmation and dispatch', async () => {
     expect(button('Squash and merge').disabled).toBe(false);
 });
 
+test('repeated non-squash clicks share one confirmation and dispatch', async () => {
+    const gate = deferred(); mergeGate = gate.promise;
+    rememberMergeMethod('merge');
+    await render();
+    const merge = button('Create a merge commit');
+    await act(async () => { merge.click(); merge.click(); merge.click(); });
+    expect(dialog().textContent).toContain('Merge pull request #17?');
+    await confirm(); await settle();
+    expect(button('Create a merge commit').disabled).toBe(true);
+    expect(mergeCalls).toHaveLength(1);
+    await act(async () => { gate.release(); }); await settle();
+    expect(mergeCalls).toHaveLength(1);
+    expect(button('Create a merge commit').disabled).toBe(false);
+});
+
 test('changing the pull, head or binding while confirming cancels the old operation', async () => {
+    rememberMergeMethod('merge');
     for (const replacement of [
         { pull: { ...PULL, number: 18 }, context: CONTEXT },
         { pull: { ...PULL, headSha: 'b'.repeat(40) }, context: CONTEXT },
         { pull: PULL, context: { ...CONTEXT, bindingRevision: 4 } },
         { pull: PULL, context: { ...CONTEXT, directory: '/fixture/other' } },
     ]) {
-        await render(); await click(button('Squash and merge'));
+        await render(); await click(button('Create a merge commit'));
         await render(replacement.pull, replacement.context);
         expect(document.querySelector('[role="dialog"]')).toBeNull();
         expect(mergeCalls).toEqual([]);
@@ -277,7 +332,8 @@ test('changing the pull, head or binding while confirming cancels the old operat
 });
 
 test('a runtime switch with unchanged props cancels confirmation and sends nothing', async () => {
-    await render(); await click(button('Squash and merge'));
+    rememberMergeMethod('merge');
+    await render(); await click(button('Create a merge commit'));
     await act(async () => { switchRuntimeEndpoint({ apiBaseUrl: 'http://other-source-board.test', runtimeKey: 'source-board-two' }); });
     await settle();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -287,7 +343,8 @@ test('a runtime switch with unchanged props cancels confirmation and sends nothi
 
 test('provider failure refreshes once without retrying', async () => {
     mergeFailure = new Error('GitHub rejected the request');
-    await render(); await click(button('Squash and merge')); await confirm(); await settle();
+    await render(); await click(button('Squash and merge')); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(mergeCalls).toHaveLength(1);
     expect(refreshes).toBe(1);
     expect(button('Squash and merge').disabled).toBe(false);
@@ -298,7 +355,7 @@ for (const failed of [false, true]) {
     test(`a late ${failed ? 'failure' : 'success'} cannot refresh a different pull or unlock a duplicate dispatch`, async () => {
         const gate = deferred(); mergeGate = gate.promise;
         mergeFailure = failed ? new Error('Old pull request failed') : null;
-        await render(PULL, CONTEXT, false); await click(button('Squash and merge')); await confirm();
+        await render(PULL, CONTEXT, false); await click(button('Squash and merge'));
         expect(mergeCalls).toHaveLength(1);
         await render({ ...PULL, number: 18 }, CONTEXT, false);
         await click(button('Squash and merge'));

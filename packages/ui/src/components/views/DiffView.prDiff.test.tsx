@@ -1,6 +1,7 @@
 import React, { act } from 'react';
 import { expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
+import { z } from 'zod';
 import type { GitStatus } from '@/lib/api/types';
 import type {
   ChangeRequest, PageResult, Project, SourceControlAuthStatus, SourceControlIdentity, SourceControlReadContext, SourceControlUser,
@@ -35,6 +36,20 @@ const PR: ChangeRequest = {
 };
 
 const STATUS: GitStatus = { current: 'feature-17', tracking: null, ahead: 0, behind: 0, files: [], isClean: true };
+const mergeRequestSchema = z.object({
+  repositoryId: z.string(),
+  bindingRevision: z.number(),
+  primaryRemote: z.string(),
+  method: z.string(),
+  target: z.object({
+    project: z.object({ owner: z.string(), name: z.string() }),
+    number: z.number(),
+    head: z.string(),
+    base: z.string(),
+    headSha: z.string(),
+  }),
+});
+type MergeRequestBody = z.infer<typeof mergeRequestSchema>;
 
 const verifyPullRequestDiff = async (servesDiff: boolean) => {
   const dom = new Window({ url: 'http://localhost' });
@@ -54,7 +69,8 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
   }
   const originalFetch = globalThis.fetch;
   const paths: string[] = [];
-  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+  const mergePayloads: MergeRequestBody[] = [];
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
     paths.push(url.pathname);
     if (url.pathname === '/api/source-control/binding') return Response.json(BINDING);
@@ -68,13 +84,25 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
         projects: true, issues: true, changeRequests: true, draftChangeRequests: true, mergeChangeRequests: true,
         mergeMethods: ['merge', 'squash'], ci: true });
     }
-    if (url.pathname.endsWith('/references/detail')) {
-      expect(url.searchParams.get('number')).toBe('17');
-      const upper = { number: PR.number, title: PR.title, url: PR.url, state: PR.state, draft: PR.draft, head: PR.head };
-      const lower = { ...upper, number: 16, head: 'feature-16', url: PROJECT.url + '/pull/16' };
-      return Response.json({ connected: true, detail: { number: PR.number, comments: [], commentTotal: 0,
-        pull: { changedFiles: 1, additions: 0, deletions: 0, reviewDecision: null, reviewers: [], commits: [], commitTotal: 0,
-          stack: { number: 8, base: PR.base, layers: [lower, upper] } } } });
+    if (url.pathname.endsWith('/pr/merge')) {
+      const body = mergeRequestSchema.parse(await new Response(init?.body).json());
+      mergePayloads.push(body);
+      return Response.json({
+        status: 'succeeded',
+        actor: { provider: 'github', instance: 'github.com', providerAccountId: 'github.com#7' },
+        replayed: false,
+        result: { merged: true },
+        target: {
+          repositoryId: body.repositoryId,
+          bindingRevision: body.bindingRevision,
+          primaryRemote: body.primaryRemote,
+          project: { id: PROJECT.id, owner: PROJECT.owner, name: PROJECT.name },
+          number: PR.number,
+          head: PR.head,
+          base: PR.base,
+          headSha,
+        },
+      });
     }
     if (url.pathname.endsWith('/pr/review/state')) {
       return Response.json({ connected: true, viewerIsAuthor: false, headSha, draft: null, threads: [], truncated: false });
@@ -135,11 +163,14 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
       const squash = container.querySelector<HTMLButtonElement>('button[aria-label="Squash and merge"]');
       expect(squash).not.toBeNull();
       await act(async () => { squash?.click(); });
-      const confirmation = document.querySelector('[role="dialog"]');
-      expect(confirmation?.textContent).toContain('Merge pull request #17?');
-      expect(confirmation?.textContent).toContain('#16');
-      expect(confirmation?.textContent).toContain('squashed into one commit on main');
-      expect(paths).not.toContain('/api/source-control/github/pr/merge');
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(paths).not.toContain('/api/source-control/github/references/detail');
+      expect(paths).toContain('/api/source-control/github/pr/merge');
+      expect(mergePayloads).toHaveLength(1);
+      expect(mergePayloads[0]).toMatchObject({
+        method: 'squash',
+        target: { project: { owner: 'team', name: 'project' }, number: 17, head: 'feature-17', base: 'main', headSha },
+      });
       return;
     }
     expect(container.textContent).toContain("GitHub doesn't serve pull request diffs");
@@ -159,4 +190,4 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
 };
 
 test('a host without change-request diffs says so and offers no retry', () => verifyPullRequestDiff(false), 30_000);
-test('PR Changes reads one review draft and names the stack in squash confirmation', () => verifyPullRequestDiff(true), 30_000);
+test('PR Changes reads one review draft and dispatches squash directly without confirmation', () => verifyPullRequestDiff(true), 30_000);

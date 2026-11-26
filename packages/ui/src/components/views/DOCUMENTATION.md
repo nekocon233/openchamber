@@ -270,8 +270,9 @@ owns capability gating, target changes and pending-operation behavior.
 
 Merges, approvals and requests for changes in project details and linked previews
 invoke their existing Back action immediately after dispatch. This includes
-verdicts that submit a pending review. Merge confirmation precedes dispatch.
-Cancelling it keeps the detail. The navigation clears only the
+verdicts that submit a pending review. Squash dispatches directly without a
+confirmation dialog; other merge methods still confirm before dispatch, and
+cancelling keeps the detail. The navigation clears only the
 submitted detail's selection and preserves the destination's retained state.
 Progress and results continue in repository-labelled toasts after returning;
 failures and queued merges never navigate again. Unposted text remains saved.

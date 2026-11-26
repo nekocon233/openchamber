@@ -142,33 +142,36 @@ function PullRequestMergeActionsView({
         const canReport = () => onMergeSubmitted ? action.isRuntimeCurrent() : isCurrent();
         const resultReference = onMergeSubmitted ? `${openPull.sourceRepo.owner}/${openPull.sourceRepo.repo} ${reference}` : reference;
         try {
-            let confirmedStack = stack;
-            if (placement && confirmedStack === undefined && descriptor.features.referenceDetail) {
-                setBusy(true);
-                const result = await sourceControl.referenceDetail(context, pullRef);
-                if (!isCurrent()) return;
-                setBusy(false);
-                if (!result.connected) throw new Error(t('sourceBoard.link.disconnected'));
-                if (!result.detail?.pull) throw new Error(t('sourceBoard.link.notFound'));
-                confirmedStack = result.detail.pull.stack;
+            let landsBelow = landsWithIt({ stack: stack ?? null, number: openPull.number, method });
+            if (method !== 'squash') {
+                let confirmedStack = stack;
+                if (placement === 'detail' && confirmedStack === undefined && descriptor.features.referenceDetail) {
+                    setBusy(true);
+                    const result = await sourceControl.referenceDetail(context, pullRef);
+                    if (!isCurrent()) return;
+                    setBusy(false);
+                    if (!result.connected) throw new Error(t('sourceBoard.link.disconnected'));
+                    if (!result.detail?.pull) throw new Error(t('sourceBoard.link.notFound'));
+                    confirmedStack = result.detail.pull.stack;
+                }
+                landsBelow = landsWithIt({ stack: confirmedStack ?? null, number: openPull.number, method });
+                const methodNote = t(MERGE_METHOD_KEYS[method], { base: openPull.base });
+                const stackNote = submits
+                    ? submitsBelow
+                    : landsBelow.length === 0
+                        ? null
+                        : landsBelow.length === 1
+                            ? t('stacks.merge.alsoBelow.one', { reference: referenceOf(landsBelow[0].number) })
+                            : t('stacks.merge.alsoBelow.other', { count: landsBelow.length, references: landsBelow.map((layer) => referenceOf(layer.number)).join(', ') });
+                const approved = await confirmation.confirm({
+                    title: submits && submitsBelow
+                        ? t(landsBelow.length === 1 ? 'sourceBoard.submit.confirmTitleWithChain.one' : 'sourceBoard.submit.confirmTitleWithChain.other', { reference, count: landsBelow.length })
+                        : t(`sourceBoard.merge.confirmTitle.${descriptor.terminology.changeRequest}`, { reference }),
+                    message: [stackNote, methodNote].filter(Boolean).join('\n\n'),
+                    action: t(submits ? MERGE_METHOD_LABELS.submit : 'sourceBoard.actions.merge'),
+                });
+                if (!approved || !isCurrent()) return;
             }
-            const landsBelow = landsWithIt({ stack: confirmedStack ?? null, number: openPull.number, method });
-            const methodNote = t(MERGE_METHOD_KEYS[method], { base: openPull.base });
-            const stackNote = submits
-                ? submitsBelow
-                : landsBelow.length === 0
-                    ? null
-                    : landsBelow.length === 1
-                        ? t('stacks.merge.alsoBelow.one', { reference: referenceOf(landsBelow[0].number) })
-                        : t('stacks.merge.alsoBelow.other', { count: landsBelow.length, references: landsBelow.map((layer) => referenceOf(layer.number)).join(', ') });
-            const approved = await confirmation.confirm({
-                title: submits && submitsBelow
-                    ? t(landsBelow.length === 1 ? 'sourceBoard.submit.confirmTitleWithChain.one' : 'sourceBoard.submit.confirmTitleWithChain.other', { reference, count: landsBelow.length })
-                    : t(`sourceBoard.merge.confirmTitle.${descriptor.terminology.changeRequest}`, { reference }),
-                message: [stackNote, cancel ? t('sourceBoard.merge.cancelBeforeSquash') : null, methodNote].filter(Boolean).join('\n\n'),
-                action: t(toolbar || cancel ? MERGE_METHOD_LABELS.squash : submits ? MERGE_METHOD_LABELS.submit : 'sourceBoard.actions.merge'),
-            });
-            if (!approved || !isCurrent()) return;
             setBusy(true);
             const request = sourceControl.changeRequestMerge({
                 ...context,
@@ -250,7 +253,7 @@ function PullRequestMergeActionsView({
         </ButtonTooltip>
     ) : null;
 
-    if (toolbar) return <>{squashButton}{confirmation.dialog}</>;
+    if (toolbar) return squashButton;
     if (!openPull) return null;
     return (
         <>
