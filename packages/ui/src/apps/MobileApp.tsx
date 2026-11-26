@@ -1261,7 +1261,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   useGuestMarksSync();
   useBrowserProviderSync();
   useAgentMemorySync(currentDirectory || null);
-  useRouter();
+  useRouter({ pwaSessionRestoreReady: isInitialized });
   useNativePushRegistration({ enabled: isNativeMobileApp && isConnected });
   useKeepScreenAwake(isConnected);
   useNativeWidgetSync({ enabled: isNativeMobileApp && isConnected && isInitialized });

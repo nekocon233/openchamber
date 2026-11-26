@@ -191,6 +191,39 @@ describe('native live overlay', () => {
     expect(overlay(history, live)[0]).toBe(history[0]);
   });
 
+  it('keeps an unsettled live record with running tools over completed history whose tools did not complete', () => {
+    const runningQuestion = {
+      id: 'p_q',
+      sessionID: 'ncl_1',
+      messageID: 'msg',
+      callID: 'ask_1',
+      type: 'tool',
+      tool: 'question',
+      state: { status: 'running', input: {}, title: 'Question', time: { start: 1 } },
+    };
+    const live = [{ ...overlayRecord('msg', 'assistant', 1), parts: [runningQuestion] }];
+    const historyRunning = [{ ...overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } }), parts: [runningQuestion] }];
+    const historyErrored = [{
+      ...overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } }),
+      parts: [{ ...runningQuestion, state: { status: 'error', input: {}, error: 'The turn ended before this tool finished.', time: { start: 1, end: 2 } } }],
+    }];
+    const historyMissingTool = [overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } })];
+    const historyRealError = [{
+      ...overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } }),
+      parts: [{ ...runningQuestion, state: { status: 'error', input: {}, error: 'User declined the tool', time: { start: 1, end: 2 } } }],
+    }];
+    const historyCompleted = [{
+      ...overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } }),
+      parts: [{ ...runningQuestion, state: { status: 'completed', input: {}, output: 'Answered', title: 'Question', metadata: {}, time: { start: 1, end: 2 } } }],
+    }];
+
+    expect(overlay(historyRunning, live)[0]).toBe(live[0]);
+    expect(overlay(historyErrored, live)[0]).toBe(live[0]);
+    expect(overlay(historyMissingTool, live)[0]).toBe(live[0]);
+    expect(overlay(historyRealError, live)[0]).toBe(historyRealError[0]);
+    expect(overlay(historyCompleted, live)[0]).toBe(historyCompleted[0]);
+  });
+
   it('keeps a completed live record over history', () => {
     const live = [overlayRecord('msg', 'assistant', 1, {
       time: { created: 1, completed: 3 },

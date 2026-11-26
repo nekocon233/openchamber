@@ -42,7 +42,6 @@ export async function resyncDirectoryAfterReconnect(
   try {
     const current = store.getState()
     const activeCandidateSessionIds = getActiveSessionCandidateIds(directory, current)
-    const initialSessionById = new Map(current.session.map((session) => [session.id, session] as const))
     const knownSessionIds = current.session.map((session) => session.id)
     const statusCandidateSessionIds = Array.from(new Set([
       ...activeCandidateSessionIds,
@@ -63,21 +62,40 @@ export async function resyncDirectoryAfterReconnect(
     const snapshotActiveSessionIds = Object.entries(statusSnapshot?.statuses ?? {})
       .filter(([, status]) => status.type === "busy" || status.type === "retry")
       .map(([sessionId]) => sessionId)
-    const currentSessionById = new Map(store.getState().session.map((session) => [session.id, session] as const))
+    const postStatusState = store.getState()
+    const currentSessionById = new Map(postStatusState.session.map((session) => [session.id, session] as const))
+    const isLiveSession = (sessionId: string) => (
+      !removals.removed.has(sessionId)
+      && !wasSessionRemovedSince(sessionId, removalBaseline)
+      && !currentSessionById.get(sessionId)?.time?.archived
+    )
     const candidateSessionIds = Array.from(new Set([
       ...activeCandidateSessionIds,
       ...snapshotActiveSessionIds,
-    ])).filter((sessionId) => (
-      !removals.removed.has(sessionId)
-      && !wasSessionRemovedSince(sessionId, removalBaseline)
-      && (
-      !initialSessionById.has(sessionId)
-      || currentSessionById.get(sessionId) === initialSessionById.get(sessionId)
+    ])).filter(isLiveSession)
+    const storedRequestSessionIds = [
+      ...Object.keys(postStatusState.form),
+      ...Object.keys(postStatusState.permission),
+    ]
+    const requestCandidateSessionIds = Array.from(new Set([
+      ...candidateSessionIds,
+      ...statusCandidateSessionIds,
+      ...storedRequestSessionIds,
+    ])).filter(isLiveSession)
+    if (candidateSessionIds.length === 0 && storedRequestSessionIds.length === 0) {
+      const idleNativeRequestSessionIds = requestCandidateSessionIds.filter(isNativeSessionId)
+      if (idleNativeRequestSessionIds.length === 0) return succeeded
+      const requestsSucceeded = await resyncBlockingRequestsForDirectory(
+        directory,
+        store,
+        idleNativeRequestSessionIds,
+        { includePermissions: false, isCurrent },
       )
-    ))
-    if (candidateSessionIds.length === 0) return succeeded
+      if (!isCurrent()) return
+      return succeeded && (requestsSucceeded ?? true)
+    }
     const baselineSessionById = new Map(
-      store.getState().session.map((session) => [session.id, session] as const),
+      postStatusState.session.map((session) => [session.id, session] as const),
     )
 
     if (reason !== "stream-replayed") await Promise.all(candidateSessionIds.map(async (sessionId) => {
@@ -126,7 +144,9 @@ export async function resyncDirectoryAfterReconnect(
     }))
     if (!isCurrent()) return
 
-    const requestsSucceeded = await resyncBlockingRequestsForDirectory(directory, store, candidateSessionIds, { isCurrent })
+    const requestsSucceeded = requestCandidateSessionIds.length === 0
+      ? true
+      : await resyncBlockingRequestsForDirectory(directory, store, requestCandidateSessionIds, { isCurrent })
     if (!isCurrent()) return
 
     ingestDirectoryStateIntoRoutingIndex(routingIndex, directory, store.getState())

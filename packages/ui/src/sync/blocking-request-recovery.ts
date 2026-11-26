@@ -2,6 +2,7 @@ import type { StoreApi } from "zustand"
 import type { FormRequest, PermissionRequest } from "@/lib/opencode/model"
 import { isVSCodeRuntime } from "@/lib/desktop"
 import { ChildStoreManager, type DirectoryStore } from "./child-store"
+import { readDirectoryFormSnapshot } from "./directory-recovery-snapshots"
 import { readNativeForms } from "./native-directory-snapshots"
 import { isNativeSessionId } from "@/lib/native-agents/ids"
 import { opencodeClient } from "@/lib/opencode/client"
@@ -47,30 +48,36 @@ export async function resyncBlockingRequestsForDirectory(
   ])
   if (candidateIds.size === 0) return
   const candidates = Array.from(candidateIds)
+  const needsOpenCode = candidates.some((sessionId) => !isNativeSessionId(sessionId))
+  const needsNative = candidates.some((sessionId) => isNativeSessionId(sessionId))
 
   try {
-    const beforeSignatures = new Map(
-      candidates.map((sessionId) => [sessionId, requestSignature(before.form[sessionId])]),
-    )
-    const [pendingForms, nativeForms] = await Promise.all([
-      opencodeClient.listPendingForms({ directories: [directory] }),
-      readNativeForms(directory),
-    ])
+    let openCodeOk = true
+    let nativeOk = true
+    const snapshot = await readDirectoryFormSnapshot(store, async () => {
+      const [pendingForms, nativeForms] = await Promise.all([
+        needsOpenCode
+          ? opencodeClient.listPendingForms({ directories: [directory] }).catch(() => { openCodeOk = false; return null })
+          : Promise.resolve<FormRequest[]>([]),
+        needsNative
+          ? readNativeForms(directory).then((forms) => { if (forms === null) nativeOk = false; return forms })
+          : Promise.resolve<FormRequest[]>([]),
+      ])
+      return [
+        ...(pendingForms ?? Object.values(before.form).flat().filter((form) => !isNativeSessionId(form.sessionID))),
+        ...(nativeForms ?? Object.values(before.form).flat().filter((form) => isNativeSessionId(form.sessionID))),
+      ]
+    })
     if (!isCurrent()) return
-    // A failed native read leaves the native sessions' questions as they are.
-    const settledCandidates = nativeForms === null
-      ? candidates.filter((sessionId) => !isNativeSessionId(sessionId))
-      : candidates
+    if (!openCodeOk || !nativeOk) succeeded = false
+    // A failed backend read leaves that backend's sessions' questions as they are.
+    const settledCandidates = candidates.filter((sessionId) => (
+      isNativeSessionId(sessionId) ? nativeOk : openCodeOk
+    ))
     const grouped: Record<string, FormRequest[]> = {}
-    for (const form of [...pendingForms, ...(nativeForms ?? [])]) {
-      if (!form?.id || !form.sessionID) continue
-      if (!candidateIds.has(form.sessionID)) continue
-      const list = grouped[form.sessionID]
-      if (list) list.push(form)
-      else grouped[form.sessionID] = [form]
-    }
-    for (const sessionId of Object.keys(grouped)) {
-      grouped[sessionId].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    for (const sessionId of settledCandidates) {
+      const forms = snapshot[sessionId]
+      if (forms && forms.length > 0) grouped[sessionId] = forms
     }
 
     for (const [sessionId, forms] of Object.entries(grouped)) {
@@ -91,24 +98,25 @@ export async function resyncBlockingRequestsForDirectory(
     }
 
     store.setState((state: DirectoryStore) => {
-      const merged = { ...state.form }
-      for (const [sessionId, forms] of Object.entries(grouped)) {
-        merged[sessionId] = forms
-      }
+      let merged: Record<string, FormRequest[]> | null = null
+      const draft = () => (merged ??= { ...state.form })
       for (const sessionId of settledCandidates) {
-        if (grouped[sessionId]) continue
-        const beforeSignature = beforeSignatures.get(sessionId) ?? ""
-        const currentSignature = requestSignature(state.form[sessionId])
-        if (currentSignature !== beforeSignature) continue
-        delete merged[sessionId]
+        const next = grouped[sessionId]
+        const existing = state.form[sessionId]
+        if (next && next.length > 0) {
+          if (existing && JSON.stringify(existing) === JSON.stringify(next)) continue
+          draft()[sessionId] = next
+        } else if (sessionId in state.form) {
+          delete draft()[sessionId]
+        }
       }
-      return { form: merged }
+      return merged ? { form: merged } : state
     })
   } catch {
     succeeded = false
   }
 
-  if (options?.includePermissions === false) return
+  if (options?.includePermissions === false || !needsOpenCode) return succeeded
 
   try {
     const beforeSignatures = new Map(

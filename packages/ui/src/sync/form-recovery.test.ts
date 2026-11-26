@@ -7,31 +7,34 @@ const message = (role: "user" | "assistant", parts: Part[] = []) => ({
   parts,
 })
 
-const formTool = (status: "pending" | "running" | "completed"): Part => {
+const formTool = (status: "pending" | "running" | "completed", tool: "question" | "plan_exit" = "question"): Part => {
   const state = status === "pending"
     ? { status: "pending" as const, input: {}, raw: "" }
     : status === "running"
       ? { status: "running" as const, input: {}, time: { start: 1 } }
       : { status: "completed" as const, input: {}, output: "", time: { start: 1, end: 2 } }
   return {
-    id: `tool-${status}`,
+    id: `tool-${tool}-${status}`,
     sessionID: "ses_1",
     messageID: "assistant-1",
     type: "tool",
-    callID: `call-${status}`,
-    tool: "question",
+    callID: `call-${tool}-${status}`,
+    tool,
     state,
   }
 }
 
 describe("hasActiveFormToolInCurrentTurn", () => {
-  test("detects a pending or running form in the current turn", () => {
+  test("detects a pending or running question or plan_exit form in the current turn", () => {
     expect(hasActiveFormToolInCurrentTurn([message("user"), message("assistant", [formTool("pending")])])).toBe(true)
     expect(hasActiveFormToolInCurrentTurn([message("user"), message("assistant", [formTool("running")])])).toBe(true)
+    expect(hasActiveFormToolInCurrentTurn([message("user"), message("assistant", [formTool("pending", "plan_exit")])])).toBe(true)
+    expect(hasActiveFormToolInCurrentTurn([message("user"), message("assistant", [formTool("running", "plan_exit")])])).toBe(true)
   })
 
   test("ignores completed forms and active forms from an older turn", () => {
     expect(hasActiveFormToolInCurrentTurn([message("assistant", [formTool("completed")])])).toBe(false)
+    expect(hasActiveFormToolInCurrentTurn([message("assistant", [formTool("completed", "plan_exit")])])).toBe(false)
     expect(hasActiveFormToolInCurrentTurn([
       message("assistant", [formTool("running")]),
       message("user"),

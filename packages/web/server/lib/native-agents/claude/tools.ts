@@ -5,6 +5,7 @@ import { claudeBashFileEntry, claudeFileEntry, fileDiffMetadata } from '../file-
 import type { ClaudeHunk } from '../file-diff.js';
 
 const opaqueJson = z.custom<JsonValue>(() => true);
+export const UNFINISHED_TOOL_ERROR = 'The turn ended before this tool finished.';
 
 const bashInput = z.object({ command: z.string(), description: z.string().optional(), timeout: z.number().optional() }).catchall(opaqueJson.optional());
 const readInput = z.object({ file_path: z.string(), offset: z.number().optional(), limit: z.number().optional() }).catchall(opaqueJson.optional());

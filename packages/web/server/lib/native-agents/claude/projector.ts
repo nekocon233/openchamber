@@ -247,7 +247,7 @@ export interface ClaudeProjectionOptions {
 
 export interface ClaudeProjection {
   applyEntry: (rawEntry: ClaudeRawEntry) => string[];
-  settleOpenTools: (reason: string) => string[];
+  settleOpenTools: (reason: string, options?: { keepCurrentTurn?: boolean | undefined }) => string[];
   applyToolResults: (rawEntry: ClaudeRawEntry) => void;
   applyStreamEvent: (rawFrame: ClaudeRawEntry) => ClaudeStreamOutcome;
   applyResult: (rawMetadata: ClaudeResultMetadata) => string[];
@@ -587,7 +587,7 @@ export const createClaudeProjection = ({
     const command = soleText === undefined ? null : typedCommandOf(soleText);
     if (command !== null) {
       if (entry.isCompletedLocalCommand !== true) return;
-      if (command.split(' ')[0] === COMPACT_COMMAND) return;
+      if (command.split(' ')[0] === COMPACT_COMMAND || command.split(' ')[0] === '/model') return;
       const record = startUserMessage(claudeUserMessageId(entry.uuid), time);
       applyUserContent(record, { kind: 'text', text: command }, time);
       changed.push(record.info.id);
@@ -799,9 +799,11 @@ export const createClaudeProjection = ({
     return none;
   };
 
-  const settleTools = (reason: string): string[] => {
+  const settleTools = (reason: string, keepCurrentTurn = false): string[] => {
     const changed: string[] = [];
+    const activeParentId = keepCurrentTurn ? currentUser?.info.id ?? null : null;
     for (const [toolUseId, { record, part }] of toolParts) {
+      if (activeParentId !== null && record.info.parentID === activeParentId) continue;
       upsertPart(record, buildToolPart({
         id: part.id,
         sessionID: sessionId,
@@ -883,9 +885,7 @@ export const createClaudeProjection = ({
       return changed;
     },
 
-    settleOpenTools(reason) {
-      return settleTools(reason);
-    },
+    settleOpenTools(reason, options) { return settleTools(reason, options?.keepCurrentTurn); },
 
     applyToolResults(rawEntry) {
       const parsed = entrySchema.safeParse(rawEntry);

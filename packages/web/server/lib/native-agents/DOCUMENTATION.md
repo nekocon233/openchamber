@@ -607,10 +607,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
   Replies before and after it keep distinct message ids across live updates
   and history reads, so reconciliation cannot merge them across the marker.
 - A completed history assistant record supersedes a live copy of the same id
-  that never observed the turn finish. The live copy may still be an
-  in-progress projection with unfinished tools; the transcript is the settled
-  state. A live record that is itself completed keeps its parts and only takes
-  missing tokens or contextWindow from history.
+  that never observed the turn finish, provided history is actually settled: if
+  history still carries a running tool or a live running tool is missing from
+  history, still running there, or only synthetically settled as unfinished,
+  overlay keeps the live record so in-flight tools (such as Claude
+  `AskUserQuestion` or `ExitPlanMode`) are not overwritten by a partial
+  transcript read. Real tool completions and real tool errors in history still
+  supersede the unsettled live copy. A live record that is itself completed keeps
+  its parts and only takes missing tokens or contextWindow from history.
 - Every `item/started` and `item/completed` re-projects the running turn with
   the history projector; agent text streams as deltas. The live turn owns each
   item's `startedAtMs` and `completedAtMs` (receipt time for older CLIs), so a
@@ -965,10 +969,10 @@ while a turn or background task is running fails with
   carrying `<local-command-stderr>` or `<local-command-stdout>Compaction canceled.</local-command-stdout>`)
   from the raw transcript for both pre-compaction segments and the current tail
   so reloaded history matches the live `ncl_k_<entry uuid>` failure notice. Only a
-  command entry marked `isCompletedLocalCommand` came from a prompt. The CLI
-  writes the same tags unmarked for commands it runs itself, such as the
-  `/model` a model switch between turns records, and those stay out of the
-  conversation.
+  command entry marked `isCompletedLocalCommand` came from a prompt, and `/model`
+  (which the SDK also marks `isCompletedLocalCommand` when `setModel` runs between
+  turns) is filtered alongside `/compact` and unmarked local commands so internal
+  model switches stay out of the conversation.
 - A Codex `contextCompaction` item becomes the marker `ncx_k_<TK>_<item id>`.
   A /compact runs as a turn of its own, so a compaction that follows the
   turn's prompt is marked `auto`.

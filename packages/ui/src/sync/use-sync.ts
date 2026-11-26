@@ -1,5 +1,5 @@
 import type { State } from "./types"
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useRef } from "react"
 import type { Message, Part } from "@/lib/opencode/model"
 import { opencodeClient } from "@/lib/opencode/client"
 import { Binary } from "./binary"
@@ -117,10 +117,12 @@ export function useSync() {
   const messageLoader = useSessionMessageLoader()
   const runtimeKey = getRuntimeKey()
   const touch = useSessionCacheTouch()
+  const directoryRef = useRef(directory)
+  directoryRef.current = directory
 
   const recoverPendingQuestions = useCallback(
     async (sessionID: string, directoryOverride?: string): Promise<boolean> => {
-      const selectedDirectory = directoryOverride || directory
+      const selectedDirectory = directoryOverride || directoryRef.current
       if (!sessionID || !selectedDirectory || getRuntimeKey() !== runtimeKey) return false
       const targetDirectory = await resolveSessionReadDirectory(sessionID, selectedDirectory, captureRuntimeInstance(), sessionReadDirectorySources)
       if (!targetDirectory) return false
@@ -128,13 +130,15 @@ export function useSync() {
         priority: "selected",
         reason: "selected-session",
       })
+      const isCurrent = () => getRuntimeKey() === runtimeKey && childStores.children.get(targetDirectory) === targetStore
       await resyncBlockingRequestsForDirectory(targetDirectory, targetStore, [sessionID], {
         includePermissions: false,
+        isCurrent,
       })
-      if (getRuntimeKey() !== runtimeKey) return false
+      if (!isCurrent()) return false
       return (targetStore.getState().form[sessionID]?.length ?? 0) > 0
     },
-    [childStores, directory, runtimeKey],
+    [childStores, runtimeKey],
   )
 
   const keyFor = useCallback(

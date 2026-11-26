@@ -1,5 +1,5 @@
 import type { Message, Part, Session } from "@/lib/opencode/model"
-import { isQuestionTool } from "@/lib/opencode/tools"
+import { isQuestionTool, normalizeToolName } from "@/lib/opencode/tools"
 import { normalizePath } from "@/lib/pathNormalization"
 
 type MessageRecord = {
@@ -15,7 +15,8 @@ export const resolveRecoveryDirectory = (
 ): string | null => normalizePath(session?.directory ?? null) ?? normalizePath(fallback)
 
 const isActiveFormTool = (part: Part): boolean => {
-  if (part.type !== "tool" || !isQuestionTool(part.tool)) return false
+  if (part.type !== "tool") return false
+  if (!isQuestionTool(part.tool) && normalizeToolName(part.tool) !== "plan_exit") return false
   const status = part.state.status
   return status === "pending" || status === "running"
 }
