@@ -192,6 +192,35 @@ describe('Antigravity native store', () => {
     expect(replies[1].info.contextWindow).toBeUndefined();
   });
 
+  it.each([
+    ['with a configured window', '1a07da010420c0843d', 1_000_000],
+    ['without a configured window', '', undefined],
+  ])('pairs custom API usage %s with that generation only', async (_name, customModel, window) => {
+    const { home, directory, registry, writeSummary, writeTranscript } = setup();
+    writeSummary();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Review the sample' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Finished', model: 'MODEL_GOOGLE_GEMINI_INTERNAL_BYOM',
+        input_tokens: 11_000, cache_read_tokens: 227_990, output_tokens: 820 }),
+    ]);
+    fs.mkdirSync(path.join(home, 'conversations'));
+    const db = new DatabaseSync(path.join(home, 'conversations', `${NATIVE_ID}.db`));
+    db.exec('create table gen_metadata (idx integer primary key, data blob)');
+    const insert = db.prepare('insert into gen_metadata values (?, ?)');
+    // The local estimate is 1,166,546 / 934,464. Field 27 supplies the API model configuration.
+    insert.run(17, Buffer.from(`0a0c4a0a520808d2994720c08439120101${customModel}`, 'hex'));
+    insert.run(18, Buffer.from('0a0c4a0a520808d2994720c084391201021a07da010420c0843d', 'hex'));
+    db.close();
+
+    const store = createAntigravityStore({ registry, home });
+    const history = await store.loadHistory(SESSION_ID, NATIVE_ID, directory);
+    const reply = history.records.find((record) => record.info.role === 'assistant');
+    expect(reply.info.tokens.total).toBe(239_810);
+    expect(reply.info.metadata).toMatchObject({ nativeContextSource: 'provider' });
+    expect(reply.info.contextWindow).toBe(window);
+    expect(reply.info.contextCompaction).toBeUndefined();
+  });
+
   it('projects only indexed direct-child reports and the indexed parent task', async () => {
     const { home, directory, registry, writeSummary, writeTranscript } = setup();
     const child = '410d8822-277d-48ee-a2eb-42b5c19688dc';

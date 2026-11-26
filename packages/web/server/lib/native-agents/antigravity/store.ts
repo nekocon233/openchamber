@@ -14,6 +14,7 @@ import type { NativeRegistry, RegistryListedSession, RegistrySessionEntry } from
 import { parseAgyTranscript } from './protocol.js';
 import type { AgyParsedTranscript, AgyTranscriptStep } from './protocol.js';
 import { projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
+import type { AgyCompletedGeneration } from './projector.js';
 import { agySavedTasks } from './tasks.js';
 import type { AgySavedTask, AgySavedTaskRecord } from './tasks.js';
 import { agyInteractionHistory } from './interaction-proposals.js';
@@ -21,7 +22,7 @@ import type { AntigravityProposal } from './decisions.js';
 import { restoreAntigravityMeasurements } from './measurements.js';
 import { antigravityStatisticsRecords } from './statistics.js';
 import type { AgyStatisticsRecord } from './statistics.js';
-import { readAgyCompactionBudget } from './context-metadata.js';
+import { AGY_CUSTOM_API_MODEL, readAgyGenerationContext } from './context-metadata.js';
 
 export type AgyStoreRegistry = Pick<
   NativeRegistry,
@@ -90,7 +91,7 @@ export interface AgyStore {
   taskSnapshot: (sessionId: string, nativeId: string, directory: string) => Promise<AgyTaskSnapshot | null>;
   taskOutput: (sessionId: string, nativeId: string, directory: string, taskId: string, generation: string) => Promise<AgyTaskOutputResult>;
   loadHistory: (sessionId: string, nativeId: string, directory: string) => Promise<AgyHistoryResult | null>;
-  completedGenerations: (nativeId: string) => AgyTranscriptStep[];
+  completedGenerations: (nativeId: string) => AgyCompletedGeneration[];
   finalResponse: (
     nativeId: string,
     userStepIndex: number | null,
@@ -573,9 +574,9 @@ export const createAntigravityStore = ({
       } catch {
         children = { childSessions: [], complete: false };
       }
-      const generationStep = transcript.entries.findLast((item) => item.type === 'PLANNER_RESPONSE' && item.status === 'DONE')?.step_index;
-      const budget = readAgyCompactionBudget(root, nativeId, generationStep);
-      const contextReading = budget && generationStep !== undefined ? { stepIndex: generationStep, budget } : null;
+      const generation = transcript.entries.findLast((item) => item.type === 'PLANNER_RESPONSE' && item.status === 'DONE');
+      const context = readAgyGenerationContext(root, nativeId, generation);
+      const contextReading = context && generation ? { stepIndex: generation.step_index, context } : null;
       const records = projectAntigravityHistory({
         sessionId,
         nativeId,
@@ -618,7 +619,15 @@ export const createAntigravityStore = ({
     },
     completedGenerations(nativeId) {
       if (!hasTranscript(nativeId)) return [];
-      return readTranscript(nativeId).entries.filter((entry) => entry.type === 'PLANNER_RESPONSE' && entry.status === 'DONE');
+      const entries: AgyCompletedGeneration[] = readTranscript(nativeId).entries.filter((entry) => entry.type === 'PLANNER_RESPONSE' && entry.status === 'DONE');
+      const latest = entries.at(-1);
+      if (latest && (latest.model === undefined || latest.model === AGY_CUSTOM_API_MODEL)) {
+        const context = readAgyGenerationContext(root, nativeId, latest);
+        if (context?.metadata) {
+          entries[entries.length - 1] = { ...latest, context };
+        }
+      }
+      return entries;
     },
     finalResponse(nativeId, userStepIndex, { allowTruncatedContent = false } = {}) {
       if (!hasTranscript(nativeId) || userStepIndex === null) return null;

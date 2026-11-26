@@ -267,6 +267,38 @@ describe('Antigravity CLI adapter', () => {
     await backend.abort(session.id);
   });
 
+  it('publishes the custom API window while a tool is still running', async () => {
+    const { backend, directory, home, events } = await setup();
+    const session = await backend.createSession({ directory });
+    await backend.prompt(session.id, { directory, messageID: 'live-context-user', agent: 'build',
+      model: { providerID: 'antigravity-native', modelID: 'custom-model' }, parts: [{ type: 'text', text: 'live-thinking' }] });
+    await vi.waitFor(() => expect(backend.liveRecords(session.id).flatMap((record) => record.parts)
+      .some((part) => part.type === 'tool' && part.state.status === 'running')).toBe(true));
+
+    const nativeId = session.id.slice(4);
+    fs.mkdirSync(path.join(home, 'conversations'));
+    const db = new DatabaseSync(path.join(home, 'conversations', `${nativeId}.db`));
+    db.exec('create table gen_metadata (idx integer primary key, data blob)');
+    db.prepare('insert into gen_metadata values (?, ?)')
+      .run(4, Buffer.from('0a0c4a0a520808d2994720c084391201011a07da010420c0843d', 'hex'));
+    db.close();
+    fs.appendFileSync(path.join(home, 'brain', nativeId, '.system_generated', 'logs', 'transcript_full.jsonl'), JSON.stringify({
+      step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', model: 'MODEL_GOOGLE_GEMINI_INTERNAL_BYOM',
+      input_tokens: 10, cache_read_tokens: 2, output_tokens: 4, thinking_tokens: 1,
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'wait for fixture' } }],
+    }) + '\n');
+
+    const history = await backend.loadHistory(session.id, directory);
+    const reading = { contextWindow: 1_000_000, tokens: { total: 16 }, metadata: { nativeContextSource: 'provider' } };
+    expect(history.records[1].info).toMatchObject(reading);
+    const live = backend.liveRecords(session.id)[1];
+    expect(live.info).toMatchObject(reading);
+    expect(live.parts.at(-1).state.status).toBe('running');
+    const published = events.findLast(({ payload }) => payload.type === 'message.updated' && payload.properties.info.id === live.info.id);
+    expect(published?.payload.properties.info).toMatchObject(reading);
+    await backend.abort(session.id);
+  });
+
   it('repairs delayed thinking when history is read for a running child', async () => {
     const { backend, directory, home, events } = await setup();
     const session = await backend.createSession({ directory });

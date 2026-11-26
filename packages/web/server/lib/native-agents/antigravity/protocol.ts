@@ -83,6 +83,7 @@ const transcriptStep = z.object({
   type: z.string().min(1),
   status: z.string().optional(),
   source: z.string().optional(),
+  model: z.string().optional().catch(undefined),
   content: z.string().optional(),
   thinking: z.string().optional(),
   error: z.string().optional(),
@@ -123,6 +124,7 @@ export interface AgyTranscriptStep {
   type: string;
   status?: string | undefined;
   source?: string | undefined;
+  model?: string | undefined;
   content?: string | undefined;
   thinking?: string | undefined;
   error?: string | undefined;
