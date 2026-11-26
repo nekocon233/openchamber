@@ -461,7 +461,7 @@ export const projectAntigravityHistory = ({
       finish: entry.tool_calls.length > 0 ? 'tool-calls' : 'stop',
     });
     lastAssistant = { info: assistantInfo, parts };
-    if (contextReading?.stepIndex === entry.step_index) lastAssistant.info.contextCompaction = contextReading.budget;
+    if (contextReading?.stepIndex === entry.step_index) Object.assign(assistantInfo, contextReading.context);
     records.push(lastAssistant);
   }
   settlePermissionDenial();

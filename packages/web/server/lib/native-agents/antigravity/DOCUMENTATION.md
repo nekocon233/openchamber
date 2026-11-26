@@ -216,13 +216,18 @@ prompt-parts conversion. Authentication failure is reported separately as
 ### Why context pressure uses the saved generation
 
 `agy models` lists names and efforts. Its catalog reports unknown capacity, so
-handoff applies its existing conservative estimate. The CLI records its
-estimated context use and automatic compaction threshold in each completed
-model call's generation metadata. A read-only lookup matches the recorded
-trajectory step to the latest completed assistant response. The counter in
-the metadata table belongs to model calls and can differ from that step.
-Missing, incompatible or unreadable metadata leaves the threshold unknown.
-The model window stays independent of this threshold.
+handoff applies its existing conservative estimate. A read-only metadata
+lookup matches the latest completed assistant response by trajectory step.
+The generation counter in SQLite can differ from that step. Direct AGY
+responses use the CLI's estimated context and automatic compaction threshold.
+
+Custom Gemini API responses pair their recorded request usage with the custom
+model window saved for that generation. A gateway can compact its conversation
+independently while the outer CLI keeps its tool history. Its provider counters
+reflect that compaction, and the outer CLI's estimate describes its own
+history. A missing custom window leaves the percentage unknown. Running
+turns recover custom windows and usage on the existing completed-generation
+reads, with no additional polling.
 
 In Gemini API mode, OpenChamber applies a 1,000,000-token budget to the
 selected and saved-default custom model definitions, identified by key or

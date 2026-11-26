@@ -1,4 +1,5 @@
 import type { Message, Part } from "@/lib/opencode/model"
+import { NATIVE_PROVIDER_ANTIGRAVITY } from "@/lib/native-agents/ids"
 import { mergeMessages } from "./optimistic"
 import type { SessionMaterializationReason } from "./event-reducer"
 import { sortMessagesChronologically } from "./message-ordering"
@@ -324,9 +325,21 @@ export function materializeSessionSnapshots(
       && (existing.time.completed === undefined || existing.closedLocally === true)
     if (!incoming) continue
     let replacement = delivered || completed ? incoming : null
-    if (!replacement && existing.role === "assistant" && incoming.role === "assistant"
-      && existing.contextCompaction === undefined && incoming.contextCompaction !== undefined) {
-      replacement = { ...existing, contextCompaction: incoming.contextCompaction }
+    if (existing.role === "assistant" && incoming.role === "assistant") {
+      const isAntigravity = incoming.providerID === NATIVE_PROVIDER_ANTIGRAVITY
+      if (isAntigravity && (incoming.contextWindow !== undefined || incoming.metadata?.nativeContextSource === "provider")) {
+        const assistant = replacement?.role === "assistant" ? replacement : existing
+        const tokens = assistant.tokens ?? incoming.tokens
+        const contextWindow = incoming.contextWindow ?? existing.contextWindow
+        if (assistant.contextWindow !== contextWindow || assistant.contextCompaction !== undefined
+          || tokens !== assistant.tokens || assistant.metadata?.nativeContextSource !== "provider") {
+          replacement = { ...assistant, tokens, contextWindow, contextCompaction: undefined,
+            metadata: { ...assistant.metadata, nativeContextSource: "provider" } }
+        }
+      } else if (!replacement && existing.contextCompaction === undefined && incoming.contextCompaction !== undefined
+        && (!isAntigravity || existing.metadata?.nativeContextSource !== "provider")) {
+        replacement = { ...existing, contextCompaction: incoming.contextCompaction }
+      }
     }
     if (!replacement) continue
     deliveredWhileAway ||= delivered

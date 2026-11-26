@@ -26,7 +26,7 @@ import { agyTokenUsage } from './protocol.js';
 import type { AgyStepUpdate, AgyTranscriptStep, AgyTranscriptToolCall, AgyUsage } from './protocol.js';
 import { mapAgyTool, agyEditMetadata, agyMissingFileDetails, agyToolInputTruncated, withAgyFileDetails } from './tools.js';
 import { antigravityChecklistSnapshot, AGY_CHECKLIST_PART_TOOL } from './checklist.js';
-import type { AgyCompactionBudget } from './context-metadata.js';
+import type { AgyGenerationContext } from './context-metadata.js';
 import type { JsonObject } from '../../shared/json-values.js';
 import type { AgySelection } from './history-projection.js';
 import {
@@ -67,11 +67,13 @@ export interface AgyAssistantRecord {
   parts: NativePart[];
 }
 
+export type AgyCompletedGeneration = AgyTranscriptStep & { context?: AgyGenerationContext };
+
 export interface AgyLiveProjection {
   records: () => NativeMessageRecord[];
   finalReply: () => AgyAssistantRecord | null;
   toolPart: (id: string) => NativeToolPart | null;
-  restoreGenerations: (entries: readonly AgyTranscriptStep[]) => void;
+  restoreGenerations: (entries: readonly AgyCompletedGeneration[]) => void;
   restoreMissingHistory: (history: readonly NativeMessageRecord[], options?: { scope?: 'turn' | 'session' | undefined }) => void;
   userStepIndex: () => number | null;
   applyStep: (step: AgyStepUpdate, time: number, bindUserStep: (stepIndex: number) => Promise<void>) => Promise<NativeToolPart | undefined>;
@@ -86,7 +88,7 @@ export interface ProjectAntigravityHistoryInput {
   bindings: ReadonlyMap<number, RegistrySendRecord>;
   parentSessionId?: string | null | undefined;
   childSessionIds?: readonly string[] | undefined;
-  contextReading?: { stepIndex: number; budget: AgyCompactionBudget } | null | undefined;
+  contextReading?: { stepIndex: number; context: AgyGenerationContext } | null | undefined;
   now?: (() => number) | undefined;
 }
 
@@ -130,6 +132,22 @@ export const resolveAntigravityBindings = async ({
     });
   }
   return { bindings, sends };
+};
+
+const restoreAssistantContext = (
+  live: NativeAssistantMessage,
+  saved: Pick<NativeAssistantMessage, 'contextWindow' | 'metadata'>,
+): boolean => {
+  let changed = false;
+  if (live.contextWindow === undefined && saved.contextWindow !== undefined) {
+    live.contextWindow = saved.contextWindow;
+    changed = true;
+  }
+  if (saved.metadata?.nativeContextSource === 'provider' && live.metadata?.nativeContextSource !== 'provider') {
+    live.metadata = { ...live.metadata, nativeContextSource: 'provider' };
+    changed = true;
+  }
+  return changed;
 };
 
 export const createAntigravityLiveProjection = ({
@@ -264,6 +282,17 @@ export const createAntigravityLiveProjection = ({
         const part = reasoningPart({ sessionId, nativeId, entry, time: record.info.time.created });
         const index = part ? record.parts.findIndex((held) => held.id === part.id) : -1;
         let changed = false;
+        if (entry.context) {
+          const info = record.info;
+          changed = restoreAssistantContext(info, entry.context);
+          if (info.tokens === undefined && entry.usage) {
+            const tokens = agyTokenUsage(entry.usage);
+            if (tokens) {
+              info.tokens = tokens;
+              changed = true;
+            }
+          }
+        }
         if (part && index === -1) {
           record.parts.unshift(part);
           changed = true;
@@ -386,6 +415,9 @@ export const createAntigravityLiveProjection = ({
           && live.info.tokens === undefined && historical.info.tokens !== undefined) {
           live.info.tokens = structuredClone(historical.info.tokens);
           changed = true;
+        }
+        if (live.info.role === 'assistant' && historical.info.role === 'assistant') {
+          changed = restoreAssistantContext(live.info, historical.info) || changed;
         }
         if (live.info.role === 'assistant' && historical.info.role === 'assistant'
           && live.info.contextCompaction === undefined && historical.info.contextCompaction !== undefined) {

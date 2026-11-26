@@ -1478,6 +1478,12 @@ The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.m
 `lib/native-agents/ids.ts` tells the backends apart by prefix, and every native
 branch keys on it.
 
+An Antigravity history snapshot can identify a completed message as using a
+custom API through `metadata.nativeContextSource`. This source replaces the
+outer CLI's estimate for the same message even when the configured window is
+unknown. A later snapshot missing the window keeps a previously observed
+custom API window for that response.
+
 DeepSeek preserves the same partition, optimistic-send and runtime boundaries.
 Its opaque history cursor uses a native event position. Sequenced plan/model
 projections populate `session.agent` and `session.model`; restored historical

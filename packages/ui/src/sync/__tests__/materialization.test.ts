@@ -62,6 +62,23 @@ describe("materializeSessionSnapshots", () => {
     expect(refreshed.message.ses_1).toBe(first.message.ses_1)
   })
 
+  for (const window of [1_000_000, undefined]) {
+    test(`replaces an older AGY estimate with the API reading when the window is ${window ?? "unknown"}`, () => {
+      const original = { ...completedAssistantMessage("msg_agy"), providerID: "antigravity-native", tokens: undefined }
+      const legacy = { ...original, contextCompaction: { used: 1_166_546, threshold: 934_464 } }
+      const tokens = { input: 11_000, output: 820, reasoning: 0, cache: { read: 227_990, write: 0 }, total: 239_810 }
+      const metadata = { nativeContextSource: "provider" }
+      const recovered = { ...original, tokens, metadata, contextWindow: window }
+      const result = materializeSessionSnapshots({ message: { ses_1: [legacy] }, part: {} }, "ses_1", [{ info: recovered, parts: [] }])
+      expect(result.messages).toEqual([recovered])
+
+      const refreshed = materializeSessionSnapshots(result, "ses_1", [{ info: legacy, parts: [] }])
+      expect(refreshed.messages).toBe(result.messages)
+      const partial = materializeSessionSnapshots(result, "ses_1", [{ info: { ...original, metadata }, parts: [] }])
+      expect(partial.messages).toBe(result.messages)
+    })
+  }
+
   test("a delivered record replaces the pending one a missed delivery left, at its delivery time", () => {
     const pending: Message = { id: "msg_s", sessionID: "ses_1", role: "synthetic", time: { created: 1 }, text: "result", pending: true }
     const delivered: Message = { id: "msg_s", sessionID: "ses_1", role: "synthetic", time: { created: 3 }, text: "result" }

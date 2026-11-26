@@ -567,11 +567,12 @@ Native responses may report `contextWindow`, their effective configured limit.
 That value takes precedence over the current catalog in the shared header,
 sidebar, work-status and mobile readers. Missing usage is unmeasured; a failed
 supplemental read does not erase the previous reading for the same message.
-AGY's `contextCompaction` observation carries the native estimate and automatic
-compaction threshold for an exact response. Percentages use that threshold,
-and tooltips label it separately from a known model window. When AGY has
-reported tokens without a known budget, the display leaves the percentage
-unknown.
+Direct AGY responses carry the native estimate and automatic compaction
+threshold in `contextCompaction`. Percentages use that threshold, and tooltips
+label it separately from a known model window. Custom API responses use the
+request's token counters and configured `contextWindow` because a gateway can
+compress its own context independently. When AGY reports tokens without a
+known budget, the display leaves the percentage unknown.
 Claude streams reached through a proxy can omit cache fields until the turn
 result. The native projector keeps that incomplete usage unmeasured, so the
 panel retains the previous committed turn while the turn runs; the successful

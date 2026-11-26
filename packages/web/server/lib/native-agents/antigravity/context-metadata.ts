@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export type AgyCompactionBudget = {
-  used: number;
-  threshold: number;
-};
+export type AgyGenerationContext =
+  | { metadata: { nativeContextSource: 'provider' }; contextWindow?: number; contextCompaction?: never }
+  | { contextCompaction: { used: number; threshold: number }; contextWindow?: never; metadata?: never };
+
+export const AGY_CUSTOM_API_MODEL = 'MODEL_GOOGLE_GEMINI_INTERNAL_BYOM';
 
 const MAX_METADATA_BYTES = 8 * 1024 * 1024;
 
@@ -58,24 +59,39 @@ const messageField = (decoded: Iterable<[number, number | Uint8Array]>, number: 
   return undefined;
 };
 
-const decodeContext = (bytes: Uint8Array, stepIndex: number): AgyCompactionBudget | null => {
+const providerContext = (window?: number): AgyGenerationContext => {
+  const context: AgyGenerationContext = { metadata: { nativeContextSource: 'provider' } };
+  if (window !== undefined) context.contextWindow = window;
+  return context;
+};
+
+const decodeContext = (bytes: Uint8Array, stepIndex: number, customAPI: boolean): AgyGenerationContext | null => {
   const generation = [...fields(bytes)];
   if (!generation.some(([number, value]) => number === 2 && hasStep(value, stepIndex))) return null;
+  const planner = messageField(generation, 3);
+  const customModel = messageField(fields(planner), 27);
+  if (customAPI || customModel) {
+    const window = new Map(fields(customModel)).get(4);
+    return providerContext(isSafeInt(window) && window > 0 ? window : undefined);
+  }
+
   const chat = messageField(generation, 1);
   const start = messageField(fields(chat), 9);
   const context = new Map(fields(messageField(fields(start), 10)));
   const used = context.get(1) ?? 0;
   const threshold = context.get(4);
   if (!isSafeInt(used) || used < 0 || !isSafeInt(threshold) || threshold <= 0) return null;
-  return { used, threshold };
+  return { contextCompaction: { used, threshold } };
 };
 
-export const readAgyCompactionBudget = (
+export const readAgyGenerationContext = (
   root: string,
   nativeId: string,
-  stepIndex: number | undefined,
-): AgyCompactionBudget | null => {
-  if (stepIndex === undefined) return null;
+  step: { step_index: number; model?: string | undefined } | undefined,
+): AgyGenerationContext | null => {
+  if (!step) return null;
+  const customAPI = step.model === AGY_CUSTOM_API_MODEL;
+  const fallback = customAPI ? providerContext() : null;
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(path.join(root, 'conversations', `${nativeId}.db`), { readOnly: true });
@@ -84,16 +100,16 @@ export const readAgyCompactionBudget = (
       const data = row.data;
       if (!(data instanceof Uint8Array)) continue;
       try {
-        const budget = decodeContext(data, stepIndex);
-        if (budget) return budget;
+        const context = decodeContext(data, step.step_index, customAPI);
+        if (context) return context;
       } catch {
         continue;
       }
     }
   } catch {
-    return null;
+    return fallback;
   } finally {
     db?.close();
   }
-  return null;
+  return fallback;
 };
