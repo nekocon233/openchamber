@@ -23,7 +23,7 @@ This module owns the desktop board, the phone board page, their project and repo
 - Reply text remains until the host accepts it. A successful verdict with a failed text post keeps the text available to retry. Drafts are keyed by item so text cannot carry into another item's reply.
 - Successful mutations refresh the item and list. Refused reviews and thread writes refresh too, because the refusal can mean the host changed since the preview was read. Locked discussions accept comments only from viewers allowed to update them.
 - Submission requirements hold Submit until read and while unsatisfied, unevaluated, unreadable, or rejected by the host's mergeability result. Unknown merge methods are omitted so a newer server cannot break this client's actions; the remembered method applies only while allowed here.
-- The Changes shortcut and PR detail share the merge confirmation, target lock, and receipt handling. The shortcut always requests squash. The detail keeps the other merge methods available from its existing control. A scheduled GitHub auto-merge keeps the squash shortcut available. Confirmation names the cancellation and captures the displayed auto-merge request. The detail uses the same waiting label for each merge method.
+- The Changes shortcut and PR detail share target locking and receipt handling. The shortcut always requests squash. Clicking Squash and merge dispatches directly without a confirmation dialog across Changes, PR details, previews, and scheduled GitHub auto-merge states, capturing any displayed GitHub auto-merge request to cancel before merging. Non-squash merge methods (`merge`, `rebase`, `submit`) keep their confirmation dialog from the existing merge control. The detail uses the same waiting label for each merge method.
 - Landing counts include only open layers below the selected change, bottom first. A numbered GitHub stack lands its lower layers together, and submit lands a change-based relation chain; a GitLab branch chain merges one request at a time.
 - Label and reviewer pickers preserve selected entries outside the host's listed page. Reviewers cannot be edited until detail establishes the current set. Selection uses the choice's original id because the command list trims the value it returns.
 - Tracker mappings are scoped to tracker and account while the board is open. Workflow states follow category order, then position and name. Tracker product names remain untranslated.
@@ -71,8 +71,9 @@ The list and preview occupy the same phone page. Returning restores the list's o
 The project and branch panes reuse the board actions. Their callers own navigation and the shared components report the result.
 
 - Merges in PR panes and the mobile board return after invoking the provider
-  request. PR-pane approvals and requests for changes do the same. Merge
-  confirmation still precedes dispatch. Comments keep their existing navigation.
+  request. PR-pane approvals and requests for changes do the same. Non-squash
+  merge methods still confirm before dispatch, while squash dispatches directly
+  without a confirmation dialog. Comments keep their existing navigation.
 - The mobile board reuses its Back action, clearing the pinned lookup and
   preview while retaining the list's search and filters.
 - An in-flight merge, review or review-draft change locks its runtime, provider
@@ -85,6 +86,10 @@ The project and branch panes reuse the board actions. Their callers own navigati
 - Failure and partial success retain unposted text. Draft acknowledgement follows
   the successful receipt, independently of navigation. Pending-review retries
   retain the existing idempotency record and review-state refresh lock.
+
+### Why squash dispatches immediately without confirmation
+
+Squash and merge is the primary merge action across PR Changes and PR details, so clicking it sends the request right away without opening a confirmation dialog or waiting on a stack-detail read. Non-squash merge methods keep the confirmation dialog and its stack warning, and the shared synchronous PR lock still prevents duplicate dispatches on rapid or reopened clicks.
 
 ### Why action state outlives a detail
 
