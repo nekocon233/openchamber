@@ -1,6 +1,8 @@
 import React from 'react';
 import { getLastConversationRecord, isIncompleteAssistantTurn } from '@/lib/opencode/model';
 import type { Message, Part } from '@/lib/opencode/model';
+import { useSessionFormRecovery } from '@/hooks/useSessionFormRecovery';
+import { useSpaceDirectoryStopped } from '@/lib/spaces/spaces-store';
 import {
     useSessionStatus,
     useSessionStatusSnapshotReady,
@@ -8,7 +10,7 @@ import {
     useScopedBlockingForms,
 } from '@/sync/sync-context';
 import type { useSync } from '@/sync/use-sync';
-import { hasActiveFormToolInCurrentTurn, recoverPendingFormWithRetry } from '@/sync/form-recovery';
+import { hasActiveFormToolInCurrentTurn } from '@/sync/form-recovery';
 
 const IDLE_SESSION_STATUS = { type: 'idle' as const };
 const DEFAULT_RETRY_MESSAGE = 'Quota limit reached. Retrying automatically.';
@@ -26,6 +28,7 @@ export const useColumnSessionActivity = ({
     sessionMessages: Array<{ info: Message; parts: Part[] }>;
     sync: ReturnType<typeof useSync>;
 }) => {
+    const spaceStopped = useSpaceDirectoryStopped(effectiveSessionDirectory);
     const sessionStatusForCurrent = useSessionStatus(currentSessionId ?? '', effectiveSessionDirectory) ?? IDLE_SESSION_STATUS;
     const statusSnapshotReady = useSessionStatusSnapshotReady(effectiveSessionDirectory, currentSessionId ?? '');
 
@@ -38,19 +41,14 @@ export const useColumnSessionActivity = ({
         [currentSessionId, sessionMessages, sessionForms],
     );
 
-    React.useEffect(() => {
-        if (!active || !currentSessionId || !effectiveSessionDirectory || !hasUnreconciledFormTool) return;
-        let cancelled = false;
-
-        void recoverPendingFormWithRetry(
-            () => sync.recoverPendingQuestions(currentSessionId, effectiveSessionDirectory),
-            { isCancelled: () => cancelled },
-        );
-
-        return () => {
-            cancelled = true;
-        };
-    }, [active, currentSessionId, effectiveSessionDirectory, hasUnreconciledFormTool, sync]);
+    useSessionFormRecovery({
+        active,
+        sessionId: currentSessionId,
+        directory: effectiveSessionDirectory,
+        disabled: spaceStopped,
+        hasUnreconciledFormTool,
+        recoverPendingQuestions: sync.recoverPendingQuestions,
+    });
 
     const sessionIsWorking = React.useMemo(() => {
         if (!currentSessionId || sessionPermissions.length > 0 || sessionForms.length > 0) {

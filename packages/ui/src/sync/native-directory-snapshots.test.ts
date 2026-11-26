@@ -12,13 +12,16 @@ import { opencodeClient } from "@/lib/opencode/client"
 import type { QuestionRequest } from "@/types/question"
 import { bootstrapDirectory } from "./bootstrap"
 import type { DirectoryStore } from "./child-store"
+import { createEventRoutingIndex } from "./event-routing-index"
 import { resetGlobalSessionStatuses, setGlobalSessionStatus, useGlobalSessionStatusStore } from "./global-session-status"
 import { readDirectoryStatuses } from "./native-directory-snapshots"
+import { resyncDirectoryAfterReconnect } from "./session-reconnect-recovery"
 import { recoverInterruptedTurnAfterMessageLoad, resyncBlockingRequestsForDirectory } from "./sync-context"
 import { INITIAL_STATE, type State } from "./types"
 
 const DIRECTORY = "/repo"
 const NATIVE = "ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188"
+const NATIVE_CONVERSATION = "ncv_e4b756f7-72d3-43ef-9c8a-1aafdaaaf3ac"
 const NATIVE_CODEX = "ncx_019a5c1e-7a33-7d10-9c52-6f2b1d3e4a5b"
 const OPENCODE = "ses_a"
 const BUSY: SessionStatus = { type: "busy" }
@@ -63,8 +66,10 @@ const unreadable = async (): Promise<never> => {
 
 let nativeStatuses: (signal?: AbortSignal) => Promise<Record<string, SessionStatus>> = async () => ({})
 let nativeQuestions: () => Promise<NativeQuestionList> = async () => []
+let nativeSession: (id: string) => Promise<Session> = async (id) => sessionRecord(id)
 
 const nativeAgents = createTestNativeAgentsAPI({
+  getSession: (id) => nativeSession(id),
   statuses: (_directory, options) => nativeStatuses(options?.signal),
   questions: () => nativeQuestions(),
 })
@@ -110,6 +115,7 @@ beforeEach(() => {
   resetGlobalSessionStatuses()
   nativeStatuses = async () => ({})
   nativeQuestions = async () => []
+  nativeSession = async (id) => sessionRecord(id)
   openCodeStatuses = {}
   openCodeQuestions = []
   opencodeClient.getActiveSessionStatuses = async () => openCodeStatuses
@@ -252,6 +258,169 @@ describe("blocking request resync with native sessions", () => {
 
     await resyncBlockingRequestsForDirectory(DIRECTORY, store)
 
+    expect(store.getState().form[NATIVE]).toBeUndefined()
+  })
+
+  test("scopes single-session form recovery to the session's own backend and skips no-op store updates", async () => {
+    let openCodeCalls = 0
+    let permissionCalls = 0
+    opencodeClient.listPendingForms = async () => { openCodeCalls += 1; return [] }
+    opencodeClient.listPendingPermissions = async () => { permissionCalls += 1; return [] }
+    nativeQuestions = async () => []
+    const store = createDirectoryStore({ session: [sessionRecord(NATIVE_CONVERSATION)] })
+    let updates = 0
+    const unsubscribe = store.subscribe(() => { updates += 1 })
+    try {
+      await resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
+      expect(openCodeCalls).toBe(0)
+      expect(permissionCalls).toBe(0)
+      expect(updates).toBe(0)
+
+      nativeQuestions = async () => [question("que_native", NATIVE_CONVERSATION)]
+      await resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
+      expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_native"])
+      expect(openCodeCalls).toBe(0)
+      expect(updates).toBe(1)
+
+      // An identical second response publishes nothing.
+      await resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
+      expect(updates).toBe(1)
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  test("recovers native questions even when OpenCode pending forms fail", async () => {
+    opencodeClient.listPendingForms = async () => { throw new Error("OpenCode unavailable") }
+    nativeQuestions = async () => [question("que_native_live", NATIVE)]
+    const store = createDirectoryStore({
+      session: [sessionRecord(OPENCODE), sessionRecord(NATIVE)],
+      form: { [OPENCODE]: [form("que_opencode_kept", OPENCODE)] },
+    })
+
+    const ok = await resyncBlockingRequestsForDirectory(DIRECTORY, store)
+
+    expect(ok).toBe(false)
+    expect(store.getState().form[OPENCODE]?.map((item) => item.id)).toEqual(["que_opencode_kept"])
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native_live"])
+  })
+
+  test("does not resurrect a form settled while resync is in flight and keeps a form created mid-flight", async () => {
+    const existing = form("que_existing", NATIVE_CONVERSATION)
+    const created = form("que_created", NATIVE_CONVERSATION)
+    const store = createDirectoryStore({
+      session: [sessionRecord(NATIVE_CONVERSATION)],
+      form: { [NATIVE_CONVERSATION]: [existing] },
+    })
+    let resolveRead!: (value: NativeQuestionList) => void
+    nativeQuestions = () => new Promise<NativeQuestionList>((resolve) => { resolveRead = resolve })
+
+    const pending = resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
+    // User answers/dismisses `existing` and a newer `created` form arrives while the HTTP read is in flight.
+    store.setState({ form: { [NATIVE_CONVERSATION]: [created] } })
+    resolveRead([question("que_existing", NATIVE_CONVERSATION)])
+    await pending
+
+    expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_created"])
+  })
+})
+
+describe("reconnect recovery with native sessions", () => {
+  test("recovers pending post-turn forms for idle native sessions on reconnect without touching OpenCode", async () => {
+    let openCodeFormCalls = 0
+    let openCodePermissionCalls = 0
+    opencodeClient.listPendingForms = async () => { openCodeFormCalls += 1; return [] }
+    opencodeClient.listPendingPermissions = async () => { openCodePermissionCalls += 1; return [] }
+    const store = createDirectoryStore({
+      session: [sessionRecord(NATIVE_CODEX), sessionRecord(OPENCODE)],
+      session_status: { [NATIVE_CODEX]: { type: "idle" }, [OPENCODE]: { type: "idle" } },
+    })
+    nativeStatuses = async () => ({})
+    nativeQuestions = async () => [question("que_codex_plan", NATIVE_CODEX)]
+
+    const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
+
+    expect(ok).toBe(true)
+    expect(openCodeFormCalls).toBe(0)
+    expect(openCodePermissionCalls).toBe(0)
+    expect(store.getState().form[NATIVE_CODEX]?.map((item) => item.id)).toEqual(["que_codex_plan"])
+  })
+  test("still recovers pending native questions when a session is patched during the status fetch", async () => {
+    const initial = sessionRecord(NATIVE_CONVERSATION)
+    const patched = { ...initial, title: "Updated during reconnect", time: { created: 1, updated: 20 } }
+    const store = createDirectoryStore({
+      session: [initial],
+      session_status: { [NATIVE_CONVERSATION]: BUSY },
+    })
+    nativeStatuses = async () => {
+      // Simulate an in-flight `session.patched` replacing the session reference
+      // while the reconnect status snapshot is still in flight.
+      store.setState({ session: [patched] })
+      return { [NATIVE_CONVERSATION]: BUSY }
+    }
+    let sessionReads = 0
+    nativeSession = async () => {
+      sessionReads += 1
+      return { ...patched, title: "Authoritative recovery", time: { created: 1, updated: 25 } }
+    }
+    nativeQuestions = async () => [question("que_reconnect", NATIVE_CONVERSATION)]
+
+    const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
+
+    expect(ok).toBe(true)
+    expect(sessionReads).toBe(1)
+    expect(store.getState().session[0]?.title).toBe("Authoritative recovery")
+    expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_reconnect"])
+  })
+
+  test("does not overwrite a session patched while readRecoverySession is in flight, but still recovers its question", async () => {
+    const initial = sessionRecord(NATIVE_CONVERSATION)
+    const livePatch = { ...initial, title: "Live patch during recovery", time: { created: 1, updated: 30 } }
+    const store = createDirectoryStore({
+      session: [initial],
+      session_status: { [NATIVE_CONVERSATION]: BUSY },
+    })
+    nativeStatuses = async () => ({ [NATIVE_CONVERSATION]: BUSY })
+    nativeSession = async () => {
+      store.setState({ session: [livePatch] })
+      return { ...initial, title: "Stale recovery read", time: { created: 1, updated: 15 } }
+    }
+    nativeQuestions = async () => [question("que_after_patch", NATIVE_CONVERSATION)]
+
+    const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
+
+    expect(ok).toBe(true)
+    expect(store.getState().session[0]?.title).toBe("Live patch during recovery")
+    expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_after_patch"])
+  })
+
+  test("excludes a session removed or archived during the status fetch", async () => {
+    const removed = sessionRecord(NATIVE_CONVERSATION)
+    const archived = sessionRecord(NATIVE)
+    const store = createDirectoryStore({
+      session: [removed, archived],
+      session_status: { [NATIVE_CONVERSATION]: BUSY, [NATIVE]: BUSY },
+    })
+    const fetchedSessions: string[] = []
+    nativeSession = async (id) => {
+      fetchedSessions.push(id)
+      return sessionRecord(id)
+    }
+    nativeStatuses = async () => {
+      store.setState({
+        session: [{ ...archived, time: { created: 1, updated: 5, archived: 5 } }],
+      })
+      return { [NATIVE_CONVERSATION]: BUSY, [NATIVE]: BUSY }
+    }
+    nativeQuestions = async () => [
+      question("que_removed", NATIVE_CONVERSATION),
+      question("que_archived", NATIVE),
+    ]
+
+    await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
+
+    expect(fetchedSessions).toEqual([])
+    expect(store.getState().form[NATIVE_CONVERSATION]).toBeUndefined()
     expect(store.getState().form[NATIVE]).toBeUndefined()
   })
 })

@@ -28,7 +28,7 @@ import type { FailedCompactionIndex } from './compaction.js';
 import { createClaudeProjection } from './projector.js';
 import type { ClaudeRawEntry, ClaudeSendRecord } from './projector.js';
 import type { ClaudeSdkModule } from './sdk.js';
-import { slimToolResult } from './tools.js';
+import { slimToolResult, UNFINISHED_TOOL_ERROR } from './tools.js';
 import type { SlimClaudeToolResult } from './tools.js';
 
 const MAX_TITLE_LENGTH = 100;
@@ -518,7 +518,7 @@ export const createClaudeSessionStore = ({
     subagents: ReadonlyMap<string, string>;
     recoveredResults?: ReadonlyArray<ClaudeRawEntry> | undefined;
     contextWindowFor?: ((modelID: string | null) => number) | undefined;
-    settle?: boolean | undefined;
+    settle?: boolean | 'earlier-turns' | undefined;
   }): NativeMessageRecord[] => {
     const decoded = decodeNativeSessionId(sessionId);
     const claudeRef = decoded?.backend === 'claude' ? decoded : null;
@@ -533,9 +533,7 @@ export const createClaudeSessionStore = ({
     });
     for (const entry of entries) projection.applyEntry(entry);
     for (const entry of recoveredResults) projection.applyToolResults(entry);
-    if (settle && claudeRef && (claudeRef.toolUseId === null || !isSessionRunning(sessionId))) {
-      projection.settleOpenTools('The turn ended before this tool finished.');
-    }
+    if (settle) projection.settleOpenTools(UNFINISHED_TOOL_ERROR, { keepCurrentTurn: settle === 'earlier-turns' });
     return projection.records();
   };
 
@@ -665,8 +663,9 @@ export const createClaudeSessionStore = ({
     }
 
     if (decoded.toolUseId === null) {
+      const runningAtStart = isSessionRunning(sessionId);
       const cacheKey = sessionId;
-      const fingerprint = `${info.fileSize ?? 0}:${info.lastModified}`;
+      const fingerprint = `${info.fileSize ?? 0}:${info.lastModified}:${runningAtStart ? 'running' : 'idle'}`;
       const cached = historyCache.get(cacheKey);
       if (cached && cached.fingerprint === fingerprint) {
         rememberHistory(cacheKey, cached);
@@ -705,16 +704,17 @@ export const createClaudeSessionStore = ({
       });
       const supplement = rawSupplement ?? await transcriptSupplement(sdk, currentEntries, decoded.sessionUuid, directory, false);
       const current = withFailedCompactions(withStructuredResults(currentEntries, supplement.results), supplement.failedCompactions);
+      const running = isSessionRunning(sessionId);
       const records = [
         ...(earlier?.records ?? []),
-        ...project({ sessionId, directory, entries: current, sendRecords, subagents, contextWindowFor }),
+        ...project({ sessionId, directory, entries: current, sendRecords, subagents, contextWindowFor, settle: running ? 'earlier-turns' : true }),
       ];
       const value: CachedHistoryValue = {
         records,
         childSessions: childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory),
         earlier,
       };
-      if (supplement.complete) rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
+      if (supplement.complete && running === runningAtStart) rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
       const result: ClaudeHistoryResult = { records, childSessions: await withParentArchive(sessionId, value.childSessions) };
       if (!supplement.complete) result.metadataComplete = false;
       return result;
@@ -727,7 +727,7 @@ export const createClaudeSessionStore = ({
     const { edits, recoveredResults, complete } = await subagentToolResults(sdk, decoded.sessionUuid, agentId, directory, entries);
     const contextWindowFor = await readContextWindowFor();
     const result: ClaudeHistoryResult = {
-      records: project({ sessionId, directory, entries: withStructuredResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults, contextWindowFor }),
+      records: project({ sessionId, directory, entries: withStructuredResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults, contextWindowFor, settle: isSessionRunning(sessionId) ? 'earlier-turns' : true }),
       childSessions: [],
     };
     if (!complete) result.metadataComplete = false;

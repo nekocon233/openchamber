@@ -626,6 +626,73 @@ describe('Claude subagent tool outcomes', () => {
     expect(settled.records[1].parts[0].state.status).toBe('completed');
   });
 
+  it('keeps unresolved root session tools running only in the active turn while settling abandoned earlier-turn tools and idle turns', async () => {
+    const rootId = `ncl_${OPENCHAMBER_UUID}`;
+    const abandonedTurn = {
+      type: 'assistant',
+      uuid: 'root-abandoned',
+      timestamp: '2026-09-27T00:00:00.500Z',
+      message: {
+        id: 'msg-root-abandoned',
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        stop_reason: 'tool_use',
+        content: [{ type: 'tool_use', id: 'bash-old', name: 'Bash', input: { command: 'sleep 10' } }],
+      },
+    };
+    const followUpPrompt = {
+      type: 'user',
+      uuid: '22222222-2222-4222-8222-222222222222',
+      timestamp: '2026-09-27T00:00:00.800Z',
+      message: { role: 'user', content: 'Continue with the plan' },
+    };
+    const questionEntry = {
+      type: 'assistant',
+      uuid: 'root-question',
+      timestamp: '2026-09-27T00:00:01.000Z',
+      message: {
+        id: 'msg-root-question',
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        stop_reason: 'tool_use',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'ask-1',
+            name: 'AskUserQuestion',
+            input: { questions: [{ question: 'Pick one?', header: 'Choice', options: [{ label: 'A', description: 'Option A' }], multiSelect: false }] },
+          },
+        ],
+      },
+    };
+    let active = true;
+    const sdk = {
+      getSessionInfo: async () => ({ sessionId: OPENCHAMBER_UUID, lastModified: 10, fileSize: 100 }),
+      getSessionMessages: async () => [prompt, abandonedTurn, followUpPrompt, questionEntry],
+      listSubagents: async () => [],
+      importSessionToStore: async () => {},
+    };
+    const store = createClaudeSessionStore({
+      loadSdk: async () => sdk,
+      registry: { sendRecords: async () => new Map(), getSession: async () => null },
+      isSessionRunning: (id) => id === rootId && active,
+    });
+
+    const runningHistory = await store.loadHistory(rootId, DIRECTORY);
+    expect(runningHistory.records[1].parts[0]).toMatchObject({
+      tool: 'bash',
+      state: { status: 'error', error: 'The turn ended before this tool finished.' },
+    });
+    expect(runningHistory.records[3].parts[0]).toMatchObject({ tool: 'question', state: { status: 'running' } });
+
+    active = false;
+    const settledHistory = await store.loadHistory(rootId, DIRECTORY);
+    expect(settledHistory.records[3].parts[0]).toMatchObject({
+      tool: 'question',
+      state: { status: 'error', error: 'The turn ended before this tool finished.' },
+    });
+  });
+
   it('rejects a failed recovery read instead of reporting missing results as failed tools', async () => {
     const { store } = fixture({ fail: true });
     await expect(store.loadHistory(childId, DIRECTORY)).rejects.toThrow('Cannot read child transcript');

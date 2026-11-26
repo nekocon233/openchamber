@@ -9,7 +9,7 @@ import type { VariantCapableModel } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
 import { createAntigravityDecisions } from './antigravity/decisions.js';
 import { resolveAgyCommand } from './antigravity/command.js';
-import { withAgyFileDetails } from './antigravity/tools.js';
+import { overlay } from './overlay.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import type { ClaudeConnectionLaunch, ClaudeConnectionWriteInput } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
@@ -161,7 +161,6 @@ const threadResponseSchema = z.object({
 const openChamberNamespace = z.record(z.string(), z.json()).catch({});
 
 const hasErrorCode = (value: unknown): value is { code?: unknown } => isRecord(value);
-const isNumber = (value: unknown): value is number => typeof value === 'number';
 const errorMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
 const antigravityUnsupported = (operation: string): NativeAgentError => new NativeAgentError(
@@ -180,43 +179,7 @@ const settled = async <Value>(promise: Promise<Value>): Promise<SettledResult<Va
   }
 };
 
-const withHistoryMeasurements = (liveRecord: NativeMessageRecord, historyRecord: NativeMessageRecord): NativeMessageRecord => {
-  const live = liveRecord.info;
-  const history = historyRecord.info;
-  if (live.role !== 'assistant' || history.role !== 'assistant') return liveRecord;
-  if (!isNumber(live.time.completed) && isNumber(history.time.completed)) return historyRecord;
-  if (live.tokens !== undefined && live.contextWindow !== undefined && live.contextCompaction !== undefined) return liveRecord;
-  const info = { ...live };
-  if (info.tokens === undefined && history.tokens !== undefined) info.tokens = history.tokens;
-  if (info.contextWindow === undefined && history.contextWindow !== undefined) info.contextWindow = history.contextWindow;
-  if (info.contextCompaction === undefined && history.contextCompaction !== undefined) info.contextCompaction = history.contextCompaction;
-  if (info.tokens === live.tokens && info.contextWindow === live.contextWindow
-    && info.contextCompaction === live.contextCompaction) return liveRecord;
-  return { ...liveRecord, info };
-};
-
-export const overlay = (
-  history: NativeMessageRecord[],
-  live: ReadonlyArray<NativeMessageRecord> | null | undefined,
-): NativeMessageRecord[] => {
-  if (!live || live.length === 0) return history;
-  const liveById = new Map(live.map((record) => [record.info.id, record]));
-  const merged = history.map((record) => {
-    const liveRecord = liveById.get(record.info.id);
-    if (!liveRecord) return record;
-    const measured = withHistoryMeasurements(liveRecord, record);
-    if (!record.info.id.startsWith('nag_') || measured === record) return measured;
-    const saved = new Map(record.parts.map((part) => [part.id, part]));
-    const parts = measured.parts.map((part) => withAgyFileDetails(part, saved.get(part.id)));
-    return parts.some((part, index) => part !== measured.parts[index]) ? { ...measured, parts } : measured;
-  });
-  const known = new Set(history.map((record) => record.info.id));
-  for (const record of live) if (!known.has(record.info.id)) merged.push(record);
-  return merged
-    .map((record, index) => ({ record, index }))
-    .sort((left, right) => (left.record.info.time.created - right.record.info.time.created) || (left.index - right.index))
-    .map(({ record }) => record);
-};
+export { overlay };
 
 const untilRewound = (records: NativeMessageRecord[], pending: PendingRevert | null): NativeMessageRecord[] => {
   if (pending?.phase !== 'committed') return records;
