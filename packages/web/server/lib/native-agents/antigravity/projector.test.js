@@ -13,6 +13,41 @@ const project = (steps, bindings = new Map(), relationships = {}) => projectAnti
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
 
 describe('Antigravity retained thinking and conversation messages', () => {
+  it('restores the PR reference from a shortened OpenChamber prompt', () => {
+    const reference = { kind: 'change-request', provider: 'github', number: 7, title: 'A change, with "quotes"',
+      url: 'https://github.com/example/project/pull/7' };
+    const original = `Review ${reference.url}/files?diff=split`;
+    const context = 'Source control change request context (JSON)\n' + JSON.stringify({
+      identity: { provider: reference.provider, instance: 'github.com' },
+      changeRequest: { ...reference, body: 'The PR description' },
+      files: [{ path: 'example.js', patch: 'x'.repeat(190_000) }],
+    }, null, 2);
+    const shortened = context.slice(0, 180_000);
+    const step = { type: 'USER_INPUT', step_index: 0, content: `<USER_REQUEST>\n${original}\n\n${shortened}\n<truncated 10000 bytes>\n` };
+    const send = { messageId: 'fixture-user', providerID: 'antigravity-native', modelID: 'test', agent: 'build' };
+    const [record] = project([step], new Map([[0, send]]));
+    expect(record.parts).toMatchObject([
+      { id: 'fixture-user_p0', type: 'text', text: original },
+      { id: 'fixture-user_ref0', type: 'text', text: shortened, metadata: { openchamberContext: reference } },
+    ]);
+    const [terminal] = project([step]);
+    expect(terminal.parts).toMatchObject([{ type: 'text', text: original + '\n\n' + shortened }]);
+    const complete = original + '\n\n' + context;
+    const [ambiguous] = project([{ ...step, content: complete }], new Map([[0, send]]));
+    expect(ambiguous.parts).toMatchObject([{ type: 'text', text: complete }]);
+
+    const example = context.replace('x'.repeat(190_000), 'example patch');
+    const typed = ` \n\n${example}\nReview ${reference.url}`;
+    const planSend = { ...send, agent: 'plan', antigravity: { literalChangeRequestHeaders: 0,
+      fingerprint: antigravityPromptFingerprint(`${typed}\n\n${context}`) } };
+    const [plan] = project([{ ...step, content: `<USER_REQUEST>\n/plan ${typed}\n\n${shortened}\n<truncated 10000 bytes>\n` }],
+      new Map([[0, planSend]]));
+    expect(plan.parts).toMatchObject([
+      { type: 'text', text: '/plan ' + typed },
+      { type: 'text', text: shortened, metadata: { openchamberContext: reference } },
+    ]);
+  });
+
   it('recovers attached files from a flattened plan prompt without hiding surrounding user text', () => {
     const text = '  保留缩进\r\n\r\n<openchamber-instructions>Literal attachment text.</openchamber-instructions>\r\n';
     const file = { type: 'file', filename: '说明 "notes".md', mime: 'text/markdown',

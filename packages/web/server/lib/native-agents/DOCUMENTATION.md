@@ -1285,7 +1285,8 @@ agent of each OpenChamber send (at most 200 per session), the work-tree
 snapshots of each OpenChamber prompt (at most 200 per session), the revert
 in effect, the private captured Claude checklist config directory/list ID,
 bounded Antigravity headless permission-denial action names and completion time
-bound to an accepted send, AGY stream-only token/timing measurements keyed by
+bound to an accepted send, counts of literal PR context headings in Antigravity
+prompts, AGY stream-only token/timing measurements keyed by
 native message/part identity and text hashes (without conversation text or tool
 payloads), AGY turn outcomes and application decision delivery
 identity/state without question or plan text,

@@ -478,6 +478,17 @@ matching is only a recovery path after interrupted admission. External terminal
 prompts receive deterministic native step IDs. Registry writes remain serial
 and atomic, and rebinding one message to another step is refused.
 
+### Why saved PR context keeps its reference
+
+An attached change request carries its model-readable JSON in a separate prompt
+part. The live projector attaches the metadata the chat uses for its PR chip.
+The CLI flattens the prompt for its transcript. Send receipts count matching
+headings in the normalized user text so pasted examples remain visible on
+reload. History restores later sections with a readable change request identity
+and a matching link in the prompt. Legacy recovery requires a native
+truncation marker in the attached section. Both projections retain the recorded
+PR text for conversation handoffs.
+
 The CLI can prepend `/plan` to saved user input in Plan mode. Display removes
 one such prefix only for a registered Plan send whose original fingerprint
 matches the remaining text. Typed prefixes, external prompts and mismatches

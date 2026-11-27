@@ -26,6 +26,7 @@ import type { RegistrySendRecordInput, RegistrySessionInput } from '../registry.
 import { agyProcessArgs, startAgyProcess } from './process.js';
 import type { AgyProcessHandle } from './process.js';
 import { resolveAgyCommand } from './command.js';
+import { literalChangeRequestHeaders } from './change-request-context.js';
 import { createAntigravityLiveProjection } from './projector.js';
 import type { AgyLiveProjection } from './projector.js';
 import { createAntigravityStore } from './store.js';
@@ -663,6 +664,8 @@ export const createAntigravityBackend = ({
           sentAt: now(),
           antigravity: { fingerprint: antigravityPromptFingerprint(nativeText), requestFingerprint, inputDelivery: 'reserved' },
         };
+        const literalHeaders = literalChangeRequestHeaders(request.parts);
+        if (literalHeaders !== undefined && send.antigravity) send.antigravity.literalChangeRequestHeaders = literalHeaders;
         if (request.variant !== undefined) send.variant = request.variant;
         const projection = createAntigravityLiveProjection({
           sessionId,

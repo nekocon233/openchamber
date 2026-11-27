@@ -62,6 +62,38 @@ const prompt = async (runtime, session, directory, text = 'runtime') => {
 };
 
 describe('Antigravity native runtime', () => {
+  it('shows the attached PR as a reference and keeps an identical example in the user prompt', async () => {
+    const { runtime, session, directory, events, requestsFile } = await setup();
+    const reference = { kind: 'change-request', provider: 'github', number: 7, title: 'Fixture change',
+      url: 'https://github.com/example/project/pull/7' };
+    const context = 'Source control change request context (JSON)\n' + JSON.stringify({
+      identity: { provider: reference.provider, instance: 'github.com' },
+      changeRequest: { ...reference, body: 'Fixture description' },
+      files: [{ path: 'example.js', patch: '+ changed' }],
+    }, null, 2);
+    const text = ` \n\n${context}\nCompare this example with ${reference.url}.`;
+    const additionalText = 'Keep the other text part.';
+    const messageID = `nag_u_${randomUUID()}`;
+    await runtime.prompt(session.id, { directory, messageID, parts: [{ type: 'text', text },
+      { type: 'text', text: additionalText }, { type: 'text', text: context }],
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, agent: 'build' });
+    await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    const referenceEvent = events.find(({ payload }) => payload.type === 'message.part.updated'
+      && payload.properties.part.messageID === messageID
+      && payload.properties.part.metadata?.openchamberContext?.url === reference.url);
+    expect(referenceEvent).toBeDefined();
+    expect(JSON.parse(fs.readFileSync(requestsFile, 'utf8').trim()).text).toContain(`${text}\n\n${additionalText}\n\n${context}`);
+    await runtime.shutdown();
+
+    const page = await runtime.loadMessages(session.id, directory, { limit: 20 });
+    const saved = page.records.find(({ info }) => info.id === messageID);
+    expect(saved.parts).toHaveLength(2);
+    expect(saved.parts[0].text).toBe(`${text.trimStart()}\n\n${additionalText}`);
+    expect(saved.parts[0].metadata).toBeUndefined();
+    expect(saved.parts[1]).toMatchObject({ id: referenceEvent.payload.properties.part.id,
+      type: 'text', text: context, metadata: { openchamberContext: reference } });
+  });
+
   it('validates source-bound stops through HTTP and rejects a stale source before interrupting', async () => {
     const { runtime, directory } = await setup();
     const conversation = await runtime.createSession({ backend: 'antigravity', kind: 'unified', directory,

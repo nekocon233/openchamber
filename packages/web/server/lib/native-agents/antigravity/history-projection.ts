@@ -1,5 +1,5 @@
 import { NATIVE_PROVIDER_ANTIGRAVITY, encodeAntigravitySessionId, userFilePartId, userTextPartId } from '../ids.js';
-import { antigravityDisplayPromptParts, isInstructionsBlock, type PromptPart } from '../prompt-parts.js';
+import { antigravityDisplayPromptParts, isInstructionsBlock } from '../prompt-parts.js';
 import {
   buildAssistantMessage,
   buildCompactionMessage,
@@ -26,6 +26,7 @@ import { agyBackgroundResults } from './tasks.js';
 import { mapAgyTool, agyEditMetadata, agyToolInputTruncated } from './tools.js';
 import type { JsonObject } from '../../shared/json-values.js';
 import type { ProjectAntigravityHistoryInput, AgyAssistantRecord } from './projector.js';
+import { antigravitySavedPromptParts, type AntigravityDisplayPromptPart } from './change-request-context.js';
 
 export interface AgySelection {
   providerID: string;
@@ -111,7 +112,7 @@ export const userRecord = ({
   send: (Pick<RegistrySendRecord, 'providerID' | 'modelID' | 'agent' | 'variant'> & {
     antigravity?: RegistrySendRecord['antigravity'];
   }) | null | undefined;
-  parts: readonly PromptPart[];
+  parts: readonly AntigravityDisplayPromptPart[];
 }): AgyUserRecord => {
   const selection = selectionOf(send);
   const model: NativeMessageModel = {
@@ -121,6 +122,7 @@ export const userRecord = ({
   if (selection.variant !== undefined) model.variant = selection.variant;
   let textIndex = 0;
   let fileIndex = 0;
+  let referenceIndex = 0;
   return {
     info: buildUserMessage({
       id,
@@ -132,7 +134,11 @@ export const userRecord = ({
     parts: send?.antigravity?.interactionReply ? [] : parts.flatMap((part): NativePart[] => {
       if (part.type === 'text') {
         if (part.text === '' || isInstructionsBlock(part.text)) return [];
-        return [buildTextPart({ id: userTextPartId(id, textIndex++), sessionID: sessionId, messageID: id, text: part.text, start: created, end: created })];
+        const reference = 'reference' in part ? part.reference : null;
+        const partID = reference ? `${id}_ref${referenceIndex++}` : userTextPartId(id, textIndex++);
+        const record = buildTextPart({ id: partID, sessionID: sessionId, messageID: id, text: part.text, start: created, end: created });
+        if (reference) record.metadata = { openchamberContext: reference };
+        return [record];
       }
       return [buildFilePart({ ...part, id: userFilePartId(id, fileIndex++), sessionID: sessionId, messageID: id, filename: part.filename ?? 'attachment' })];
     }),
@@ -298,15 +304,18 @@ export const projectAntigravityHistory = ({
       parentSend = send ?? null;
       parentStep = entry.step_index;
       lastAssistant = null;
+      const content = parentTask && message ? message.content : entry.content ?? '';
+      const parts = antigravityDisplayPromptParts(content, send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined);
       records.push(userRecord({
         sessionId,
         id,
         created: created(entry, send?.sentAt),
         send,
-        parts: antigravityDisplayPromptParts(
-          parentTask && message ? message.content : entry.content ?? '',
-          send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined,
-        ),
+        parts: send ? antigravitySavedPromptParts(parts, {
+          content,
+          truncated: entry.truncated_fields?.includes('content') === true,
+          literalHeaders: send.antigravity?.literalChangeRequestHeaders,
+        }) : parts,
       }));
       continue;
     }

@@ -27,6 +27,7 @@ import type { AgyStepUpdate, AgyTranscriptStep, AgyTranscriptToolCall, AgyUsage 
 import { mapAgyTool, agyEditMetadata, agyMissingFileDetails, agyToolInputTruncated, withAgyFileDetails } from './tools.js';
 import { antigravityChecklistSnapshot, AGY_CHECKLIST_PART_TOOL } from './checklist.js';
 import type { AgyGenerationContext } from './context-metadata.js';
+import { antigravityLivePromptParts } from './change-request-context.js';
 import type { JsonObject } from '../../shared/json-values.js';
 import type { AgySelection } from './history-projection.js';
 import {
@@ -185,7 +186,7 @@ export const createAntigravityLiveProjection = ({
     id: request.messageID,
     created: created(request.sentAt),
     send: selection,
-    parts: request.parts,
+    parts: antigravityLivePromptParts(request.parts),
   });
   records.set(user.info.id, user);
 
