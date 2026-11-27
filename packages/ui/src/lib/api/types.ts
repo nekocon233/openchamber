@@ -15,7 +15,7 @@ import type {
   nativeCommandListSchema,
   nativeCommandResultSchema,
   nativeMessagePageSchema,
-  nativeQuestionListSchema,
+  nativeQuestionSnapshotSchema,
   nativeRevertResultSchema,
   nativeSessionListSchema,
   nativeStatusSnapshotSchema,
@@ -2083,7 +2083,7 @@ export type NativeSessionList = z.infer<typeof nativeSessionListSchema>;
 export type NativeMessagePage = z.infer<typeof nativeMessagePageSchema>;
 export type NativeStatusSnapshot = z.infer<typeof nativeStatusSnapshotSchema>;
 export type NativeBackgroundTaskSnapshot = z.infer<typeof nativeBackgroundTaskSnapshotSchema>;
-export type NativeQuestionList = z.infer<typeof nativeQuestionListSchema>;
+export type NativeQuestionSnapshot = z.infer<typeof nativeQuestionSnapshotSchema>;
 export type NativeRevertResult = z.infer<typeof nativeRevertResultSchema>;
 export type NativeCommandList = z.infer<typeof nativeCommandListSchema>;
 export type NativeCodexCommandResult = z.infer<typeof nativeCommandResultSchema>;
@@ -2196,7 +2196,7 @@ export interface NativeAgentsAPI {
   taskOutput(sessionId: string, taskId: string, directory: string, generation: string, options?: NativeReadOptions): Promise<NativeTaskOutput>;
   /** Requests one task to stop; the CLI's events confirm its final state. */
   stopTask(sessionId: string, taskId: string, directory: string, generation: string): Promise<void>;
-  questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionList>;
+  questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionSnapshot>;
   /** A single-CLI session or a unified conversation with its initial selection. */
   createSession(input: NativeSessionCreate): Promise<Session>;
   selectModel(sessionId: string, directory: string, selection: NativeSessionSelection, expectedRevision: number): Promise<Session>;

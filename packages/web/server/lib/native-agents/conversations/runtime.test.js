@@ -125,7 +125,7 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
     },
     async statuses() { return Object.fromEntries(running); },
     async backgroundTasks() { return {}; },
-    async questions() { return []; },
+    async questions() { return { questions: [], failures: new Map() }; },
     async abort(id) { complete(id); return true; },
     async deleteSession(id) { operations.push(`delete:${id}`); sources.delete(id); await registry.removeSession(id); },
     async compact(id) { operations.push(`compact:${id}`); },
@@ -580,7 +580,7 @@ describe('unified native backend contract', () => {
       publish: (directory, payload) => h.controller.publish({ directory, payload: { id: randomUUID(), ...payload } }),
       executePlan: (...args) => execution.execute(...args),
     });
-    h.native.questions = async () => questions.list(h.directory);
+    h.native.questions = async () => ({ questions: questions.list(h.directory), failures: new Map() });
     h.native.replyQuestion = (...args) => questions.reply(...args);
     execution = createNativePlanExecution({
       registry: h.registry, questions, interactions: { record: async () => {} },

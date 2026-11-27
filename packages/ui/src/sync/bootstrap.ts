@@ -8,7 +8,7 @@ import { warmChatsRootDirectory } from "../lib/chatDirectories"
 import { runBackgroundNetworkTask } from "../lib/background-network"
 import { refreshBackgroundShells } from "./background-shells"
 import { isNativeSessionId } from "../lib/native-agents/ids"
-import { heldNativeForms, heldNativeStatuses, readNativeForms, readNativeStatuses } from "./native-directory-snapshots"
+import { heldNativeStatuses, mergeNativeFormSnapshot, readNativeForms, readNativeStatuses } from "./native-directory-snapshots"
 import {
   readDirectoryStatusSnapshot,
   selectHeldSessionStatuses,
@@ -169,7 +169,7 @@ async function initializeDirectory(input: DirectoryBootstrapInput, sessions: Pro
           opencodeClient.listPendingForms({ directories: [directory] }),
           readNativeForms(directory),
         ])
-        return [...openCode, ...(native ?? heldNativeForms(store.getState().form))]
+        return [...openCode, ...mergeNativeFormSnapshot(native, store.getState().form)]
       })
       if (commit({ form })) noteQuestionFormSnapshot(directory, Object.values(form).flat())
     }),

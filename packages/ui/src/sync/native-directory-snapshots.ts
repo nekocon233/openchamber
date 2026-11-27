@@ -33,17 +33,19 @@ export const readNativeStatuses = async (directory: string, options?: ReadOption
   }
 };
 
-/** Questions the directory's native sessions wait on: `[]` where this runtime has none, `null` when the read failed. */
-export const readNativeForms = async (directory: string, options?: ReadOptions): Promise<FormRequest[] | null> => {
-  if (isSpaceDirectory(directory)) return [];
+type NativeFormSnapshot = { forms: FormRequest[]; unavailableSessionIds: ReadonlySet<string> };
+
+/** A successful native read may be incomplete for named sessions. `null` means the entire read failed. */
+export const readNativeForms = async (directory: string, options?: ReadOptions): Promise<NativeFormSnapshot | null> => {
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
-  if (!nativeAgents?.supported) return [];
+  if (isSpaceDirectory(directory) || !nativeAgents?.supported) return { forms: [], unavailableSessionIds: new Set() };
   try {
-    const questions = await nativeAgents.questions(directory, options);
-    return questions.flatMap((question) => {
+    const { questions, unavailableSessionIds } = await nativeAgents.questions(directory, options);
+    const forms = questions.flatMap((question) => {
       const form = projectNativeQuestion(question);
       return form ? [form] : [];
     });
+    return { forms, unavailableSessionIds: new Set(unavailableSessionIds) };
   } catch (error) {
     if (!options?.signal?.aborted) {
       console.warn('[native-sessions] failed to read native session questions for', directory, error);
@@ -58,11 +60,19 @@ export const heldNativeStatuses = (held: Readonly<StatusMap>): StatusMap => (
 );
 
 /** The native sessions' questions of held question groups. */
-export const heldNativeForms = (held: Readonly<Record<string, FormRequest[]>>): FormRequest[] => (
-  Object.entries(held)
-    .filter(([sessionId]) => isNativeSessionId(sessionId))
-    .flatMap(([, questions]) => questions)
-);
+export const mergeNativeFormSnapshot = (
+  snapshot: NativeFormSnapshot | null,
+  held: Readonly<Record<string, FormRequest[]>>,
+): FormRequest[] => {
+  if (snapshot?.unavailableSessionIds.size === 0) return snapshot.forms;
+  const forms = snapshot?.forms ?? [];
+  const fetchedIds = new Set(forms.map((form) => form.id));
+  const heldForms = Object.entries(held).flatMap(([sessionId, requests]) => {
+    const preserve = snapshot ? snapshot.unavailableSessionIds.has(sessionId) : isNativeSessionId(sessionId);
+    return preserve ? requests.filter((form) => !fetchedIds.has(form.id)) : [];
+  });
+  return [...forms, ...heldForms];
+};
 
 /**
  * A directory's statuses from every source, with the sessions they decide. A

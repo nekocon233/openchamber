@@ -691,6 +691,13 @@ withdraws an in-flight question. DeepSeek uses this acknowledgement boundary.
 Tool questions end with their turn; a completed Codex plan's decision has the
 separate lifetime described above.
 
+The directory question read returns live and restored requests together. If
+an Antigravity decision cannot be read, the snapshot includes the unavailable
+session IDs with the readable requests. Unified conversations expose their
+logical IDs for both. A complete snapshot keeps the original array format.
+The activity check for sending or switching still requires a complete read of
+the affected conversation's sources.
+
 `interactions.js` retains call IDs, choices, outcomes and timestamps, without
 copying question bodies. It restores exact multi-select/custom answers and
 plan decisions after reload. Forks copy only retained calls; deletion removes

@@ -182,36 +182,48 @@ describe('Antigravity decisions through the native runtime', () => {
     await harness.restart();
     const index = path.join(path.dirname(harness.directory), 'home', '.gemini', 'antigravity-cli', 'conversation_summaries.db');
     fs.renameSync(index, `${index}.unavailable`);
-    await expect(harness.runtime.questions(harness.directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE' });
+    await expect(harness.runtime.questions(harness.directory)).resolves.toEqual({
+      questions: [], unavailableSessionIds: [harness.session.id],
+    });
     expect(harness.runtime.hasPendingPlanDecision(harness.session.id)).toBe(true);
     fs.renameSync(`${index}.unavailable`, index);
     expect((await harness.runtime.questions(harness.directory))[0].id).toBe(question.id);
   });
-  it('keeps another unified conversation ready when a pending decision transcript is missing', async () => {
+  it('restores and answers a healthy unified plan when another decision transcript is missing', async () => {
     const h = await setup({ unified: true });
     const peer = await h.runtime.createSession({
       backend: 'antigravity', kind: 'unified', directory: h.directory, selection: h.selection,
     });
-    const sendToPeer = async () => {
+    const sendToPeer = async (text, agent) => {
       const messageID = `ncv_u_${randomUUID()}`;
       await h.runtime.prompt(peer.id, {
-        ...h.selection, agent: 'build', directory: h.directory, messageID, parts: [{ type: 'text', text: 'Hello' }],
+        ...h.selection, agent, directory: h.directory, messageID, parts: [{ type: 'text', text }],
       });
       await h.idle();
       return messageID;
     };
-    await sendToPeer();
     const question = await h.waiting('decision-plan');
+    await sendToPeer('decision-plan', 'plan');
+    const healthyQuestion = await vi.waitFor(async () => {
+      const questions = await h.runtime.questions(h.directory);
+      const pending = questions.find((candidate) => candidate.sessionID === peer.id);
+      expect(pending).toBeDefined();
+      return pending;
+    });
     const affected = await h.runtime.getSession(h.session.id, h.directory);
     const source = affected.metadata.openchamber.native.sourceSessionID.slice('nag_'.length);
     const logs = path.join(path.dirname(h.directory), 'home', '.gemini', 'antigravity-cli', 'brain', source, '.system_generated', 'logs');
     await h.restart();
     fs.renameSync(logs, `${logs}.unavailable`);
 
+    await expect(h.runtime.questions(h.directory)).resolves.toEqual({
+      questions: [healthyQuestion], unavailableSessionIds: [h.session.id],
+    });
+    await h.runtime.replyQuestion(healthyQuestion.id, [['plan']]);
     await expect(h.runtime.getSession(peer.id, h.directory)).resolves.toMatchObject({
       metadata: { openchamber: { native: { switchReady: true } } },
     });
-    const messageID = await sendToPeer();
+    const messageID = await sendToPeer('Hello', 'build');
     const history = await h.runtime.loadMessages(peer.id, h.directory, { limit: 50 });
     expect(history.records.some(({ info }) => info.role === 'user' && info.id === messageID)).toBe(true);
     await expect(h.runtime.getSession(h.session.id, h.directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE' });

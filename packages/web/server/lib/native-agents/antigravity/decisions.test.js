@@ -322,7 +322,7 @@ describe('Antigravity application decisions', () => {
     await h.engine.shutdown();
     h.source.error = new Error('Native transcript unavailable');
     const reopened = h.create();
-    await expect(reopened.engine.restore(DIRECTORY)).rejects.toThrow('Native transcript unavailable');
+    expect(await reopened.engine.restore(DIRECTORY)).toEqual(new Map([[SESSION, h.source.error]]));
     expect((await h.registry.getSession(SESSION)).antigravityInteraction.phase).toBe('open');
     expect(h.deliveries).toEqual([]);
   });

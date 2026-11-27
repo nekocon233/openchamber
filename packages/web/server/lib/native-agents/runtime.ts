@@ -1421,9 +1421,9 @@ export const createNativeAgentsRuntime = ({
     },
 
     async questions(directory: string, sessionIds?: ReadonlySet<string>) {
-      await antigravityDecisions.restore(directory, sessionIds);
+      const failures = await antigravityDecisions.restore(directory, sessionIds);
       await planExecution?.restore(directory, sessionIds);
-      return questions.list(directory).filter((question) => !sessionIds || sessionIds.has(question.sessionID));
+      return { questions: questions.list(directory).filter((question) => !sessionIds || sessionIds.has(question.sessionID)), failures };
     },
 
     hasPendingPlanDecision(sessionId: string): boolean {

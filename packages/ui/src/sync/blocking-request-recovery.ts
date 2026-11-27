@@ -3,7 +3,7 @@ import type { FormRequest, PermissionRequest } from "@/lib/opencode/model"
 import { isVSCodeRuntime } from "@/lib/desktop"
 import { ChildStoreManager, type DirectoryStore } from "./child-store"
 import { readDirectoryFormSnapshot } from "./directory-recovery-snapshots"
-import { readNativeForms } from "./native-directory-snapshots"
+import { mergeNativeFormSnapshot, readNativeForms } from "./native-directory-snapshots"
 import { isNativeSessionId } from "@/lib/native-agents/ids"
 import { opencodeClient } from "@/lib/opencode/client"
 import { processVSCodeReconciledPermissionAutoAccept } from "./vscode-permission-auto-accept"
@@ -59,13 +59,13 @@ export async function resyncBlockingRequestsForDirectory(
         needsOpenCode
           ? opencodeClient.listPendingForms({ directories: [directory] }).catch(() => { openCodeOk = false; return null })
           : Promise.resolve<FormRequest[]>([]),
-        needsNative
-          ? readNativeForms(directory).then((forms) => { if (forms === null) nativeOk = false; return forms })
-          : Promise.resolve<FormRequest[]>([]),
+        needsNative ? readNativeForms(directory) : Promise.resolve(null),
       ])
+      nativeOk = !needsNative || nativeForms !== null
+      if (nativeForms && candidates.some((id) => nativeForms.unavailableSessionIds.has(id))) succeeded = false
       return [
         ...(pendingForms ?? Object.values(before.form).flat().filter((form) => !isNativeSessionId(form.sessionID))),
-        ...(nativeForms ?? Object.values(before.form).flat().filter((form) => isNativeSessionId(form.sessionID))),
+        ...(needsNative ? mergeNativeFormSnapshot(nativeForms, store.getState().form) : []),
       ]
     })
     if (!isCurrent()) return

@@ -25,6 +25,13 @@ Reference-picker reads cover searched lists, an item's detail, and listed change
 
 ## Decisions
 
+### Why complete native question reads keep the array format
+
+Servers that can read every session send the legacy array, which both clients
+can parse. A partial response carries the available questions and the IDs of
+sessions that could not be read. The adapter exposes both responses as a
+snapshot so sync knows which pending forms can be reconciled.
+
 ### Why the settings surface is a query parameter and not a header
 
 The server resolves per-surface profile fields from the surface kind. A query parameter needs no CORS preflight; the packaged desktop shell and the phone app are cross-origin, and an older instance refuses an unknown header.

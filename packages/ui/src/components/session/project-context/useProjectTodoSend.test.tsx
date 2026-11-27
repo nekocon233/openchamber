@@ -151,7 +151,9 @@ beforeEach(() => {
     createSession: async input => { creates.push({ directory: input.directory, backend: input.backend }); return session(CREATED, input.directory); },
     getSession: async id => session(id, id === PINNED ? OTHER_DIRECTORY : DIRECTORY),
     loadMessages: async () => ({ records: [], cursor: null, complete: true, childSessions: [] }),
-    statuses: async () => ({}), questions: async () => [], backgroundTasks: async () => ({}),
+    statuses: async () => ({}),
+    questions: async () => ({ questions: [], unavailableSessionIds: [] }),
+    backgroundTasks: async () => ({}),
     listSessions: async directory => ({ backends: {
       claude: { status: 'ok', sessions: directory === DIRECTORY ? [session(CURRENT), session(CREATED)] : [session(PINNED, OTHER_DIRECTORY)] },
       codex: { status: 'ok', sessions: [] },

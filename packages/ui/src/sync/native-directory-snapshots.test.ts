@@ -5,7 +5,7 @@ import { create, type StoreApi } from "zustand"
 import { createStore } from "zustand/vanilla"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativeQuestionList } from "@/lib/api/types"
+import type { NativeQuestionSnapshot } from "@/lib/api/types"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-agents/test-utils/runtime"
 import { opencodeClient } from "@/lib/opencode/client"
@@ -40,6 +40,10 @@ const question = (id: string, sessionID: string): QuestionRequest => ({
   sessionID,
   questions: [{ question: "Proceed?", header: "Proceed", options: [{ label: "Yes", description: "Go ahead" }] }],
 })
+const questionSnapshot = (questions: QuestionRequest[] = [], unavailableSessionIds: string[] = []): NativeQuestionSnapshot => ({
+  questions,
+  unavailableSessionIds,
+})
 
 const form = (id: string, sessionID = NATIVE) => {
   const request = projectNativeQuestion(question(id, sessionID));
@@ -65,7 +69,7 @@ const unreadable = async (): Promise<never> => {
 }
 
 let nativeStatuses: (signal?: AbortSignal) => Promise<Record<string, SessionStatus>> = async () => ({})
-let nativeQuestions: () => Promise<NativeQuestionList> = async () => []
+let nativeQuestions = async () => questionSnapshot()
 let nativeSession: (id: string) => Promise<Session> = async (id) => sessionRecord(id)
 
 const nativeAgents = createTestNativeAgentsAPI({
@@ -114,7 +118,7 @@ beforeEach(() => {
   registerRuntimeAPIs(createTestRuntimeAPIs(nativeAgents))
   resetGlobalSessionStatuses()
   nativeStatuses = async () => ({})
-  nativeQuestions = async () => []
+  nativeQuestions = async () => questionSnapshot()
   nativeSession = async (id) => sessionRecord(id)
   openCodeStatuses = {}
   openCodeQuestions = []
@@ -198,7 +202,7 @@ describe("readDirectoryStatuses", () => {
 describe("directory bootstrap with native sessions", () => {
   test("merges native statuses and questions next to OpenCode's", async () => {
     nativeStatuses = async () => ({ [NATIVE]: BUSY })
-    nativeQuestions = async () => [question("que_native", NATIVE)]
+    nativeQuestions = async () => questionSnapshot([question("que_native", NATIVE)])
 
     const store = await bootstrapWith({ session: [sessionRecord(NATIVE)] })
 
@@ -231,6 +235,19 @@ describe("directory bootstrap with native sessions", () => {
     expect(global.get(NATIVE)?.status).toEqual(BUSY)
     expect(global.get(NATIVE_CODEX)?.status).toEqual(BUSY)
     expect(global.has(OPENCODE)).toBe(false)
+  })
+
+  test("loads available native forms during bootstrap and preserves the unreadable session's forms", async () => {
+    nativeQuestions = async () => questionSnapshot([question("que_live", NATIVE_CONVERSATION)], [NATIVE])
+
+    const store = await bootstrapWith({
+      session: [sessionRecord(NATIVE), sessionRecord(NATIVE_CONVERSATION), sessionRecord(NATIVE_CODEX)],
+      form: { [NATIVE]: [form("que_held")], [NATIVE_CODEX]: [form("que_answered", NATIVE_CODEX)] },
+    })
+
+    expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_live"])
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_held"])
+    expect(store.getState().form[NATIVE_CODEX]).toBeUndefined()
   })
 })
 
@@ -266,7 +283,7 @@ describe("blocking request resync with native sessions", () => {
     let permissionCalls = 0
     opencodeClient.listPendingForms = async () => { openCodeCalls += 1; return [] }
     opencodeClient.listPendingPermissions = async () => { permissionCalls += 1; return [] }
-    nativeQuestions = async () => []
+    nativeQuestions = async () => questionSnapshot()
     const store = createDirectoryStore({ session: [sessionRecord(NATIVE_CONVERSATION)] })
     let updates = 0
     const unsubscribe = store.subscribe(() => { updates += 1 })
@@ -276,7 +293,7 @@ describe("blocking request resync with native sessions", () => {
       expect(permissionCalls).toBe(0)
       expect(updates).toBe(0)
 
-      nativeQuestions = async () => [question("que_native", NATIVE_CONVERSATION)]
+      nativeQuestions = async () => questionSnapshot([question("que_native", NATIVE_CONVERSATION)])
       await resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
       expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_native"])
       expect(openCodeCalls).toBe(0)
@@ -292,7 +309,7 @@ describe("blocking request resync with native sessions", () => {
 
   test("recovers native questions even when OpenCode pending forms fail", async () => {
     opencodeClient.listPendingForms = async () => { throw new Error("OpenCode unavailable") }
-    nativeQuestions = async () => [question("que_native_live", NATIVE)]
+    nativeQuestions = async () => questionSnapshot([question("que_native_live", NATIVE)])
     const store = createDirectoryStore({
       session: [sessionRecord(OPENCODE), sessionRecord(NATIVE)],
       form: { [OPENCODE]: [form("que_opencode_kept", OPENCODE)] },
@@ -305,6 +322,25 @@ describe("blocking request resync with native sessions", () => {
     expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native_live"])
   })
 
+  test("reconciles healthy sessions while reporting the named native session's failed read", async () => {
+    const live = question("que_live", NATIVE_CONVERSATION)
+    nativeQuestions = async () => questionSnapshot([live], [NATIVE])
+    const store = createDirectoryStore({
+      session: [sessionRecord(NATIVE), sessionRecord(NATIVE_CONVERSATION), sessionRecord(NATIVE_CODEX)],
+      form: { [NATIVE]: [form("que_held")], [NATIVE_CODEX]: [form("que_answered", NATIVE_CODEX)] },
+    })
+
+    expect(await resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION])).toBe(true)
+    expect(await resyncBlockingRequestsForDirectory(DIRECTORY, store)).toBe(false)
+    expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_live"])
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_held"])
+    expect(store.getState().form[NATIVE_CODEX]).toBeUndefined()
+
+    nativeQuestions = async () => questionSnapshot([live])
+    expect(await resyncBlockingRequestsForDirectory(DIRECTORY, store)).toBe(true)
+    expect(store.getState().form[NATIVE]).toBeUndefined()
+  })
+
   test("does not resurrect a form settled while resync is in flight and keeps a form created mid-flight", async () => {
     const existing = form("que_existing", NATIVE_CONVERSATION)
     const created = form("que_created", NATIVE_CONVERSATION)
@@ -312,13 +348,13 @@ describe("blocking request resync with native sessions", () => {
       session: [sessionRecord(NATIVE_CONVERSATION)],
       form: { [NATIVE_CONVERSATION]: [existing] },
     })
-    let resolveRead!: (value: NativeQuestionList) => void
-    nativeQuestions = () => new Promise<NativeQuestionList>((resolve) => { resolveRead = resolve })
+    let resolveRead!: (value: NativeQuestionSnapshot) => void
+    nativeQuestions = () => new Promise<NativeQuestionSnapshot>((resolve) => { resolveRead = resolve })
 
     const pending = resyncBlockingRequestsForDirectory(DIRECTORY, store, [NATIVE_CONVERSATION], { includePermissions: false })
     // User answers/dismisses `existing` and a newer `created` form arrives while the HTTP read is in flight.
     store.setState({ form: { [NATIVE_CONVERSATION]: [created] } })
-    resolveRead([question("que_existing", NATIVE_CONVERSATION)])
+    resolveRead(questionSnapshot([question("que_existing", NATIVE_CONVERSATION)], [NATIVE_CONVERSATION]))
     await pending
 
     expect(store.getState().form[NATIVE_CONVERSATION]?.map((item) => item.id)).toEqual(["que_created"])
@@ -336,7 +372,7 @@ describe("reconnect recovery with native sessions", () => {
       session_status: { [NATIVE_CODEX]: { type: "idle" }, [OPENCODE]: { type: "idle" } },
     })
     nativeStatuses = async () => ({})
-    nativeQuestions = async () => [question("que_codex_plan", NATIVE_CODEX)]
+    nativeQuestions = async () => questionSnapshot([question("que_codex_plan", NATIVE_CODEX)])
 
     const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
 
@@ -363,7 +399,7 @@ describe("reconnect recovery with native sessions", () => {
       sessionReads += 1
       return { ...patched, title: "Authoritative recovery", time: { created: 1, updated: 25 } }
     }
-    nativeQuestions = async () => [question("que_reconnect", NATIVE_CONVERSATION)]
+    nativeQuestions = async () => questionSnapshot([question("que_reconnect", NATIVE_CONVERSATION)])
 
     const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
 
@@ -385,7 +421,7 @@ describe("reconnect recovery with native sessions", () => {
       store.setState({ session: [livePatch] })
       return { ...initial, title: "Stale recovery read", time: { created: 1, updated: 15 } }
     }
-    nativeQuestions = async () => [question("que_after_patch", NATIVE_CONVERSATION)]
+    nativeQuestions = async () => questionSnapshot([question("que_after_patch", NATIVE_CONVERSATION)])
 
     const ok = await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
 
@@ -412,10 +448,10 @@ describe("reconnect recovery with native sessions", () => {
       })
       return { [NATIVE_CONVERSATION]: BUSY, [NATIVE]: BUSY }
     }
-    nativeQuestions = async () => [
+    nativeQuestions = async () => questionSnapshot([
       question("que_removed", NATIVE_CONVERSATION),
       question("que_archived", NATIVE),
-    ]
+    ])
 
     await resyncDirectoryAfterReconnect(DIRECTORY, store, createEventRoutingIndex(), "stream-reconnect")
 

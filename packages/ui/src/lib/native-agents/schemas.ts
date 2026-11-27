@@ -339,3 +339,7 @@ export const nativeQuestionSchema = z.object({
   tool: z.object({ messageID: z.string(), callID: z.string() }).optional(),
 });
 export const nativeQuestionListSchema = z.array(nativeQuestionSchema);
+export const nativeQuestionSnapshotSchema = z.union([
+  nativeQuestionListSchema.transform((questions) => ({ questions, unavailableSessionIds: [] })),
+  z.object({ questions: nativeQuestionListSchema, unavailableSessionIds: z.array(nativeSessionIdSchema).min(1) }),
+]);

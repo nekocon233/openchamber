@@ -84,6 +84,26 @@ describe('web native agents API', () => {
     await createWebNativeAgentsAPI().replyQuestion('ncq_legacy', [['plan']]);
     expect(bodies.map((body) => JSON.parse(body))).toEqual([{ answers: [['build']], execution }, { answers: [['plan']] }]);
   });
+  it('reads both complete and partial native question snapshots', async () => {
+    const api = createWebNativeAgentsAPI();
+    const question = {
+      id: 'ncq_plan',
+      sessionID: 'ncv_11111111-1111-4111-8111-111111111111',
+      kind: 'claude-plan-exit',
+      questions: [{ header: 'Plan', question: 'Review the plan', options: [{ label: 'build', description: '' }] }],
+    };
+    const directory = '/work/project';
+    stubFetch(async () => Response.json([question]));
+    expect(await api.questions(directory)).toEqual({ questions: [question], unavailableSessionIds: [] });
+
+    const partial = { questions: [question], unavailableSessionIds: ['ncv_22222222-2222-4222-8222-222222222222'] };
+    stubFetch(async () => Response.json(partial));
+    expect(await api.questions(directory)).toEqual(partial);
+    expect(requests.map((url) => [url.pathname, url.searchParams.get('directory')])).toEqual([
+      ['/api/native/questions', directory],
+      ['/api/native/questions', directory],
+    ]);
+  });
   it('sends a fixed native statistics window and rejects malformed reports', async () => {
     stubFetch(async () => Response.json(unavailableStatistics()));
     const result = await createWebNativeAgentsAPI().stats({ from: 100, to: 200, timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });

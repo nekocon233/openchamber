@@ -38,6 +38,29 @@ export type QuestionRequest = {
   executionPending?: PlanExecutionChoice;
 };
 
+export interface NativeQuestionRecovery {
+  questions: QuestionRequest[];
+  failures: ReadonlyMap<string, unknown>;
+}
+
+export type NativeQuestionSnapshot = QuestionRequest[] | {
+  questions: QuestionRequest[];
+  unavailableSessionIds: string[];
+};
+
+export const formatNativeQuestionSnapshot = (
+  questions: QuestionRequest[],
+  failures: ReadonlyMap<string, unknown>,
+  visibleSessionId: (sourceId: string) => string | null,
+): NativeQuestionSnapshot => {
+  const unavailableSessionIds = new Set<string>();
+  for (const sourceId of failures.keys()) {
+    const sessionId = visibleSessionId(sourceId);
+    if (sessionId) unavailableSessionIds.add(sessionId);
+  }
+  return unavailableSessionIds.size > 0 ? { questions, unavailableSessionIds: [...unavailableSessionIds].sort() } : questions;
+};
+
 export type QuestionRepliedOutcome = {
   status: 'replied' | 'transferred';
   answers: string[][];

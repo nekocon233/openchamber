@@ -53,7 +53,7 @@ import { antigravityChecklistSnapshot } from '../antigravity/checklist.js';
 import type { NativeChecklistSnapshot, NativePublishedEvent } from '../publisher.js';
 import type { PromptPart } from '../prompt-parts.js';
 import type { PlanExecutionActiveState, PlanExecutionChoice, PlanExecutionResult, PlanExecutionRoute, PlanExecutionShellTasks } from '../plan-execution.js';
-import type { QuestionRequest } from '../questions.js';
+import { formatNativeQuestionSnapshot, type NativeQuestionRecovery, type NativeQuestionSnapshot } from '../questions.js';
 import type { NativeMessageInfo, NativePart, NativeSessionRecord } from '../records.js';
 import type { NativeRegistry } from '../registry.js';
 import type { NativeReverts, RevertResult } from '../revert.js';
@@ -261,7 +261,7 @@ export interface ConversationNativeRuntime {
   ) => Promise<ConversationNativeMessagePage>;
   statuses: (directory: string) => Promise<Record<string, { type: string }>>;
   backgroundTasks: () => Promise<Record<string, { tasks: Array<{ id: string; type: string; description: string }> }>>;
-  questions: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<QuestionRequest[]>;
+  questions: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<NativeQuestionRecovery>;
   replyQuestion: (requestId: string, answers: string[][], execution?: PlanExecutionChoice) => Promise<PlanExecutionResult | void> | void;
   rejectQuestion: (requestId: string) => Promise<PlanExecutionResult | void> | void;
   abort: (sessionId: string) => Promise<boolean>;
@@ -580,9 +580,11 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
     if (!active) return;
     const sessionIds = new Set([active.sessionId]);
     for (const [id, root] of childRoots) if (root === active.sessionId) sessionIds.add(id);
-    const [statuses, tasks, questions] = await Promise.all([
+    const [statuses, tasks, { questions, failures }] = await Promise.all([
       native.statuses(manifest.directory), native.backgroundTasks(), native.questions(manifest.directory, sessionIds),
     ]);
+    const failure = failures.values().next();
+    if (!failure.done) throw failure.value;
     for (const id of sessionIds) {
       const status = statuses[id];
       if (status && status.type !== 'idle') foreground.add(id);
@@ -1142,23 +1144,20 @@ export const createNativeConversations = <Native extends ConversationNativeRunti
       }
       return result;
     },
-    async questions(directory: string): Promise<QuestionRequest[]> {
+    async questions(directory: string): Promise<NativeQuestionSnapshot> {
       await load();
-      return (await native.questions(directory)).map((question) => {
+      const snapshot = await native.questions(directory);
+      const questions = snapshot.questions.flatMap((question) => {
         const owner = owners.get(question.sessionID);
         const manifest = owner ? store.peek(owner.id) : undefined;
         const segment = manifest?.segments.find((entry) => entry.id === owner?.segmentId);
-        if (!manifest || !segment) return question;
+        if (!manifest || !segment) return owned.has(question.sessionID) ? [] : [question];
         questionOwners.set(question.id, { id: manifest.id, selection: manifest.selection, plan: question.kind?.endsWith('-plan-exit') === true });
-        if (question.tool) {
-          return {
-            ...question,
-            sessionID: manifest.id,
-            tool: { ...question.tool, messageID: conversationMessageId(manifest.id, segment, question.tool.messageID) },
-          };
-        }
-        return { ...question, sessionID: manifest.id };
-      }).filter((question) => !owned.has(question.sessionID));
+        const projected = { ...question, sessionID: manifest.id };
+        if (question.tool) projected.tool = { ...question.tool, messageID: conversationMessageId(manifest.id, segment, question.tool.messageID) };
+        return [projected];
+      });
+      return formatNativeQuestionSnapshot(questions, snapshot.failures, (id) => owners.get(id)?.id ?? (owned.has(id) ? null : id));
     },
     async replyQuestion(requestId: string, answers: string[][], execution?: PlanExecutionChoice) {
       await load();

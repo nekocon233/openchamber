@@ -59,7 +59,7 @@ export interface CreateAntigravityDecisionsOptions {
 
 export interface AntigravityDecisionsController {
   propose: (proposal: AntigravityProposal) => Promise<void>;
-  restore: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<void>;
+  restore: (directory: string, sessionIds?: ReadonlySet<string>) => Promise<ReadonlyMap<string, unknown>>;
   has: (sessionId: string) => boolean;
   cancel: (sessionId: string) => Promise<boolean>;
   beforePrompt: (sessionId: string, messageId: string) => Promise<void>;
@@ -345,7 +345,8 @@ export const createAntigravityDecisions = ({
     },
 
     async restore(directory, sessionIds) {
-      if (closed) return;
+      const failures = new Map<string, unknown>();
+      if (closed) return failures;
       const sessions = (await registry.listSessions({ backend: 'antigravity', directory }))
         .filter((entry) => !sessionIds || sessionIds.has(entry.sessionId));
       await Promise.all(sessions.map((session) => serial(session.sessionId, async () => {
@@ -374,7 +375,8 @@ export const createAntigravityDecisions = ({
           await save(owner, 'settled');
           forget(owner);
         }
-      })));
+      }).catch((error) => { failures.set(session.sessionId, error); })));
+      return failures;
     },
 
     has(sessionId) {

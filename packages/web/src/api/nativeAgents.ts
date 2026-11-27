@@ -12,7 +12,7 @@ import {
   nativeDeleteResultSchema,
   nativeMessagePageSchema,
   nativePromptAcceptedSchema,
-  nativeQuestionListSchema,
+  nativeQuestionSnapshotSchema,
   nativeQuestionRejectedSchema,
   nativeQuestionRepliedSchema,
   nativeRevertResultSchema,
@@ -238,7 +238,7 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   questions: (directory, options) => readParsed(
     '/api/native/questions',
     { directory },
-    nativeQuestionListSchema,
+    nativeQuestionSnapshotSchema,
     options?.signal,
   ),
   createSession: (input) => writeParsed('/api/native/sessions', nativeSessionSchema, input),

@@ -149,7 +149,7 @@ const nativeAgents = createTestNativeAgentsAPI({
     },
   }),
   statuses: async () => ({}),
-  questions: async () => [],
+  questions: async () => ({ questions: [], unavailableSessionIds: [] }),
   commands: async () => ({ commands: [] }),
   catalog: async () => ({
     backends: {

@@ -559,7 +559,9 @@ identity across reloads; native transcripts stay unchanged.
 stores source call ID, user step, revision, request ID and open/dispatching/settled
 state without copying the plan or question body. Reconnect reads only already
 marked sessions; opening history can recover a legacy proposal. The source is
-revalidated before every reply. Exact `build` approval sends a new Build prompt
+revalidated before every reply. A failed recovery leaves the decision open
+and reports its source identity alongside the directory's readable requests.
+Exact `build` approval sends a new Build prompt
 with the approved plan bound in hidden instructions and no visible user text.
 Question answers and custom plan feedback also travel in hidden instructions;
 their visible selections belong to the question card. Each continuation retains
