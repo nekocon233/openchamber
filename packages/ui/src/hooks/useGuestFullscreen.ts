@@ -1,9 +1,11 @@
 import React from 'react';
+import { isGuestAttachItem } from '@openchamber/sdk';
 
+import { useGuestItemStore } from '@/lib/guests/item-store';
 import { DESKTOP_GUEST_ID } from '@/lib/workspace/editorTabs';
 import { useUIStore } from '@/stores/useUIStore';
 
-/** Manages window-fullscreen state and auto-cleanup for an active guest pane or page. */
+/** Keeps window fullscreen in sync with the active guest surface and pending panel links. */
 export const useGuestFullscreen = (
   guestId: string,
   surface: 'panel' | 'page',
@@ -12,6 +14,16 @@ export const useGuestFullscreen = (
   const canFullscreen = guestId === DESKTOP_GUEST_ID;
   const guestFullscreen = useUIStore((state) => state.guestFullscreen);
   const isFullscreen = canFullscreen && active && guestFullscreen?.id === guestId && guestFullscreen.surface === surface;
+  const pendingItem = useGuestItemStore((state) => (
+    canFullscreen && active && surface === 'panel' ? state.pendingItemByGuest[guestId] ?? null : null
+  ));
+
+  // Open before the pane's passive effect consumes the pending link.
+  React.useLayoutEffect(() => {
+    if (isGuestAttachItem(pendingItem) && pendingItem.url) {
+      useUIStore.getState().setGuestFullscreen({ id: guestId, surface });
+    }
+  }, [guestId, pendingItem, surface]);
 
   React.useEffect(() => {
     if (!canFullscreen || active) return;

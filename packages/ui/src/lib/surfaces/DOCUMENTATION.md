@@ -124,9 +124,9 @@ moves only the list. Classic keeps its combined Changes view.
 Remote Desktop (`plugin:openchamber-builtin-desktop`) also lives as a single
 tab inside the resident editor in editor layout, with its `setStatusControls`
 connection button portalled into the editor header while active. Clicking its
-rail icon toggles or activates that middle tab instead of opening a second copy
-in a side zone, and ordinary http/https chat links open there without resizing
-the outer split. Classic layout keeps Remote Desktop as a zone panel.
+rail icon toggles or activates that middle tab. Classic layout hosts it in a
+zone panel. Chat links routed to Remote Desktop open it in window fullscreen
+without resizing the workspace split.
 
 Open sessions and New session stay at the titlebar's start. Open sessions shows
 the complete session browser in a dropdown below its button. Selecting or
@@ -429,11 +429,10 @@ controls instead of replacing the title with a full-width toolbar. Comparison
 controls stay above the diff content. In editor layout the file list receives
 its zone's header slot explicitly. Hidden or inactive lists release
 their titlebar actions, and a host without a slot keeps its inline toolbar.
-Extension panels (`GuestPanelPane`) use the same `preserveTitle` slot for any
-controls published through `setStatusControls`, and full-screen extension pages
-(`GuestPagePane`) portal theirs beside the page title in `Header`. Both
-`GuestPanelPane` and `GuestPagePane` share `GuestHeaderControls` and, for
-Remote Desktop, toggle window-filling fullscreen through
+The Remote Desktop panel uses the same `preserveTitle` slot for its controls
+published through `setStatusControls`. Extension pages portal their controls
+beside the page title in `Header`. Remote Desktop can use window fullscreen
+from either surface through
 `GuestFullscreenOverlay` (`useUIStore.guestFullscreen`), moving the live
 `MovablePane` host node without reloading the iframe.
 

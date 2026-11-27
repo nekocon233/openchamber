@@ -278,6 +278,12 @@ reading position and unsent form state in one detached host element. Moving
 that element between zone bodies preserves their React state; moveBefore also
 preserves DOM state where supported, while Electron webviews still reload on moves.
 
+### Why the visible Remote Desktop pane enters fullscreen
+
+The active pane reads the pending URL before its iframe consumes it. Fullscreen
+therefore opens with a viewer in the current workspace. The fullscreen titlebar's
+Close action uses the same dismissal as the pane or guest page.
+
 ### Why conditional measurements and not resize state on every frame
 
 Zone area enters React state only while expansion or a binding ceiling needs it.
