@@ -27,7 +27,6 @@ import {
   fetchDiscussionDetail,
   fetchPullStack,
   fetchReferenceDetail,
-  readGitHubReferencePage,
   labelSearchQualifiers,
   mapReferencesAcross,
   readPullStatusRefs,
@@ -38,6 +37,7 @@ import {
   searchGitHubReferences,
   searchGitHubReferencesAcross,
 } from './reference-search.js';
+import { readGitHubReferencePage } from './repository-references.js';
 import { fetchReviewState } from './review-draft.js';
 import { readGitHubPendingReview } from './pending-reviews.js';
 import { listGitHubCiRuns, readGitHubCiJobLog, readGitHubCiRunDetail } from './ci-runs.js';
@@ -662,7 +662,7 @@ export function createGitHubResources({
         text,
         cursor: cursor || null,
         scope,
-      });
+      }, session.instance);
       return { connected: true, repo, scope, ...page };
     }),
 

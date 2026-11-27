@@ -10,14 +10,15 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-repository-pr
 const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
 const repo = { owner: 'example', repo: 'project', url: 'https://github.com/example/project' };
 const upstream = { owner: 'upstream', repo: 'project', source: 'upstream' };
+const repository = (owner = 'example') => ({ name: 'project', owner: { login: owner } });
 const node = (number, state = 'OPEN', owner = 'example') => ({
   __typename: 'PullRequest', number, title: `PR ${number}`, url: `https://github.com/${owner}/project/pull/${number}`,
   createdAt: null, updatedAt: null, body: '', author: null, labels: { nodes: [] }, comments: { totalCount: 0 },
-  repository: { name: 'project', owner: { login: owner } }, state, isDraft: false,
+  repository: repository(owner), state, isDraft: false,
   headRefName: `feature-${number}`, baseRefName: 'main', headRefOid: `sha-${number}`, headRepository: null,
 });
-const connection = (nodes, more = false, total = nodes.length) => ({
-  data: { repository: { pullRequests: { nodes, totalCount: total, pageInfo: { hasNextPage: more, endCursor: more ? 'next' : null } } } },
+const connection = (nodes, more = false, total = nodes.length, owner = 'example') => ({
+  data: { repository: { ...repository(owner), pullRequests: { nodes, totalCount: total, pageInfo: { hasNextPage: more, endCursor: more ? 'next' : null } } } },
 });
 
 const issue = (number, { state = 'OPEN', stateReason = null, authored = false, assigned = false } = {}) => ({
@@ -33,10 +34,15 @@ describe('single-repository references', () => {
   const validate = vi.fn(async (context) => ({ ...context, bindingRevision: 1 }));
   const context = () => ({ provider: 'github', instance: 'github.com', directory: '/fixture', repositoryId: 'repo-1', accountId, bindingRevision: '1', primaryRemote: 'origin' });
   const get = (options = {}) => request(app).get('/api/source-control/github/references').query({ ...context(), kind: 'pull', scope: 'repository', state: 'all', ...options });
-  const serve = (answer) => {
+  const serve = (answer, owner = 'example', endpoint = 'https://api.github.com/graphql') => {
     const fetch = vi.fn(async (url, init) => {
-      expect(new URL(url).pathname).toBe('/graphql');
-      return Response.json(await answer(JSON.parse(init.body)));
+      expect(String(url)).toBe(endpoint);
+      const body = JSON.parse(init.body);
+      if (body.query.includes('query ReferenceRepository(')) {
+        expect(body.variables).toEqual({ owner: 'example', repo: 'project' });
+        return Response.json({ data: { repository: repository(owner) } });
+      }
+      return Response.json(await answer(body));
     });
     vi.stubGlobal('fetch', fetch);
     return fetch;
@@ -112,6 +118,64 @@ describe('single-repository references', () => {
     expect(body).toMatchObject({ total: 1200, cursor: 'next', hasMore: true, items: [{ number: 1001 }] });
   });
 
+  it('lists PRs after the repository moves and keeps the bound coordinates for follow-up reads', async () => {
+    const fetch = serve(({ variables }) => {
+      expect(variables).toMatchObject({ owner: 'example', repo: 'project', states: ['CLOSED', 'MERGED'] });
+      return connection([node(8, 'MERGED', 'new-owner')], true, 35, 'new-owner');
+    });
+    const { body } = await get({ state: 'closed' }).expect(200);
+    expect(body).toMatchObject({ repo, total: 35, cursor: 'next', items: [{
+      number: 8, state: 'merged', url: 'https://github.com/new-owner/project/pull/8',
+      sourceRepo: { owner: 'example', repo: 'project', source: 'origin' },
+    }] });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('finds a transferred repository by text, number, and either repository URL', async () => {
+    const moved = node(4, 'OPEN', 'new-owner');
+    const fetch = serve(({ variables }) => {
+      if (variables.q) {
+        expect(variables.q).toBe('repo:new-owner/project is:pr sort:updated-desc crash');
+        return { data: { search: { nodes: [moved], issueCount: 1, pageInfo: { endCursor: null, hasNextPage: false } } } };
+      }
+      expect(variables).toMatchObject({ number: 4, o0: 'new-owner', n0: 'project' });
+      return { data: { a0: { issueOrPullRequest: moved } } };
+    }, 'new-owner');
+    for (const query of ['crash', '#4', `${repo.url}/pull/4`, moved.url]) {
+      const { body } = await get({ query }).expect(200);
+      expect(body.items).toMatchObject([{ number: 4, url: moved.url, sourceRepo: { owner: 'example', repo: 'project' } }]);
+    }
+    const calls = fetch.mock.calls.length;
+    const unrelated = await get({ query: 'https://github.com/upstream/project/pull/4' }).expect(200);
+    expect(unrelated.body.items).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('looks up transferred repository URLs only on the bound enterprise instance', async () => {
+    const instance = 'github.example.com';
+    const { setGitHubAuthForHost, removeGitHubAuthAccountForHost } = await import('./auth.js');
+    const credential = await setGitHubAuthForHost(instance, {
+      accessToken: 'enterprise-fixture-token', user: { id: 42, login: 'tester' }, source: 'pat',
+    });
+    const moved = { ...node(4, 'OPEN', 'new-owner'), url: `https://${instance}/new-owner/project/pull/4` };
+    const fetch = serve(({ variables }) => {
+      expect(variables).toMatchObject({ number: 4, o0: 'new-owner', n0: 'project' });
+      return { data: { a0: { issueOrPullRequest: moved } } };
+    }, 'new-owner', `https://${instance}/api/graphql`);
+    const lookup = (query) => get({ instance, accountId: credential.credentialId, query }).expect(200);
+    try {
+      for (const query of [`https://${instance}/example/project/pull/4`, moved.url]) {
+        const { body } = await lookup(query);
+        expect(body.items).toMatchObject([{ number: 4, url: moved.url }]);
+      }
+      const { body } = await lookup('https://github.com/new-owner/project/pull/4');
+      expect(body.items).toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(5);
+    } finally {
+      await removeGitHubAuthAccountForHost(instance, credential.credentialId);
+    }
+  });
+
   it('keeps the network scope for callers that do not select a scope', async () => {
     serve(({ variables }) => {
       expect(variables.q).toContain('repo:example/project repo:upstream/project');
@@ -133,7 +197,7 @@ describe('single-repository references', () => {
     expect(resolveNetwork).not.toHaveBeenCalled();
   });
 
-  it('removes completed review requests from stale search results with the bound account in one read', async () => {
+  it('removes completed review requests from stale search results with the bound account', async () => {
     const pending = (number, isViewer) => ({ ...node(number),
       repository: { name: 'project', owner: { login: 'example', __typename: 'User' } },
       reviewRequests: { nodes: isViewer ? [{ requestedReviewer: { __typename: 'User', isViewer } }] : [], pageInfo: { hasNextPage: false } },
@@ -145,7 +209,7 @@ describe('single-repository references', () => {
     });
     const { body } = await get({ state: 'open', people: 'reviewRequested' }).expect(200);
     expect(body.items.map(item => item.number)).toEqual([2]);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(resolveNetwork).not.toHaveBeenCalled();
   });
 
@@ -183,7 +247,7 @@ describe('single-repository references', () => {
     const { body } = await get({ state: 'open', people: 'mine' }).expect(200);
     expect(body.items.map((item) => item.number)).toEqual([3, 2]);
     expect(body.total).toBe(2);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(resolveNetwork).not.toHaveBeenCalled();
 
     await get({ state: 'open', people: 'mine', cursor: 'bad.cursor' }).expect(400);
@@ -193,7 +257,7 @@ describe('single-repository references', () => {
     serve(({ query, variables }) => {
       expect(query).toContain('issues(states:');
       expect(variables).toEqual({ owner: 'example', repo: 'project', states: ['CLOSED'], first: 30, after: 'page-after-1000' });
-      return { data: { repository: { issues: { nodes: [
+      return { data: { repository: { ...repository(), issues: { nodes: [
         issue(1201, { state: 'CLOSED', stateReason: 'COMPLETED' }),
         issue(1200, { state: 'CLOSED', stateReason: 'NOT_PLANNED' }),
       ], totalCount: 1201, pageInfo: { endCursor: null, hasNextPage: false } } } } };
@@ -218,7 +282,7 @@ describe('single-repository references', () => {
     });
     const { body } = await get({ kind: 'issue', state: 'open', people: 'mine', query: 'error' }).expect(200);
     expect(body.items.map(item => item.number)).toEqual([10, 9, 7]);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('honors scope, membership and state on Issue links and number searches', async () => {
@@ -233,7 +297,7 @@ describe('single-repository references', () => {
     expect((await lookup('#5')).body.items).toEqual([]);
     expect((await lookup(`${repo.url}/issues/6`)).body.items).toEqual([]);
     expect((await lookup('https://github.com/upstream/project/issues/4')).body.items).toEqual([]);
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
   it('does not substitute an issue for a PR with the same number', async () => {
@@ -249,7 +313,7 @@ describe('single-repository references', () => {
     const fetch = serve(() => { throw new Error('Unexpected lookup'); });
     const { body } = await get({ query: 'https://github.com/upstream/project/pull/4' }).expect(200);
     expect(body.items).toEqual([]);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('keeps repository scope when a linked read names an upstream PR', async () => {
@@ -257,7 +321,7 @@ describe('single-repository references', () => {
     const { body } = await get({ query: 'https://github.com/upstream/project/pull/4', linked: '1' }).expect(200);
     expect(body).toMatchObject({ scope: 'repository', items: [] });
     expect(resolveNetwork).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('confirms repository scope when the primary remote has no repository', async () => {

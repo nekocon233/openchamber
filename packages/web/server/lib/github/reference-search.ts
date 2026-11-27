@@ -12,9 +12,8 @@ import {
   DISCUSSION_DETAIL_QUERY,
   SEARCH_QUERY,
   DISCUSSION_SEARCH_QUERY,
-  REPOSITORY_PULLS_QUERY,
-  REPOSITORY_ISSUES_QUERY,
   ISSUE_VIEWER_FIELDS,
+  REFERENCE_PAGE_SIZE,
   referenceSearchPageSchema as searchPageSchema,
   userSchema,
   issueNodeSchema,
@@ -25,7 +24,6 @@ import {
   detailSchema,
 } from './reference-contracts.js';
 
-const REFERENCE_PAGE_SIZE = 30;
 const ACROSS_REPO_CHUNK_SIZE = 40;
 const ACROSS_CONCURRENCY = 4;
 
@@ -462,86 +460,30 @@ const hasViewerReviewRequest = (value: Parameters<typeof viewerReviewRequestsSch
       : requestedReviewer?.__typename === 'Team' && (teamIds.has(requestedReviewer.id) || teams?.pageInfo.hasNextPage));
 };
 
-const repositoryPullsSchema = z.object({
-  repository: z.object({
-    pullRequests: z.object({
-      totalCount: z.number().int().nonnegative(),
-      pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }),
-      nodes: z.array(pullNodeSchema),
-    }),
-  }),
-});
-
-async function listRepositoryPullRequests({ octokit, repo, state, cursor }: {
-  octokit: Octokit; repo: Pick<ReferenceRepo, 'repo' | 'owner'>;
-  state: Exclude<SearchInput['state'], 'unanswered'>; cursor: string | null;
-}) {
-  const states = { open: ['OPEN'], closed: ['CLOSED', 'MERGED'], merged: ['MERGED'], all: null };
-  const data = repositoryPullsSchema.parse(await octokit.graphql(REPOSITORY_PULLS_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    states: states[state],
-    first: REFERENCE_PAGE_SIZE,
-    after: cursor || null,
-    withReviewRequests: false,
-  }));
-  const page = data.repository.pullRequests;
-  const items = page.nodes.map((node) => {
-    const item = toReference(node, [{ ...repo, source: 'origin' }]);
-    if (!item) throw new Error('GitHub returned a pull request outside the bound repository');
-    return item;
-  });
-  return { items, cursor: page.pageInfo.endCursor, hasMore: page.pageInfo.hasNextPage, total: page.totalCount };
+interface RepositoryLookupScope {
+  host: string;
+  alias: ReferenceRepo;
 }
 
-const repositoryIssuesSchema = z.object({
-  repository: z.object({
-    issues: searchPageSchema.extend({ totalCount: z.number().int().nonnegative(), nodes: z.array(issueNodeSchema) }),
-  }),
-});
-
-async function listRepositoryIssues({ octokit, repo, state, cursor }: {
-  octokit: Octokit; repo: Pick<ReferenceRepo, 'repo' | 'owner'>;
-  state: Exclude<SearchInput['state'], 'unanswered'>; cursor: string | null;
-}) {
-  const states = state === 'all' ? null : [state === 'open' ? 'OPEN' : 'CLOSED'];
-  const { repository } = repositoryIssuesSchema.parse(await octokit.graphql(REPOSITORY_ISSUES_QUERY, {
-    owner: repo.owner, repo: repo.repo, states, first: REFERENCE_PAGE_SIZE, after: cursor || null,
-  }));
-  const page = repository.issues;
-  if (page.pageInfo.hasNextPage && !page.pageInfo.endCursor) throw new Error('GitHub returned an invalid issue cursor');
-  const items = page.nodes.map(node => {
-    const item = toReference(node, [{ ...repo, source: 'origin' }]);
-    if (!item) throw new Error('GitHub returned an issue outside the bound repository');
-    return item;
-  });
-  return { items, cursor: page.pageInfo.endCursor, hasMore: page.pageInfo.hasNextPage, total: page.totalCount };
-}
-
-export function readGitHubReferencePage(input: SearchInput) {
-  const repo = input.repos[0];
-  if (input.scope === 'repository' && repo && input.repos.length === 1 && !input.text.trim()
-    && !input.labels?.length && input.people === 'any' && input.state !== 'unanswered') {
-    const args = { octokit: input.octokit, repo, state: input.state, cursor: input.cursor };
-    if (input.kind === 'issue') return listRepositoryIssues(args);
-    if (input.kind === 'pull') return listRepositoryPullRequests(args);
-  }
-  return searchGitHubReferences(input);
-}
-
-export function parseReferenceLookup(text: string, repos: ReferenceRepo[], kind = 'issue') {
+export function parseReferenceLookup(text: string, repos: ReferenceRepo[], kind = 'issue', scope?: RepositoryLookupScope) {
   const trimmed = text.trim();
   const family = kind === 'discussion' ? 'discussion' : 'item';
   const hash = trimmed.match(/^#?(\d+)$/);
   if (hash) {
     return { number: Number(hash[1]), repos, family };
   }
-  const url = trimmed.match(/^(?:https?:\/\/)?github\.com\/([^/\s]+)\/([^/\s]+)\/(issues|pull|discussions)\/(\d+)(?:[/?#]\S*)?$/i);
-  if (url && (url[3]?.toLowerCase() === 'discussions') === (family === 'discussion')) {
-    const target = repos.filter((entry) => repoKey(entry.owner, entry.repo) === repoKey(url[1] ?? '', url[2] ?? ''));
-    return { number: Number(url[4]), repos: target, family };
+  const url = trimmed.match(/^(?:https?:\/\/)?([^/?#\s]+)\/([^/\s]+)\/([^/\s]+)\/(issues|pull|discussions)\/(\d+)(?:[/?#]\S*)?$/i);
+  if (!url || (url[4]?.toLowerCase() === 'discussions') !== (family === 'discussion')) return null;
+  const number = Number(url[5]);
+  if (url[1]?.toLowerCase() !== (scope?.host ?? 'github.com').toLowerCase()) {
+    return scope ? { number, repos: [], family } : null;
   }
-  return null;
+  const key = repoKey(url[2] ?? '', url[3] ?? '');
+  const alias = scope?.alias;
+  const targets = alias && repoKey(alias.owner, alias.repo) === key
+    ? repos
+    : repos.filter(entry => repoKey(entry.owner, entry.repo) === key);
+  return { number, repos: targets, family };
 }
 
 export function parseReferenceLink(text: string, host: string) {
@@ -637,13 +579,13 @@ const isViewerIssue = (node: Parameters<typeof issueViewerSchema.parse>[0]) => {
   return viewerDidAuthor || assignees.nodes.some(assignee => assignee.isViewer);
 };
 
-export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, labels = [], cursor, scope = 'network' }: SearchInput) {
+export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, labels = [], cursor, scope = 'network' }: SearchInput, lookupScope?: RepositoryLookupScope) {
   const isMinePulls = kind === 'pull' && people === 'mine';
   const isRepositoryIssue = scope === 'repository' && kind === 'issue';
   const isMineIssues = isRepositoryIssue && people === 'mine';
   const isRepositoryMinePulls = scope === 'repository' && isMinePulls;
   const withReviewRequests = scope === 'repository' && kind === 'pull' && (people === 'reviewRequested' || people === 'mine');
-  const lookup = parseReferenceLookup(text, repos, kind);
+  const lookup = parseReferenceLookup(text, repos, kind, lookupScope);
   if (lookup) {
     if ((isMinePulls || isMineIssues) && cursor) throw invalidReferencesCursor();
     if (lookup.repos.length === 0) {

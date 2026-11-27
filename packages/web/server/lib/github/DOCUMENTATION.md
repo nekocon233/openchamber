@@ -22,7 +22,7 @@ GitHub sits on the shared source-control route shell (`../source-control/provide
 - `repo/index.js`: remote URL parsing and directory-to-repo resolution.
 - `pr-status.js`: PR lookup across remotes, forks, and upstreams.
 - `pr-summaries.js`: batched live state for PRs already known by number.
-- `reference-search.js`: issue, PR and discussion pages for the reference picker, and an item's detail. The Mine search merges pages in `reference-mine-search.ts` while keeping the existing PR cursor format.
+- `reference-search.js`: issue, PR and discussion searches for the reference picker, and an item's detail. `repository-references.ts` owns repository-scoped pages. The Mine search merges pages in `reference-mine-search.ts` while keeping the existing PR cursor format.
 - `checks-summary.js`: the one checks summarizer shared by every PR read.
 - `review-draft.js`: a pull request's review as the diff draws it: the viewer's pending review and the open threads with their lines.
 - `change-request-patch.js`: a pull request's diff and one file's two sides for walkthroughs and the comparison view.
@@ -294,6 +294,13 @@ that page, so callers cannot mistake a partial page for a complete one.
   GitHub search does. It returns the existing items/cursor/hasMore/total shape.
   An unreadable repository or malformed page fails the read. Text and people
   searches keep the search path and its total, used by the PR panel's limit notice.
+- A repository-scoped list checks each item against the repository GitHub
+  resolves from the bound remote. The native connection includes that identity.
+  Search reads it before building its qualifiers, since GitHub can follow a
+  repository move for a direct read while search requires its current name.
+  Pasted item links resolve through the bound instance.
+  Result links use GitHub's current URL and `sourceRepo` keeps the bound remote
+  coordinates for the detail and status reads.
 
 - A repository Issue list with `people=any`, no text and no labels reads
   `repository.issues` in update order. Its connection cursor supports paging

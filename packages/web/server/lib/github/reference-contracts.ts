@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { checkContextSchema } from './pr-summaries.js';
 
+export const REFERENCE_PAGE_SIZE = 30;
+const REPOSITORY_FIELDS = 'name owner { login }';
+
 const COMMON_FIELDS = `
   number
   title
@@ -11,7 +14,7 @@ const COMMON_FIELDS = `
   author { login avatarUrl }
   labels(first: 6) { nodes { name color } }
   comments { totalCount }
-  repository { name owner { login } }
+  repository { ${REPOSITORY_FIELDS} }
 `;
 
 const PULL_REFERENCE_FRAGMENT = `
@@ -249,6 +252,7 @@ ${DISCUSSION_FRAGMENT}
 export const REPOSITORY_PULLS_QUERY = `
 query RepositoryPulls($owner: String!, $repo: String!, $states: [PullRequestState!], $first: Int!, $after: String, $withReviewRequests: Boolean!) {
   repository(owner: $owner, name: $repo) {
+    ${REPOSITORY_FIELDS}
     pullRequests(states: $states, orderBy: {field: UPDATED_AT, direction: DESC}, first: $first, after: $after) {
       totalCount
       pageInfo { hasNextPage endCursor }
@@ -262,6 +266,7 @@ ${PULL_REFERENCE_FRAGMENT}
 export const REPOSITORY_ISSUES_QUERY = `
 query RepositoryIssues($owner: String!, $repo: String!, $states: [IssueState!], $first: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
+    ${REPOSITORY_FIELDS}
     issues(states: $states, orderBy: {field: UPDATED_AT, direction: DESC}, first: $first, after: $after) {
       totalCount
       pageInfo { hasNextPage endCursor }
@@ -272,9 +277,15 @@ query RepositoryIssues($owner: String!, $repo: String!, $states: [IssueState!], 
 ${ISSUE_REFERENCE_FRAGMENT}
 `;
 
+export const REFERENCE_REPOSITORY_QUERY = `
+query ReferenceRepository($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) { ${REPOSITORY_FIELDS} }
+}
+`;
+
 export const userSchema = z.object({ login: z.string(), avatarUrl: z.string().nullable().optional() }).nullable();
 
-const repositorySchema = z.object({ name: z.string(), owner: z.object({ login: z.string() }) });
+export const referenceRepositorySchema = z.object({ name: z.string().min(1), owner: z.object({ login: z.string().min(1) }) });
 
 const commonSchema = {
   number: z.number().int().positive(),
@@ -286,7 +297,7 @@ const commonSchema = {
   author: userSchema,
   labels: z.object({ nodes: z.array(z.object({ name: z.string(), color: z.string().nullable() }).nullable()) }).nullable(),
   comments: z.object({ totalCount: z.number().int() }),
-  repository: repositorySchema,
+  repository: referenceRepositorySchema,
 };
 
 export const issueNodeSchema = z.object({
