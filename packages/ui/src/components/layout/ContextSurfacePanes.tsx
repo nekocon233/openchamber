@@ -581,7 +581,13 @@ export const ContextSurfacePanes: React.FC = () => {
                 {spacePreparing && !tab.targetDirectory ? <SpacePreparing /> : <DiffView
                   directory={tab.targetDirectory ?? draftSpaceDirectory}
                   visible={detailVisible}
-                  fileListHost={editorLayout ? { host: diffListHost, headerSlot: headerSlotFor(diffZone.zone, active), visible: diffZone.isOpen && active, onSelect: revealEditorDiff } : undefined}
+                  fileListHost={editorLayout ? {
+                    host: diffListHost,
+                    headerSlot: headerSlotFor(diffZone.zone, active),
+                    isZoneOpen: diffZone.isOpen,
+                    visible: diffZone.isOpen && active,
+                    onSelect: revealEditorDiff,
+                  } : undefined}
                   onLeaveChanges={editorLayout ? closeEditorDiff : undefined}
                   hideStackedFileSidebar
                   stackedDefaultCollapsedAll

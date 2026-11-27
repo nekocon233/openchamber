@@ -71,7 +71,7 @@ test('file type filtering follows project ownership and hides details without ch
   const render = () => act(async () => root.render(<I18nProvider><RuntimeAPIContext.Provider value={apis}>
     <SyncProvider sdk={opencodeClient.getSdkClient()} directory={directory}>
       <DiffView directory={directory} visible={detailsVisible} targetFilePath={targetPath} diffScope="working" stackedDefaultCollapsedAll
-        fileListHost={{ host: listHost, visible: true, onSelect: () => {} }} />
+        fileListHost={{ host: listHost, isZoneOpen: true, visible: true, onSelect: () => {} }} />
     </SyncProvider>
   </RuntimeAPIContext.Provider></I18nProvider>));
   try {

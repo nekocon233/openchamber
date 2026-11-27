@@ -150,21 +150,34 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
   const originalFileListMode = useUIStore.getState().diffFileListMode;
   useUIStore.setState({ diffFileListMode: 'tree' });
   const container = document.createElement('div');
-  document.body.append(container);
+  const listHost = document.createElement('div');
+  document.body.append(container, listHost);
   const root = createRoot(container);
+  const apis = createWebAPIs();
+  const render = (tool?: { isZoneOpen: boolean; visible: boolean }) => act(async () => {
+    root.render(<SyncProvider sdk={sdk} directory="/repo"><I18nProvider><RuntimeAPIContext.Provider value={apis}>
+      <DiffView directory="/repo" diffScope="pr" fileListHost={tool ? { host: listHost, ...tool, onSelect: () => {} } : undefined} />
+    </RuntimeAPIContext.Provider></I18nProvider></SyncProvider>);
+  });
   try {
-    await act(async () => {
-      root.render(<SyncProvider sdk={sdk} directory="/repo"><I18nProvider><RuntimeAPIContext.Provider value={createWebAPIs()}>
-        <DiffView directory="/repo" diffScope="pr" />
-      </RuntimeAPIContext.Provider></I18nProvider></SyncProvider>);
-    });
+    await render(servesDiff ? { isZoneOpen: true, visible: true } : undefined);
     // The repository check is batched on a timer; let it and the reads after it land.
     for (let round = 0; round < 4; round += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
     if (servesDiff) {
       expect(container.textContent).toContain('fixture.bin');
-      const marked = [...container.querySelectorAll('[data-tree-disclosure-path]:has(button[aria-description="Your review comments"])')]
+      const marked = [...listHost.querySelectorAll('[data-tree-disclosure-path]:has(button[aria-description="Your review comments"])')]
         .map((row) => row.getAttribute('data-tree-disclosure-path'));
       expect(marked).toEqual(['src', 'src/fixture.bin']);
+      const editorDiff = container.querySelector('[data-diff-virtual-content]');
+      expect(editorDiff).not.toBeNull();
+      expect(container.querySelectorAll('[data-tree-disclosure-path]').length).toBe(0);
+      await render({ isZoneOpen: true, visible: false });
+      expect(container.querySelectorAll('[data-tree-disclosure-path]').length).toBe(0);
+      expect(container.querySelectorAll('[data-diff-file-filter]').length).toBe(0);
+      expect(container.querySelector('[data-diff-virtual-content]') === editorDiff).toBe(true);
+      await render({ isZoneOpen: false, visible: false });
+      expect(container.querySelector('[data-tree-disclosure-path="src/fixture.bin"]')).not.toBeNull();
+      expect(container.querySelector('[data-diff-virtual-content]') === editorDiff).toBe(true);
       expect(container.querySelector('button[aria-label="Review"]')).not.toBeNull();
       expect(paths.filter((path) => /\/pr\/review\/(state|pending)$/.test(path))).toEqual(['/api/source-control/github/pr/review/state']);
       const squash = container.querySelector<HTMLButtonElement>('button[aria-label="Squash and merge"]');
@@ -198,4 +211,4 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
 };
 
 test('a host without change-request diffs says so and offers no retry', () => verifyPullRequestDiff(false), 30_000);
-test('PR Changes reads one review draft and dispatches squash directly without confirmation', () => verifyPullRequestDiff(true), 30_000);
+test('PR Changes keeps the editor layout across tool switches and dispatches squash directly', () => verifyPullRequestDiff(true), 30_000);

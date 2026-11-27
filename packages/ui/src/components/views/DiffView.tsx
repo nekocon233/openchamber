@@ -226,7 +226,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         setPinnedStackedTarget, pendingScrollFrameRef, pinSelectedFileHeaderToTopOnNavigate, scrollRequestNonce,
     });
     const treeReviewState = activeDiffScope === 'pr' ? fileReviewState : undefined;
-    const hasHostedPrFileTree = isTreeMode && activeDiffScope === 'pr' && Boolean(fileListHost?.visible && fileListHost.host);
+    const hasHostedPrFileTree = isTreeMode && activeDiffScope === 'pr' && Boolean(fileListHost?.isZoneOpen && fileListHost.host);
     const { stackedEntryCount, stackedEntriesPending } = useDiffViewStackedEntries({
         isTreeMode, effectiveDirectory, activeDiffScope, changedFiles, scrollRequestNonce,
     });
@@ -684,7 +684,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
                             <TooltipContent side="bottom" sideOffset={6}>{t('contextTooltips.diff.walkthrough')}</TooltipContent>
                         </Tooltip>
                     )}
-                    {!fileListHost?.visible && !inPanelHeader ? renderFileNavigation() : null}
+                    {!fileListHost?.visible && !hasHostedPrFileTree && !inPanelHeader ? renderFileNavigation() : null}
                 </DiffViewToolbar>
                 <ReviewFlowDialog
                     open={reviewDialogOpen}

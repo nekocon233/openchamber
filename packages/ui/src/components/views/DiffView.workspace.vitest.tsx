@@ -73,7 +73,7 @@ test('the workspace list reveals retained details without reading hidden file pa
     root.render(<I18nProvider><RuntimeAPIContext.Provider value={apis}>
       <SyncProvider sdk={opencodeClient.getSdkClient()} directory={directory}>
         <DiffView visible={detailsVisible} diffScope="working" stackedDefaultCollapsedAll
-          fileListHost={{ host: listHost, headerSlot, visible: listVisible, onSelect }} />
+          fileListHost={{ host: listHost, headerSlot, isZoneOpen: true, visible: listVisible, onSelect }} />
       </SyncProvider>
     </RuntimeAPIContext.Provider></I18nProvider>);
   });

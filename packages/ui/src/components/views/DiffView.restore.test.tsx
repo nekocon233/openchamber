@@ -47,7 +47,7 @@ test('remount restores the chosen file and a new explicit request supersedes it 
   const render = () => act(async () => root.render(<I18nProvider><RuntimeAPIContext.Provider value={apis}>
     <SyncProvider sdk={opencodeClient.getSdkClient()} directory={directory}>
       <DiffView directory={directory} diffScope="working" targetFilePath="a.bin"
-        fileListHost={{ host: list, visible: true, onSelect: () => {} }} />
+        fileListHost={{ host: list, isZoneOpen: true, visible: true, onSelect: () => {} }} />
     </SyncProvider>
   </RuntimeAPIContext.Provider></I18nProvider>));
   const selected = () => body.querySelector('[data-workspace-diff-path]')?.getAttribute('data-workspace-diff-path');

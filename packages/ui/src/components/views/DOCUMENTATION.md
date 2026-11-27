@@ -541,9 +541,10 @@ detail shortcuts run only while details are visible. Closing either host does
 not close the other or remount the shared comparison. Classic and mobile
 callers omit `fileListHost` and keep the combined view.
 
-In PR tree mode, the open tool zone shows the file tree and highlights the
-file shown in the Changes document. The selected diff fills the document.
-Closing the tool zone restores the document's file tree with the same selection.
+In PR tree mode, the Changes document gives the selected diff its full width
+while the tool zone is open, including when another tool is selected there.
+This keeps the document's layout steady across tool switches. Closing the zone
+restores the file tree and its navigation controls with the same selection.
 
 A Changes tab opened without a scope (the context rail, multirun) stores
 `diffScope: null`, and `DiffView` opens it on Branch whenever the Branch scope
