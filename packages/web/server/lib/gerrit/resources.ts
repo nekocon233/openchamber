@@ -521,6 +521,8 @@ export function createGerritResourceService({
       const draftComments = commentsOf(drafts);
       const threads = new Map<Input, { root: FileComment; comments: FileComment[] }>();
       const byId = new Map(commentsOf(published).map((comment) => [comment.id, comment]));
+      const viewerId = field(self, '_account_id');
+      const viewerCommentedPaths = new Set<string>();
       const rootOf = (comment: FileComment) => {
         let current = comment;
         while (current.in_reply_to) {
@@ -531,6 +533,7 @@ export function createGerritResourceService({
         return current;
       };
       for (const comment of byId.values()) {
+        if (viewerId != null && field(comment.author, '_account_id') === viewerId) viewerCommentedPaths.add(comment.file);
         const root = rootOf(comment);
         if (root.patch_set !== currentPatchSet) continue;
         let thread = threads.get(root.id);
@@ -571,6 +574,7 @@ export function createGerritResourceService({
             })),
           };
         }),
+        viewerCommentedPaths: [...viewerCommentedPaths],
         truncated: false,
       };
     },

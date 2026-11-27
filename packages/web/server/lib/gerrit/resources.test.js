@@ -89,6 +89,22 @@ describe('Gerrit change status by Change-Id', () => {
   });
 });
 
+describe('Gerrit review state', () => {
+  it('marks the viewer\'s published comments across patch sets', async () => {
+    const { service } = setup({
+      'GET /accounts/self': { _account_id: 7, username: 'viewer' },
+      [`GET ${CHANGE}/drafts`]: {},
+      [`GET ${CHANGE}/comments`]: {
+        'src/old.ts': [{ id: 'a', patch_set: 2, line: 3, author: { _account_id: 7, username: 'previous-name' } }],
+        'src/other.ts': [{ id: 'b', patch_set: 3, line: 3, author: { _account_id: 8, username: 'viewer' } }],
+      },
+    });
+    const review = await service.reviewState('/repo', 42, { owner: 'platform', name: 'app' }, 'origin');
+    expect(review.viewerCommentedPaths).toEqual(['src/old.ts']);
+    expect(review.threads.map(({ path }) => path)).toEqual(['src/other.ts']);
+  });
+});
+
 describe('Gerrit change list', () => {
   it('queries the bound project and pages by _more_changes', async () => {
     const { service, calls } = setup({

@@ -99,6 +99,31 @@ describe('Gitea change request status', () => {
   });
 });
 
+describe('Gitea review state', () => {
+  it('identifies files commented on by the bound viewer', async () => {
+    const { service } = setup({
+      'GET /user': { login: 'viewer' },
+      'GET /repos/alice/app/pulls/1/reviews': [
+        { id: 3, state: 'COMMENT', comments_count: 2 },
+        { id: 6, state: 'COMMENT', comments_count: 1, stale: true },
+        { id: 8, state: 'COMMENT', comments_count: 1, stale: true },
+      ],
+      'GET /repos/alice/app/pulls/1/reviews/3/comments': [
+        { id: 4, path: 'mine.ts', position: 7, commit_id: HEAD, user: { login: 'viewer' } },
+        { id: 5, path: 'other.ts', position: 7, commit_id: HEAD, user: { login: 'colleague' } },
+      ],
+      'GET /repos/alice/app/pulls/1/reviews/6/comments': [
+        { id: 7, path: 'old.ts', position: 3, commit_id: HEAD, user: { login: 'viewer' } },
+      ],
+      'GET /repos/alice/app/pulls/1/reviews/8/comments': () => new Response('{}', { status: 500 }),
+    });
+    const review = await service.reviewState('/repo', 1, upstream, 'origin');
+    expect(review.viewerCommentedPaths).toEqual(['mine.ts', 'old.ts']);
+    expect(review.threads.map(({ path }) => path)).toEqual(['mine.ts', 'other.ts']);
+    expect(review.truncated).toBe(true);
+  });
+});
+
 describe('Gitea change request context', () => {
   const contextRoutes = (extra = {}) => ({
     'GET /repos/alice/app/pulls/1.diff': fixtures.forkPullDiff,

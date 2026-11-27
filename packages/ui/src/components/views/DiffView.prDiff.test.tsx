@@ -105,18 +105,19 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
       });
     }
     if (url.pathname.endsWith('/pr/review/state')) {
-      return Response.json({ connected: true, viewerIsAuthor: false, headSha, draft: null, threads: [], truncated: false });
+      return Response.json({ connected: true, viewerIsAuthor: false, headSha, draft: null, threads: [],
+        viewerCommentedPaths: ['src/fixture.bin'], truncated: false });
     }
     if (url.pathname.endsWith('/pr/review/pending')) {
       return Response.json({ headSha, open: true, ownPull: false, review: null });
     }
     if (url.pathname.startsWith('/api/walkthrough/')) {
       if (servesDiff) {
-        const patch = 'diff --git a/fixture.bin b/fixture.bin\nBinary files a/fixture.bin and b/fixture.bin differ\n';
+        const patch = 'diff --git a/src/fixture.bin b/src/fixture.bin\nBinary files a/src/fixture.bin and b/src/fixture.bin differ\n';
         return Response.json({
           mode: 'files',
           headSha,
-          files: [{ path: 'fixture.bin', status: 'M', insertions: 0, deletions: 0, patch }],
+          files: [{ path: 'src/fixture.bin', status: 'M', insertions: 0, deletions: 0, patch }],
         });
       }
       return Response.json({ error: 'This source control provider does not offer change request walkthroughs', code: 'UNSUPPORTED_WALKTHROUGH_PROVIDER' }, { status: 422 });
@@ -145,6 +146,9 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
   const { usePullRequestSelectionStore } = await import('@/stores/usePullRequestSelectionStore');
   usePullRequestSelectionStore.getState().requestDiff('/repo', { kind: 'pr', number: 17, sourceRepo: { owner: 'team', repo: 'project' } });
   const { DiffView } = await import('./DiffView');
+  const { useUIStore } = await import('@/stores/useUIStore');
+  const originalFileListMode = useUIStore.getState().diffFileListMode;
+  useUIStore.setState({ diffFileListMode: 'tree' });
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
@@ -158,6 +162,9 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
     for (let round = 0; round < 4; round += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
     if (servesDiff) {
       expect(container.textContent).toContain('fixture.bin');
+      const marked = [...container.querySelectorAll('[data-tree-disclosure-path]:has(button[aria-description="Your review comments"])')]
+        .map((row) => row.getAttribute('data-tree-disclosure-path'));
+      expect(marked).toEqual(['src', 'src/fixture.bin']);
       expect(container.querySelector('button[aria-label="Review"]')).not.toBeNull();
       expect(paths.filter((path) => /\/pr\/review\/(state|pending)$/.test(path))).toEqual(['/api/source-control/github/pr/review/state']);
       const squash = container.querySelector<HTMLButtonElement>('button[aria-label="Squash and merge"]');
@@ -180,6 +187,7 @@ const verifyPullRequestDiff = async (servesDiff: boolean) => {
     expect(paths.filter((path) => path.startsWith('/api/walkthrough/'))).toEqual([]);
   } finally {
     await act(async () => root.unmount());
+    useUIStore.setState({ diffFileListMode: originalFileListMode });
     globalThis.fetch = originalFetch;
     await dom.happyDOM.abort();
     for (const [name, value] of originals) {

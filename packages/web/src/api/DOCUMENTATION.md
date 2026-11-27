@@ -15,6 +15,8 @@ Reference-picker reads cover searched lists, an item's detail, and listed change
 - Partial multi-project results survive: projects a list could not read are named in `incompleteProjectIds`, and items already read stay where the caller keeps them.
 - A malformed optional field is dropped without failing the containing read: absent stays absent rather than empty. This covers comment edit permissions, suggestion excerpts, and stacks.
 - Compatibility fields stay absent when an older server or host does not send them: an auth account's `usable` leaves the picker on the current-only rule, an extension tracker's `connect` card is absent for built-ins and older servers, and a missing suggestion excerpt costs only the suggestion's base.
+- Review state with missing or unreadable viewer comment paths still loads its
+  threads and the host draft.
 - Stack layers are bottom first. A stack that does not hold together is treated as unknown, never as a failed read of the surrounding change request.
 - A binding revision of 0 means the unbound repository, read with the account the client is signed in to.
 - A request for a path inside an isolated space names that space's root when the open folder is elsewhere, so a draft waiting for a space sees that space's files rather than the project's.

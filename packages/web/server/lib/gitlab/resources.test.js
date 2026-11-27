@@ -46,6 +46,26 @@ function setup(overrides = {}, options = {}) {
 }
 
 describe('GitLab resource service', () => {
+  it('marks the viewer\'s replies on a previous diff without showing its line card on the current diff', async () => {
+    const notes = (new_path, head_sha, author) => [
+      { id: 1, type: 'DiffNote', position: { new_path, head_sha, new_line: 3 }, author: { id: 2, username: 'viewer' } },
+      { id: 2, author },
+    ];
+    const head = 'a'.repeat(40);
+    const { service } = setup({
+      MergeRequests: { ...setup().client.MergeRequests, show: vi.fn(async () => ({ ...openMR, diff_refs: { head_sha: head } })) },
+      MergeRequestDiscussions: { all: list([
+        { id: 'old', notes: notes('src/old.ts', 'b'.repeat(40), { id: 7, username: 'previous-name' }) },
+        { id: 'other', notes: notes('src/other.ts', head, { id: 8, username: 'colleague' }) },
+      ]) },
+      MergeRequestDraftNotes: { all: list([]) },
+      Users: { showCurrentUser: vi.fn(async () => ({ id: 7, username: 'viewer' })) },
+    });
+    const review = await service.reviewState('/repo', 5, { owner: 'team', name: 'repo' }, 'origin');
+    expect(review.viewerCommentedPaths).toEqual(['src/old.ts']);
+    expect(review.threads.map(({ path }) => path)).toEqual(['src/other.ts']);
+  });
+
   it('reads an upload from a project in the bound network only', async () => {
     const download = vi.fn(async () => new Response('clip'));
     const { service } = setup({}, { download });

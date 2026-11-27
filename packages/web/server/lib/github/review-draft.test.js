@@ -49,6 +49,42 @@ describe('fetchReviewState', () => {
     expect(state.draft.comments).toEqual([{ id: 'D1', path: 'a.ts', side: 'old', line: 2, startLine: 1, body: 'Mine', author: person }]);
   });
 
+  it('identifies the viewer\'s file comments and replies before filtering outdated threads', async () => {
+    const comment = thread().comments.nodes[0];
+    const reply = { ...comment, id: 'reply', viewerDidAuthor: true };
+    const state = await read(octokitAnswering(pull({
+      reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [
+        thread({ isResolved: true, comments: { nodes: [comment, reply] } }),
+        thread({ id: 'old', path: 'old.ts', isOutdated: true, comments: { nodes: [reply] } }),
+        thread({ id: 'other', path: 'other.ts', comments: { nodes: [{ ...comment, viewerDidAuthor: false }] } }),
+        thread({ id: 'pending', path: 'pending.ts', comments: { nodes: [{ ...reply, state: 'PENDING' }] } }),
+      ] },
+    })));
+    expect(state.viewerCommentedPaths).toEqual(['a.ts', 'old.ts']);
+    expect(state.threads.map(({ path }) => path)).toEqual(['a.ts', 'other.ts']);
+  });
+
+  it('marks a viewer reply after the first 50 comments and retains partial results', async () => {
+    const first = thread().comments.nodes[0];
+    const comments = { nodes: Array.from({ length: 50 }, (_, index) => ({ ...first, id: String(index) })),
+      pageInfo: { hasNextPage: true, endCursor: 'after-fifty' } };
+    const octokit = octokitAnswering(pull({
+      reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [
+        thread({ comments }),
+        thread({ id: 'unreadable', path: 'unreadable.ts', comments }),
+      ] },
+    }));
+    octokit.graphql.mockResolvedValueOnce({ node: { id: 'T1', comments: {
+      nodes: [{ state: 'SUBMITTED', viewerDidAuthor: true }], pageInfo: { hasNextPage: false },
+    } } }).mockRejectedValueOnce(new Error('GitHub did not return the remaining replies'));
+
+    const state = await read(octokit);
+    expect(state.viewerCommentedPaths).toEqual(['a.ts']);
+    expect(state.threads[0].comments).toHaveLength(50);
+    expect(state.truncated).toBe(true);
+    expect(octokit.graphql.mock.calls[1][1]).toEqual({ threadId: 'T1', after: 'after-fifty' });
+  });
+
   it('reads every page of threads, and says when it stopped short', async () => {
     const more = { hasNextPage: true, endCursor: 'next' };
     const octokit = octokitAnswering(

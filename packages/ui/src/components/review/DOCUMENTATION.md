@@ -9,6 +9,7 @@ This module lets a person review a change request from its diff: the comments un
 - The draft lives on the host. Nothing here stores it, so a review started on a phone, on the host's own site or by an agent through `gh` shows in the same draft.
 - Focus, visibility and source-control activity events refresh the review so drafts written outside the app appear when the reviewer returns or an agent finishes its turn.
 - `ChangeRequestReviewContext` is null outside the diff of an open change request's current revision and on a host without `features.reviewDrafts`. Every shared surface reads null as "draw what you always did", so the comment field gains its review actions only where a review can take them.
+- A current comparison in the file tree can read the bound account's review state for a closed change request. The tree receives that snapshot while the review action context remains null.
 - A failed read leaves the last state in place and sets `readFailed`; it never reads as an empty review.
 - Every write reads the review again, a refused one too, because a refusal can mean the host state has changed. A refused comment keeps the field and its text open.
 - Reads and write follow-up reads belong to their change request identity. A response for another change request cannot populate the current review or invalidate its pending read. Switching change requests clears the previous state.
@@ -25,6 +26,13 @@ This module lets a person review a change request from its diff: the comments un
   refreshes the project PR list, including comparisons picked directly in Changes.
 
 ## Decisions
+
+### Why the tree uses review ownership from the host
+
+The review state names paths with published comments by the bound viewer,
+including their replies. Draft paths come from the same snapshot. A review
+snapshot belongs to its repository, credential and change request from the
+first render, so a switch clears the tree's markers while the next read loads.
 
 ### Why the draft is on the host and not in the app
 

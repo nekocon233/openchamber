@@ -161,4 +161,7 @@ using the two required regular-expression groups.
 
 ## Review drafts
 
+`review-threads.ts` projects the viewer's comment paths from discussions
+and keeps the line cards scoped to the head being reviewed.
+
 A review is the viewer's draft notes (`MergeRequestDraftNotes`). `/pr/review` publishes them first, then gives the verdict, so what it answers is on the merge request when it lands. GitLab refuses an unchanged line named by one side, so `/pr/review/comment` reads the file's hunks for both numbers (`pairedDiffLine`), and a range goes as its two ends with GitLab's `line_code`. A thread whose position has another `head_sha` belongs to an older push: it stays on the board. Discarding removes notes one by one, because GitLab has no call for the whole draft.

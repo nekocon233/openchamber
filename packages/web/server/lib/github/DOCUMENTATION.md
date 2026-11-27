@@ -127,6 +127,11 @@ Enterprise instances reject automatic redirects in `octokit.js` so credentials n
 
 ## PR integration overview
 
+The comparison review read uses `viewerDidAuthor` on published comments to
+mark files in the PR tree. It follows up to 10 additional comment pages when
+the viewer's participation on a path is still unknown. Those pages carry
+ownership fields only, so the inline discussion keeps its own 50-comment limit.
+
 `GET /api/source-control/github/pr/review/pending` returns only the exact
 account's pending review and its paginated comments, with `Cache-Control:
 no-store`. The shared route shell dispatches it to `resources.pendingReview`;

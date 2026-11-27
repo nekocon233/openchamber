@@ -135,6 +135,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const diffWrapLines = diffWrapLinesStore;
     const forcedStaged = activeDiffScope === 'staged' ? true : activeDiffScope === 'working' ? false : null;
     const isMobileLayout = isMobile || screenWidth <= 768;
+    const isTreeMode = diffFileListMode === 'tree' && !isMobileLayout;
     const showReviewAction = Boolean(currentSessionId) && activeDiffScope !== 'turn' && activeDiffScope !== 'commit' && activeDiffScope !== 'pr' && !isMobileLayout && !isVSCodeRuntime();
     const showWalkthroughAction = activeDiffScope !== 'turn' && !isMobileLayout && !isVSCodeRuntime();
     const showFileSidebar = !fileListHost && !hideStackedFileSidebar && !isMobileLayout && screenWidth >= 1024;
@@ -170,12 +171,12 @@ export const DiffView: React.FC<DiffViewProps> = ({
         workingFileCount, stagedFileCount, currentBranch, prComparison, pullRequestContext, selectedPr,
         prChangeRequestTerm, commitComparison, selectedCommitHash, branches, setBaseOverride, clearBaseOverride,
         qualifiedBranchBase, branchBaseSource, isBranchBaseResolved, showBranchOption, setComparisonRetryRevision,
-        commentOrigin, changeRequestReview, reviewProvider, comparison, commitFiles, commitFilesError, branchFiles,
+        commentOrigin, changeRequestReview, reviewProvider, fileReviewState, comparison, commitFiles, commitFilesError, branchFiles,
         branchFilesError, fetchComparisonDiffEntry, loadFullComparisonDiff, comparisonDiffData, branchFileCount,
         diffOwner, contentReady, fileFilter, allChangedFiles, displayFile, setDisplayFile, displayFileStaged, setDisplayFileStaged, expandedFiles, setExpandedFiles,
         expansionInitialized, setExpansionInitialized, changedFiles, changedFilePathsKey } = useDiffViewComparisons({ currentSessionId, rootDirectory, visible: dataVisible,
         activeDiffScope, status, effectiveDirectory, binding, setActiveDiffScope, onDiffScopeChange, fetchBranches, git,
-        isGitRepo, diffScope, runtimeKey, t,
+        isGitRepo, diffScope, runtimeKey, t, isTreeMode,
     });
     const expandStackedFile = React.useCallback((path: string) => {
         setExpandedFiles((previous) => {
@@ -224,7 +225,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         pendingScrollTargetRef, visible, shouldPinAfterAlignRef,
         setPinnedStackedTarget, pendingScrollFrameRef, pinSelectedFileHeaderToTopOnNavigate, scrollRequestNonce,
     });
-    const isTreeMode = diffFileListMode === 'tree' && !isMobileLayout;
+    const treeReviewState = activeDiffScope === 'pr' ? fileReviewState : undefined;
     const hasHostedPrFileTree = isTreeMode && activeDiffScope === 'pr' && Boolean(fileListHost?.visible && fileListHost.host);
     const { stackedEntryCount, stackedEntriesPending } = useDiffViewStackedEntries({
         isTreeMode, effectiveDirectory, activeDiffScope, changedFiles, scrollRequestNonce,
@@ -312,7 +313,8 @@ export const DiffView: React.FC<DiffViewProps> = ({
                 {isTreeMode && !hasHostedPrFileTree && (
                     <>
                         <section className="flex max-w-[50%] flex-shrink-0 flex-col" style={{ width: `${fileTreeWidth}px` }}>
-                            <FileTree changedFiles={changedFiles} selectedFile={treeSelectedFile?.path ?? null} onSelectFile={handleSelectFileAndScroll} />
+                            <FileTree changedFiles={changedFiles} selectedFile={treeSelectedFile?.path ?? null}
+                                onSelectFile={handleSelectFileAndScroll} reviewState={treeReviewState} />
                         </section>
                         <div
                             role="separator"
@@ -477,7 +479,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         if (fileListOnly) {
             const selectedFile = hasHostedPrFileTree ? treeSelectedFile?.path ?? null : displayFile;
             const list = { changedFiles, selectedFile, onSelectFile: selectFromList };
-            return isTreeMode ? <FileTree {...list} /> : <FileList {...list} />;
+            return isTreeMode ? <FileTree {...list} reviewState={treeReviewState} /> : <FileList {...list} />;
         }
         return renderStackedDiffView();
     };

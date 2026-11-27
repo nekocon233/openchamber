@@ -284,6 +284,7 @@ const reviewStateResultSchema = z.discriminatedUnion('connected', [
         id: z.string(), body: z.string(), createdAt: z.string(), url: z.string(), author: reviewPersonSchema,
       })),
     })),
+    viewerCommentedPaths: z.array(z.string()).optional().catch(undefined),
     truncated: z.boolean(),
   }),
 ]);

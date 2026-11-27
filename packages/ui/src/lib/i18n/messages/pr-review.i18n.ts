@@ -3,6 +3,7 @@ export const prReviewI18n = {
   en: {
     'review.fileMark.one': '{count} open comment',
     'review.fileMark.other': '{count} open comments',
+    'review.fileMark.viewer': 'Your review comments',
     'review.action.attach': 'Attach',
     'review.action.addToReview': 'Add to review',
     'review.action.suggest': 'Suggest change',
@@ -39,6 +40,7 @@ export const prReviewI18n = {
   de: {
     'review.fileMark.one': '{count} offener Kommentar',
     'review.fileMark.other': '{count} offene Kommentare',
+    'review.fileMark.viewer': 'Deine Review-Kommentare',
     'review.action.attach': 'Anhängen',
     'review.action.addToReview': 'Zum Review hinzufügen',
     'review.action.suggest': 'Änderung vorschlagen',
@@ -75,6 +77,7 @@ export const prReviewI18n = {
   fr: {
     'review.fileMark.one': '{count} commentaire ouvert',
     'review.fileMark.other': '{count} commentaires ouverts',
+    'review.fileMark.viewer': 'Vos commentaires de revue',
     'review.action.attach': 'Joindre',
     'review.action.addToReview': 'Ajouter à la revue',
     'review.action.suggest': 'Suggérer une modification',
@@ -111,6 +114,7 @@ export const prReviewI18n = {
   nl: {
     'review.fileMark.one': '{count} open opmerking',
     'review.fileMark.other': '{count} open opmerkingen',
+    'review.fileMark.viewer': 'Je reviewopmerkingen',
     'review.action.attach': 'Bijvoegen',
     'review.action.addToReview': 'Aan review toevoegen',
     'review.action.suggest': 'Wijziging voorstellen',
@@ -147,6 +151,7 @@ export const prReviewI18n = {
   es: {
     'review.fileMark.one': '{count} comentario abierto',
     'review.fileMark.other': '{count} comentarios abiertos',
+    'review.fileMark.viewer': 'Tus comentarios de revisión',
     'review.action.attach': 'Adjuntar',
     'review.action.addToReview': 'Añadir a la revisión',
     'review.action.suggest': 'Sugerir cambio',
@@ -183,6 +188,7 @@ export const prReviewI18n = {
   ja: {
     'review.fileMark.one': '未解決のコメント {count} 件',
     'review.fileMark.other': '未解決のコメント {count} 件',
+    'review.fileMark.viewer': 'あなたのレビューコメント',
     'review.action.attach': '添付',
     'review.action.addToReview': 'レビューに追加',
     'review.action.suggest': '変更を提案',
@@ -219,6 +225,7 @@ export const prReviewI18n = {
   'pt-BR': {
     'review.fileMark.one': '{count} comentário aberto',
     'review.fileMark.other': '{count} comentários abertos',
+    'review.fileMark.viewer': 'Seus comentários de revisão',
     'review.action.attach': 'Anexar',
     'review.action.addToReview': 'Adicionar à revisão',
     'review.action.suggest': 'Sugerir alteração',
@@ -255,6 +262,7 @@ export const prReviewI18n = {
   uk: {
     'review.fileMark.one': '{count} відкритий коментар',
     'review.fileMark.other': 'Відкритих коментарів: {count}',
+    'review.fileMark.viewer': 'Ваші коментарі до перевірки коду',
     'review.action.attach': 'Прикріпити',
     'review.action.addToReview': 'Додати в ревʼю',
     'review.action.suggest': 'Запропонувати зміну',
@@ -291,6 +299,7 @@ export const prReviewI18n = {
   ko: {
     'review.fileMark.one': '열린 댓글 {count}개',
     'review.fileMark.other': '열린 댓글 {count}개',
+    'review.fileMark.viewer': '내 리뷰 댓글',
     'review.action.attach': '첨부',
     'review.action.addToReview': '리뷰에 추가',
     'review.action.suggest': '변경 제안',
@@ -327,6 +336,7 @@ export const prReviewI18n = {
   pl: {
     'review.fileMark.one': '{count} otwarty komentarz',
     'review.fileMark.other': 'Otwarte komentarze: {count}',
+    'review.fileMark.viewer': 'Twoje komentarze z przeglądu kodu',
     'review.action.attach': 'Załącz',
     'review.action.addToReview': 'Dodaj do recenzji',
     'review.action.suggest': 'Zaproponuj zmianę',
@@ -363,6 +373,7 @@ export const prReviewI18n = {
   'zh-CN': {
     'review.fileMark.one': '{count} 条未解决的评论',
     'review.fileMark.other': '{count} 条未解决的评论',
+    'review.fileMark.viewer': '你的评审评论',
     'review.action.attach': '附加',
     'review.action.addToReview': '添加到评审',
     'review.action.suggest': '建议更改',
@@ -399,6 +410,7 @@ export const prReviewI18n = {
   'zh-TW': {
     'review.fileMark.one': '{count} 則未解決的留言',
     'review.fileMark.other': '{count} 則未解決的留言',
+    'review.fileMark.viewer': '你的審查留言',
     'review.action.attach': '附加',
     'review.action.addToReview': '加入審查',
     'review.action.suggest': '建議變更',
@@ -435,6 +447,7 @@ export const prReviewI18n = {
   tr: {
     'review.fileMark.one': '{count} açık yorum',
     'review.fileMark.other': '{count} açık yorum',
+    'review.fileMark.viewer': 'İnceleme yorumlarınız',
     'review.action.attach': 'Ekle',
     'review.action.addToReview': 'İncelemeye ekle',
     'review.action.suggest': 'Değişiklik öner',
@@ -471,6 +484,7 @@ export const prReviewI18n = {
   ar: {
     'review.fileMark.one': '{count} تعليق مفتوح',
     'review.fileMark.other': 'التعليقات المفتوحة: {count}',
+    'review.fileMark.viewer': 'تعليقات المراجعة الخاصة بك',
     'review.action.attach': 'إرفاق',
     'review.action.addToReview': 'إضافة إلى المراجعة',
     'review.action.suggest': 'اقتراح تغيير',
@@ -507,6 +521,7 @@ export const prReviewI18n = {
   he: {
     'review.fileMark.one': 'תגובה פתוחה {count}',
     'review.fileMark.other': '{count} תגובות פתוחות',
+    'review.fileMark.viewer': 'תגובות הסקירה שלך',
     'review.action.attach': 'צירוף',
     'review.action.addToReview': 'הוספה לסקירה',
     'review.action.suggest': 'הצעת שינוי',

@@ -1,4 +1,9 @@
 import type { SourceControlProviderId } from './providers/descriptor.js';
+import type { ReviewCommentSide } from './review-state.js';
+export type {
+  ChangeRequestReviewState, ChangeRequestReviewStateResult, ReviewCommentSide,
+  ReviewDraftComment, ReviewPerson, ReviewThread, ReviewThreadComment,
+} from './review-state.js';
 
 export type SourceControlProvider = SourceControlProviderId;
 
@@ -744,8 +749,6 @@ export interface ThreadResolveInput extends SourceControlMutationContext<SourceC
 
 export type ReviewVerdict = 'approve' | 'request-changes' | 'comment';
 
-export type ReviewCommentSide = 'old' | 'new';
-
 export type ReviewCommentPosition =
   | { path: string; side: ReviewCommentSide; line: number; startLine?: number }
   | { path: string; side?: never; line?: never; startLine?: never };
@@ -764,53 +767,6 @@ export interface ReviewCommentDeleteInput extends SourceControlMutationContext<S
 }
 
 export type ReviewDiscardInput = SourceControlMutationContext<SourceControlExistingMutationTarget>;
-
-export interface ReviewPerson {
-  login: string;
-  avatarUrl?: string;
-}
-
-export interface ReviewDraftComment {
-  id: string;
-  path: string;
-  side: ReviewCommentSide;
-  line: number | null;
-  startLine: number | null;
-  body: string;
-  author: ReviewPerson | null;
-}
-
-export interface ReviewThreadComment {
-  id: string;
-  body: string;
-  createdAt: string;
-  url: string;
-  author: ReviewPerson | null;
-}
-
-export interface ReviewThread {
-  id: string;
-  path: string;
-  side: ReviewCommentSide;
-  line: number | null;
-  startLine: number | null;
-  resolved: boolean;
-  canReply: boolean;
-  canResolve: boolean;
-  comments: ReviewThreadComment[];
-}
-
-export interface ChangeRequestReviewState {
-  viewerIsAuthor: boolean;
-  headSha: string;
-  draft: { id: string; body: string; comments: ReviewDraftComment[] } | null;
-  threads: ReviewThread[];
-  truncated: boolean;
-}
-
-export type ChangeRequestReviewStateResult =
-  | { connected: false }
-  | ({ connected: true } & ChangeRequestReviewState);
 
 export interface SetLabelsInput extends SourceControlMutationContext<SourceControlExistingMutationTarget> {
   labels: string[];

@@ -1,14 +1,18 @@
 import { z } from 'zod';
 import { hasProperty } from './contracts.js';
 import type { PullRequestQuery } from './contracts.js';
+import { errorStatus } from './resource-context.js';
 
 
 const THREAD_PAGE = 100;
 const THREAD_PAGE_LIMIT = 10;
 const THREAD_COMMENT_LIMIT = 50;
 const PENDING_COMMENT_LIMIT = 100;
+const COMMENT_OWNERSHIP_PAGE_LIMIT = 10;
 
 const author = z.object({ login: z.string(), avatarUrl: z.string().nullish() }).nullish();
+const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() });
+const commentOwnership = z.object({ state: z.string(), viewerDidAuthor: z.boolean().optional() });
 const threadSchema = z.object({
   id: z.string(),
   path: z.string(),
@@ -22,14 +26,14 @@ const threadSchema = z.object({
   viewerCanResolve: z.boolean(),
   viewerCanUnresolve: z.boolean(),
   comments: z.object({
-    nodes: z.array(z.object({
+    nodes: z.array(commentOwnership.extend({
       id: z.string(),
-      state: z.string(),
       body: z.string(),
       createdAt: z.string(),
       url: z.string(),
       author,
     }).nullable()),
+    pageInfo: pageInfo.optional(),
   }),
 });
 const pendingSchema = z.object({
@@ -53,9 +57,12 @@ const pullSchema = z.object({
   headRefOid: z.string(),
   reviews: z.object({ nodes: z.array(pendingSchema.nullable()) }),
   reviewThreads: z.object({
-    pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+    pageInfo,
     nodes: z.array(threadSchema.nullable()),
   }),
+});
+const commentOwnershipPage = z.object({
+  node: z.object({ id: z.string(), comments: z.object({ nodes: z.array(commentOwnership.nullable()), pageInfo }) }).nullable(),
 });
 
 const PENDING_REVIEWS = `reviews(states: [PENDING], first: 5) {
@@ -79,9 +86,22 @@ const REVIEW_STATE_QUERY = `query($owner: String!, $repo: String!, $number: Int!
           id path line startLine diffSide subjectType
           isOutdated isResolved viewerCanReply viewerCanResolve viewerCanUnresolve
           comments(first: ${THREAD_COMMENT_LIMIT}) {
-            nodes { id state body createdAt url author { login avatarUrl } }
+            nodes { id state body createdAt url viewerDidAuthor author { login avatarUrl } }
+            pageInfo { hasNextPage endCursor }
           }
         }
+      }
+    }
+  }
+}`;
+
+const REVIEW_COMMENT_OWNERSHIP_QUERY = `query ReviewCommentOwnership($threadId: ID!, $after: String!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      id
+      comments(first: 100, after: $after) {
+        nodes { state viewerDidAuthor }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -127,6 +147,46 @@ const toDraft = (pending: z.infer<typeof pendingSchema> | null, sides: ReadonlyM
   })),
 } : null);
 
+const viewerPublishedComment = (comment: z.infer<typeof commentOwnership> | null): boolean =>
+  comment?.viewerDidAuthor === true && comment.state !== 'PENDING';
+
+async function readViewerCommentedPaths(octokit: PullRequestQuery['octokit'], threads: z.infer<typeof threadSchema>[]) {
+  const paths = new Set(threads.filter((thread) => thread.comments.nodes.some(viewerPublishedComment)).map((thread) => thread.path));
+  let remaining = COMMENT_OWNERSHIP_PAGE_LIMIT;
+  let truncated = false;
+  for (const thread of threads) {
+    let page = thread.comments.pageInfo;
+    if (paths.has(thread.path) || !page?.hasNextPage) continue;
+    const cursors = new Set<string>();
+    while (page.hasNextPage) {
+      const after = page.endCursor;
+      if (!remaining || !after || cursors.has(after)) {
+        truncated = true;
+        break;
+      }
+      remaining -= 1;
+      cursors.add(after);
+      try {
+        const { node } = commentOwnershipPage.parse(await octokit.graphql(REVIEW_COMMENT_OWNERSHIP_QUERY, { threadId: thread.id, after }));
+        if (!node || node.id !== thread.id) {
+          truncated = true;
+          break;
+        }
+        if (node.comments.nodes.some(viewerPublishedComment)) {
+          paths.add(thread.path);
+          break;
+        }
+        page = node.comments.pageInfo;
+      } catch (error) {
+        if (errorStatus(error) === 401) throw error;
+        truncated = true;
+        break;
+      }
+    }
+  }
+  return { paths: [...paths], truncated };
+}
+
 export async function fetchReviewState({ octokit, owner, repo, number }: PullRequestQuery) {
   const threads: z.infer<typeof threadSchema>[] = [];
   let first: z.infer<typeof pullSchema> | null = null;
@@ -149,13 +209,15 @@ export async function fetchReviewState({ octokit, owner, repo, number }: PullReq
   const sides = new Map(threads.flatMap((thread) => (
     thread.comments.nodes.filter((comment) => comment !== null).map((comment): [string, 'old' | 'new'] => [comment.id, toSide(thread.diffSide)])
   )));
+  const ownership = await readViewerCommentedPaths(octokit, threads);
   return {
     connected: true,
     viewerIsAuthor: first.viewerDidAuthor,
     headSha: first.headRefOid,
     draft: toDraft(pending, sides),
     threads: threads.filter((thread) => !thread.isOutdated).map(toThread).filter((thread) => thread.comments.length > 0),
-    truncated,
+    viewerCommentedPaths: ownership.paths,
+    truncated: truncated || ownership.truncated,
   };
 }
 

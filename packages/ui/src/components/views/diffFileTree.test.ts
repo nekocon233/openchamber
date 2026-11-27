@@ -45,4 +45,16 @@ describe('buildDiffTreeRows', () => {
       '0:README.md',
     ]);
   });
+
+  test('shows a review mark on a renamed file and its collapsed ancestors', () => {
+    const changes = [
+      ...files,
+      { path: 'packages/ui/src/widget.ts', previousPath: 'packages/ui/src/old-widget.ts' },
+    ];
+    const commentedPaths = new Set(['packages/ui/src/old-widget.ts', 'packages/excluded.ts']);
+    const markedRows = (collapsed: string[]) => buildDiffTreeRows(changes, new Set(collapsed), commentedPaths)
+      .filter((row) => row.viewerCommented).map((row) => row.key);
+    expect(markedRows(['packages/ui/src'])).toEqual(['dir:packages', 'dir:packages/ui/src']);
+    expect(markedRows([])).toEqual(['dir:packages', 'dir:packages/ui/src', 'file:packages/ui/src/widget.ts']);
+  });
 });

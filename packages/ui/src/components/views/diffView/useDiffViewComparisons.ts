@@ -46,13 +46,14 @@ interface DiffViewComparisonsOptions {
     runtimeKey: string;
     t: ReturnType<typeof useI18n>['t'];
     visible: boolean;
+    isTreeMode: boolean;
     onDiffScopeChange: DiffViewProps['onDiffScopeChange'];
     diffScope: DiffScope | null;
 }
 
 export function useDiffViewComparisons({
     currentSessionId, rootDirectory, visible, activeDiffScope, status, effectiveDirectory, binding, setActiveDiffScope,
-    onDiffScopeChange, fetchBranches, git, isGitRepo, diffScope, runtimeKey, t,
+    onDiffScopeChange, fetchBranches, git, isGitRepo, diffScope, runtimeKey, t, isTreeMode,
 }: DiffViewComparisonsOptions) {
     const {
         diffs: lastTurnDiffs,
@@ -186,8 +187,8 @@ export function useDiffViewComparisons({
     );
     const comparison = useGitComparison(effectiveDirectory ?? null, comparisonSource, visible && !isVSCodeRuntime(), activeDiffScope === 'branch' ? branchRevision : '', prComparison.readContext, prComparison.provider);
     const {
-        review: changeRequestReview, provider: reviewProvider,
-    } = useComparisonReview(prComparison, effectiveDirectory, visible && activeDiffScope === 'pr' && !isVSCodeRuntime(), comparison.headSha);
+        review: changeRequestReview, provider: reviewProvider, fileReviewState,
+    } = useComparisonReview(prComparison, effectiveDirectory, visible && activeDiffScope === 'pr' && !isVSCodeRuntime(), comparison.headSha, isTreeMode);
     const diffOwner = workspaceViewKey(runtimeKey, effectiveDirectory, 'diff-content', currentBranch, activeDiffScope,
         activeDiffScope === 'turn' ? currentSessionId : JSON.stringify(comparisonSource),
         activeDiffScope === 'pr' && prComparison.readContext ? workspaceRepositoryIdentity(prComparison.readContext) : null);
@@ -353,7 +354,7 @@ export function useDiffViewComparisons({
         workingFileCount, stagedFileCount, currentBranch, prComparison, pullRequestContext, selectedPr,
         prChangeRequestTerm, commitComparison, selectedCommitHash, branches, setBaseOverride, clearBaseOverride,
         qualifiedBranchBase, branchBaseSource, isBranchBaseResolved, showBranchOption, setComparisonRetryRevision,
-        commentOrigin, changeRequestReview, reviewProvider, comparison, commitFiles, commitFilesError, branchFiles,
+        commentOrigin, changeRequestReview, reviewProvider, fileReviewState, comparison, commitFiles, commitFilesError, branchFiles,
         branchFilesError, fetchComparisonDiffEntry, loadFullComparisonDiff, comparisonDiffData, branchFileCount,
         changedFiles, changedFilePathsKey,
     };

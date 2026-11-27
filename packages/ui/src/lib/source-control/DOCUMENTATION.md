@@ -46,6 +46,8 @@ Capacitor use the server read. VS Code explicitly rejects this capability.
 - Review mutations pin `headSha` so a push beyond the revision being reviewed
   refuses the review. The host owns unpublished review drafts, so another device
   or agent reads the same draft.
+- `review-state.ts` owns review snapshots and their viewer comment paths.
+  The source-control type index re-exports those contracts for runtime adapters.
 - Optional provider results preserve uncertainty and partial success. An absent
   stack or permission means it is unknown, while a null stack means none exists.
   An accepted queued merge requires live state to establish completion, and a

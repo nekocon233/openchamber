@@ -7,8 +7,10 @@ import { FileTreeChevron, FileTreeIndentGuides, FileTreeRowEnd, FileTreeStatusLe
 import { fileTreeRowPaddingLeft, fileTreeRowStateClassName } from '../files/fileTreeRow';
 import { useFileTreeDisclosure } from '../files/useFileTreeDisclosure';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
+import { Icon } from '@/components/icon/Icon';
 import { ReviewFileMark } from '@/components/review/ReviewFileMark';
 import { useI18n } from '@/lib/i18n';
+import type { ChangeRequestReviewState } from '@/lib/source-control/types';
 import { buildDiffTreeRows } from '../diffFileTree';
 import type { FileEntry } from './types';
 import { formatDiffTotals } from './diffData';
@@ -73,16 +75,30 @@ export const FileList = React.memo<FileListProps>(({
         </ScrollableOverlay>
     );
 });
-export const FileTree = React.memo<FileListProps>(({
+export const FileTree = React.memo<FileListProps & { reviewState?: ChangeRequestReviewState | null | undefined }>(({
     changedFiles,
     selectedFile,
     onSelectFile,
+    reviewState,
 }) => {
     const { t } = useI18n();
+    const viewerPaths = reviewState?.viewerCommentedPaths;
+    const drafts = reviewState?.draft?.comments;
+    const commentedPaths = React.useMemo(() => {
+        if (!viewerPaths?.length && !drafts?.length) return undefined;
+        const paths = new Set(viewerPaths);
+        drafts?.forEach((draft) => paths.add(draft.path));
+        return paths;
+    }, [drafts, viewerPaths]);
+    const commentLabel = t('review.fileMark.viewer');
+    const commentMark = <span aria-hidden title={commentLabel} className="inline-flex size-3.5 shrink-0 items-center justify-center">
+        <Icon name="chat-3" className="size-3.5" />
+    </span>;
+    const emptyCommentMark = reviewState !== undefined ? <span aria-hidden className="size-3.5 shrink-0" /> : null;
     const [collapsedDirectories, setCollapsedDirectories] = React.useState<ReadonlySet<string>>(() => new Set());
     const rows = React.useMemo(
-        () => buildDiffTreeRows(changedFiles, collapsedDirectories),
-        [changedFiles, collapsedDirectories],
+        () => buildDiffTreeRows(changedFiles, collapsedDirectories, commentedPaths),
+        [changedFiles, collapsedDirectories, commentedPaths],
     );
 
     React.useEffect(() => {
@@ -113,6 +129,8 @@ export const FileTree = React.memo<FileListProps>(({
             <ul ref={listRef} className="relative flex w-max min-w-full flex-col">
                 {rows.map((row) => {
                     const paddingLeft = fileTreeRowPaddingLeft(row.depth);
+                    const mark = row.viewerCommented ? commentMark : emptyCommentMark;
+                    const description = row.viewerCommented ? commentLabel : undefined;
 
                     if (row.kind === 'directory') {
                         return (
@@ -122,6 +140,7 @@ export const FileTree = React.memo<FileListProps>(({
                                     type="button"
                                     onClick={() => toggleDirectory(row.path, row.expanded)}
                                     aria-expanded={row.expanded}
+                                    aria-description={description}
                                     aria-label={row.expanded
                                         ? t('diffView.fileTree.collapseDirectoryAria', { path: row.path })
                                         : t('diffView.fileTree.expandDirectoryAria', { path: row.path })}
@@ -131,7 +150,7 @@ export const FileTree = React.memo<FileListProps>(({
                                 >
                                     <FileTreeChevron expanded={row.expanded} />
                                     <span className="oc-file-tree-row-name typography-meta">{row.label}</span>
-                                    <FileTreeRowEnd className="pe-2" />
+                                    <FileTreeRowEnd className="pe-2">{mark}</FileTreeRowEnd>
                                 </button>
                             </li>
                         );
@@ -146,6 +165,7 @@ export const FileTree = React.memo<FileListProps>(({
                                 type="button"
                                 onClick={() => onSelectFile(row.file.path)}
                                 aria-current={isActive ? 'true' : undefined}
+                                aria-description={description}
                                 className={cn(
                                     'oc-file-tree-row flex w-full items-center gap-1.5 rounded-md py-1 text-start',
                                     fileTreeRowStateClassName(isActive)
@@ -162,6 +182,7 @@ export const FileTree = React.memo<FileListProps>(({
                                         color={descriptor.color}
                                         label={t(descriptor.descriptionKey)}
                                     />
+                                    {mark}
                                 </FileTreeRowEnd>
                             </button>
                         </li>

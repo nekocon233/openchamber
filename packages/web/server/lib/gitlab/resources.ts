@@ -4,6 +4,8 @@ import { pairedDiffLine } from '../source-control/review-position.js';
 import { changeRequestNetworkTarget } from '../source-control/repository-network.js';
 import { mapGitLabCI, mapGitLabCommit, mapGitLabDiff, mapGitLabIssue, mapGitLabMergeRequest, mapGitLabNote, mapGitLabProject, mapGitLabUser, mapGitLabVerdictNote } from './mappers.js';
 import { resolveGitLabProjectsFromDirectory } from './repo.js';
+import { discussionResolved, positionOfNote, projectReviewThreads, toReviewPerson } from './review-threads.js';
+import type { ReviewThreadPermissions } from './review-threads.js';
 import { isPresent, isString } from './validation.js';
 import type { SourceControlMutationTarget, SourceControlProjectRef } from '@openchamber/sdk';
 import type { ProviderReadContext } from '../source-control/provider-contract.js';
@@ -44,7 +46,6 @@ type WithTarget = { providerTarget: NumberedTarget };
 type WithBody = { body: string };
 type WithComment = { commentId: string };
 type Position = ReturnType<typeof reviewCommentPosition>;
-type Permissions = { resolve: Map<Field, boolean>; reply: boolean };
 type ReviewFields = { id: number; note: string };
 type ChainLink = JsonObject & { iid: number; source_branch: string; target_branch: string; web_url: string };
 type LiveDetails = { failedChecks: string[]; recentActivity: Array<{ author: string; at: string }> };
@@ -583,7 +584,7 @@ export function createGitLabResourceService({ origin, client, download, resolveP
     if (!isPlainObject(result?.mergeRequest)) throw new Error('GitLab returned an invalid request-changes result');
   };
 
-  const notesOfDiscussions = (discussions: JsonValue[] | null, permissions: Permissions | null) => {
+  const notesOfDiscussions = (discussions: JsonValue[] | null, permissions: ReviewThreadPermissions | null) => {
     if (!array(discussions)) return discussions;
     return discussions.flatMap((discussion) => {
       if (!isPlainObject(discussion) || !array(discussion.notes)) return [discussion];
@@ -613,7 +614,7 @@ export function createGitLabResourceService({ origin, client, download, resolveP
     }
   }
 }`;
-  const readThreadPermissions = async (project: SourceControlProjectRef, number: number): Promise<Permissions | null> => {
+  const readThreadPermissions = async (project: SourceControlProjectRef, number: number): Promise<ReviewThreadPermissions | null> => {
     try {
       const response = await client.MergeRequests.requester.post('../graphql', {
         body: { query: THREAD_PERMISSIONS_QUERY, variables: { path: `${project.owner}/${project.name}`, iid: String(number) } },
@@ -642,19 +643,6 @@ export function createGitLabResourceService({ origin, client, download, resolveP
       throw new Error('GitLab returned invalid draft notes');
     }
     return value;
-  };
-  const toReviewPerson = (value: Reply | undefined) => {
-    const user = obj(value);
-    return isString(user?.username) ? { login: user.username, avatarUrl: isString(user.avatar_url) ? user.avatar_url : undefined } : null;
-  };
-  const positionOfNote = (value: Field) => {
-    const position = obj(value);
-    const path = position?.new_path ?? position?.old_path ?? '';
-    if (position?.position_type === 'file') return { path, side: 'new', line: null, startLine: null };
-    const side = Number.isInteger(position?.new_line) ? 'new' : 'old';
-    const key = side === 'new' ? 'new_line' : 'old_line';
-    const start = obj(obj(position?.line_range)?.start)?.[key];
-    return { path, side, line: position?.[key] ?? null, startLine: integer(start) && start !== position?.[key] ? start : null };
   };
   const lineRangeEnd = (path: string, pair: NonNullable<ReturnType<typeof pairedDiffLine>>) => ({
     lineCode: `${createHash('sha1').update(path).digest('hex')}_${pair.oldLine ?? pair.newLine}_${pair.newLine ?? pair.oldLine}`,
@@ -686,12 +674,6 @@ export function createGitLabResourceService({ origin, client, download, resolveP
       newLine: end.newLine ?? undefined,
       lineRange: range(),
     };
-  };
-
-  const discussionResolved = (raw: Reply) => {
-    if (!isPlainObject(raw) || !array(raw.notes)) return null;
-    const resolvable = raw.notes.filter((note): note is JsonObject => isPlainObject(note) && note.resolvable === true);
-    return resolvable.length > 0 && resolvable.every((note) => note.resolved === true);
   };
 
   const DIFF_STATS_QUERY = `query($path: ID!, $iid: String!) {
@@ -866,6 +848,9 @@ export function createGitLabResourceService({ origin, client, download, resolveP
       ]);
       const me = toReviewPerson(viewer);
       if (!discussions) throw new TypeError('Missing GitLab discussion list');
+      const { threads, viewerCommentedPaths } = projectReviewThreads(discussions, {
+        headSha, viewerId: obj(viewer)?.id, requestUrl: request.url, permissions,
+      });
       return {
         connected: true,
         viewerIsAuthor: obj(obj(raw)?.author)?.username === obj(viewer)?.username,
@@ -880,26 +865,8 @@ export function createGitLabResourceService({ origin, client, download, resolveP
             author: me,
           })),
         } : null,
-        threads: discussions.flatMap((value) => {
-          const discussion = obj(value);
-          const notes = asArray(discussion?.notes).filter((note): note is JsonObject => isPlainObject(note) && note.system !== true);
-          const [first] = notes;
-          if (first?.type !== 'DiffNote' || !isPlainObject(first.position) || first.position.head_sha !== headSha) return [];
-          return [{
-            ...positionOfNote(first.position),
-            id: discussion?.id,
-            resolved: discussionResolved(value) === true,
-            canReply: permissions?.reply ?? false,
-            canResolve: permissions?.resolve.get(discussion?.id) ?? false,
-            comments: notes.map((note) => ({
-              id: String(note.id),
-              body: note.body,
-              createdAt: note.created_at,
-              url: `${request.url}#note_${note.id}`,
-              author: toReviewPerson(note.author),
-            })),
-          }];
-        }),
+        threads,
+        viewerCommentedPaths,
         truncated: false,
       };
     },

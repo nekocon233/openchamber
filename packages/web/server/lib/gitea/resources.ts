@@ -8,6 +8,7 @@ import {
   mapGiteaReviewBody, mapGiteaReviewComment, mapGiteaUser, mapGiteaVerdict, splitUnifiedDiff,
 } from './mappers.js';
 import { resolveGiteaReposFromDirectory } from './repo.js';
+import { readGiteaReviewComments } from './review-comments.js';
 import type { JsonObject, JsonValue } from '../shared/json-values.js';
 import type { ProviderMutationContext, ProviderReadContext } from '../source-control/provider-contract.js';
 import type { reviewCommentPosition } from '../source-control/review-position.js';
@@ -922,11 +923,7 @@ export function createGiteaResourceService({
         return value;
       });
       const pending = reviews.find((review): review is JsonObject => hasFields(review) && review.state === 'PENDING' && field(review.user, 'login') === viewer) ?? null;
-      const published = reviews.filter((review) => field(review, 'state') !== 'PENDING' && Number(field(review, 'comments_count')) > 0 && field(review, 'stale') !== true);
-      const [draftComments, ...publishedComments] = await Promise.all([
-        pending ? commentsOf(pending) : Promise.resolve([]),
-        ...published.map(commentsOf),
-      ]);
+      const { draftComments, comments, viewerCommentedPaths, truncated } = await readGiteaReviewComments(reviews, pending, viewer, commentsOf);
       return {
         connected: true,
         viewerIsAuthor: field(raw.user, 'login') === viewer,
@@ -939,7 +936,7 @@ export function createGiteaResourceService({
             return { ...reviewCommentAt(comment), id: String(comment.id), body: comment.body, author: reviewPerson(comment.user) };
           }),
         } : null,
-        threads: publishedComments.flat().filter((comment) => field(comment, 'commit_id') === headSha).map((value) => {
+        threads: comments.filter((comment) => field(comment, 'commit_id') === headSha).map((value) => {
           const comment = record(value);
           return {
             ...reviewCommentAt(comment),
@@ -950,7 +947,8 @@ export function createGiteaResourceService({
             comments: [{ id: String(comment.id), body: comment.body, createdAt: comment.created_at, url: comment.html_url, author: reviewPerson(comment.user) }],
           };
         }),
-        truncated: false,
+        viewerCommentedPaths,
+        truncated,
       };
     },
 

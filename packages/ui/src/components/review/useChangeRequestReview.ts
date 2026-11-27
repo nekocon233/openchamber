@@ -69,13 +69,15 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
     const number = target?.number;
     const headSha = target?.headSha;
     const directory = target?.directory ?? null;
-    const [state, setState] = React.useState<ChangeRequestReviewState | null>(null);
-    const [readFailed, setReadFailed] = React.useState(false);
+    const [snapshot, setSnapshot] = React.useState<{ key: string; state: ChangeRequestReviewState } | null>(null);
+    const [failedKey, setFailedKey] = React.useState<string | null>(null);
 
     const runtime = getRuntimeKey();
     const reviewKey = available && context && owner !== undefined && name && number
         ? workspaceViewKey(runtime, context.directory, 'review', workspaceRepositoryIdentity(context), owner, name, number)
         : null;
+    const state = snapshot?.key === reviewKey ? snapshot.state : null;
+    const readFailed = reviewKey !== null && failedKey === reviewKey;
     const pullRef = React.useMemo(() => (
         reviewKey && owner !== undefined && name && number ? { owner, repo: name, number } : null
     ), [name, number, owner, reviewKey]);
@@ -91,13 +93,15 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
             const result = await sourceControl.changeRequestReviewState(context, { owner, repo: name, number });
             if (!isCurrent()) return;
             if (result.connected) {
-                const { viewerIsAuthor, headSha: liveHead, draft, threads, truncated } = result;
-                const next = { viewerIsAuthor, headSha: liveHead, draft, threads, truncated };
-                setState((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
+                const { viewerIsAuthor, headSha: liveHead, draft, threads, viewerCommentedPaths, truncated } = result;
+                const next = { viewerIsAuthor, headSha: liveHead, draft, threads, viewerCommentedPaths, truncated };
+                setSnapshot((current) => (
+                    current?.key === reviewKey && JSON.stringify(current.state) === JSON.stringify(next) ? current : { key: reviewKey, state: next }
+                ));
             }
-            setReadFailed(!result.connected);
+            setFailedKey(result.connected ? null : reviewKey);
         } catch {
-            if (isCurrent()) setReadFailed(true);
+            if (isCurrent()) setFailedKey(reviewKey);
         }
     }, [context, name, number, owner, reviewKey, sourceControl]);
     const readLatest = React.useRef(read);
@@ -105,8 +109,8 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
 
     React.useEffect(() => {
         currentKey.current = reviewKey;
-        setState(null);
-        setReadFailed(false);
+        setSnapshot(null);
+        setFailedKey(null);
         void readLatest.current();
         return () => { currentKey.current = null; };
     }, [reviewKey]);
@@ -233,7 +237,11 @@ export function useChangeRequestReview(target: ChangeRequestReviewTarget | null)
     }, [context, descriptor, directory, headSha, name, number, owner, pullRef, read, readFailed, reviewKey, sourceControl, state, submissionPending, t, target?.provider]);
 }
 
-type ComparisonReview = { review: ChangeRequestReview | null; provider: SourceControlProvider | null };
+type ComparisonReview = {
+    review: ChangeRequestReview | null;
+    provider: SourceControlProvider | null;
+    fileReviewState: ChangeRequestReviewState | null;
+};
 
 export function useComparisonReview(
     comparison: {
@@ -245,20 +253,24 @@ export function useComparisonReview(
     directory: string | null | undefined,
     enabled: boolean,
     comparedHead?: string | null,
+    includeFileMarks = false,
 ): ComparisonReview {
     const { selectedSource: source, prs, readContext, provider } = comparison;
     const record = source ? prs.find((pr) => pr.number === source.number) : undefined;
     const owner = source?.sourceRepo?.owner ?? record?.project.owner;
     const name = source?.sourceRepo?.repo ?? record?.project.name;
     const number = source?.number;
-    const reviewable = enabled && !source?.revision && !source?.linked && (!record || record.state === 'open');
+    const currentRequest = enabled && !source?.revision && !source?.linked;
+    const reviewable = currentRequest && (!record || record.state === 'open');
+    const shouldRead = reviewable || (currentRequest && includeFileMarks);
     const headSha = comparedHead ?? record?.headSha;
     const target = React.useMemo<ChangeRequestReviewTarget | null>(() => (
-        reviewable && readContext && provider && directory && owner !== undefined && name && number
+        shouldRead && readContext && provider && directory && owner !== undefined && name && number
             ? { context: readContext, provider, project: { owner, name }, number, headSha, directory }
             : null
-    ), [directory, headSha, name, number, owner, provider, readContext, reviewable]);
-    return { review: useChangeRequestReview(target), provider };
+    ), [directory, headSha, name, number, owner, provider, readContext, shouldRead]);
+    const review = useChangeRequestReview(target);
+    return { review: reviewable ? review : null, provider, fileReviewState: includeFileMarks ? review?.state ?? null : null };
 }
 
 export const ChangeRequestReviewContext = React.createContext<ChangeRequestReview | null>(null);

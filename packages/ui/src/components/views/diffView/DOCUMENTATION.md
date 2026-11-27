@@ -20,6 +20,9 @@ remain in their existing neighbouring modules.
   while the entry is hidden or collapsed.
 - Tree mode expands its selected file for fetching as well as rendering.
   Otherwise its default first file can wait forever for an unrequested patch.
+- The pull request file tree marks files with the viewer's review comments
+  or drafts. A rename matches either path, and compact or collapsed
+  directories inherit marks from the files they contain after filtering.
 - Find uses the viewer's exact index-to-working or HEAD-to-index side. The
   combined HEAD-to-working fallback cache cannot supply those search results,
   and renames read their source separately from destination-only batch reads.
@@ -44,6 +47,12 @@ remain in their existing neighbouring modules.
   sticky headers, header-slot placement and review provider keep their hierarchy.
 
 ## Decisions
+
+### Why file and directory rows reserve the comment mark's slot
+
+A review update can arrive while a person is scanning the tree. Keeping the
+mark in the sticky end lane keeps it in view when paths scroll sideways and
+keeps row widths stable as comments arrive.
 
 ### Why content and file rendering stay in the view
 
