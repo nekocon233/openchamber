@@ -36,6 +36,7 @@ export type ClaudeUtilityModelDescription = ClaudeConnectionCatalogModel & {
 export interface ClaudeUtilityGenerateInput {
   modelID: string;
   effort?: string | null | undefined;
+  variant?: string | undefined;
   prompt: string;
   system?: string | null | undefined;
   maxOutputTokens?: number | undefined;
@@ -131,6 +132,7 @@ export const createClaudeUtility = ({
   const runQuery = async ({
     modelID,
     effort,
+    variant,
     prompt,
     system,
     maxOutputTokens,
@@ -139,6 +141,7 @@ export const createClaudeUtility = ({
   }: {
     modelID: string;
     effort?: string | null | undefined;
+    variant?: string | undefined;
     prompt: string;
     system?: string | null | undefined;
     maxOutputTokens?: number | undefined;
@@ -163,13 +166,13 @@ export const createClaudeUtility = ({
       strictMcpConfig: true,
       persistSession: false,
       permissionMode: 'dontAsk',
+      settings: connection.settings ?? { env: { ENABLE_TOOL_SEARCH: 'false' } },
       abortController,
       stderr: (data) => {
         stderrTail = (stderrTail + data).slice(-STDERR_TAIL_CHARS);
       },
     };
-    if (connection.settings) options.settings = connection.settings;
-    if (!launch?.env && !launch?.acquire) options.thinking = { type: 'disabled' };
+    if (!variant && !launch?.env && !launch?.acquire) options.thinking = { type: 'disabled' };
     const parsedEffort = effort ? effortLevelSchema.safeParse(effort) : null;
     if (parsedEffort?.success) options.effort = parsedEffort.data;
     if (responseSchema) options.outputFormat = { type: 'json_schema', schema: responseSchema };
@@ -191,6 +194,7 @@ export const createClaudeUtility = ({
   const generate = async ({
     modelID,
     effort,
+    variant,
     prompt,
     system,
     maxOutputTokens,
@@ -215,7 +219,7 @@ export const createClaudeUtility = ({
     };
     abortSignal.addEventListener('abort', onAbort, { once: true });
     running.add(abortController);
-    runQuery({ modelID, effort, prompt, system, maxOutputTokens, responseSchema: outputSchema, abortController }).then(result.resolve, result.reject);
+    runQuery({ modelID, effort, variant, prompt, system, maxOutputTokens, responseSchema: outputSchema, abortController }).then(result.resolve, result.reject);
     try {
       return await result.promise;
     } finally {

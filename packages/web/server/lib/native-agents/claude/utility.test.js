@@ -76,6 +76,7 @@ describe('Claude Code utility calls', () => {
       strictMcpConfig: true,
       persistSession: false,
       permissionMode: 'dontAsk',
+      settings: { env: { ENABLE_TOOL_SEARCH: 'false' } },
     });
     expect(queries[0].options.systemPrompt).toContain('Return a short title');
     expect(queries[0].options.systemPrompt).toContain('Keep the answer within 100 tokens.');

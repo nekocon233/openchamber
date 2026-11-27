@@ -1,4 +1,5 @@
 import { getTrustRefusal } from './client.js';
+import { isEnterpriseMode } from '../enterprise-mode.js';
 import type { Application } from '../shared/http-contracts.js';
 import type { GenerationOptions } from './index.js';
 
@@ -6,7 +7,7 @@ type GenerationFields = Partial<Pick<GenerationOptions,
   'prompt' | 'system' | 'maxOutputTokens' | 'model' | 'directory' | 'preferredProviderID' | 'preferredModelID'>>;
 
 export type SmallModelRouteService = Pick<typeof import('./index.js'),
-  'describeSmallModel' | 'listAuthenticatedProviders' | 'generateSmallModelText'>;
+  'describeSmallModel' | 'listAuthenticatedProviders' | 'listAuthenticatedNativeProviders' | 'generateSmallModelText'>;
 
 interface FailureFields {
   message?: unknown;
@@ -28,7 +29,12 @@ export function registerSmallModelRoutes(app: Application, { getSmallModelServic
 }) {
   app.get('/api/small-model', async (req, res) => {
     try {
-      const { describeSmallModel, listAuthenticatedProviders } = await getSmallModelService();
+      const { describeSmallModel, listAuthenticatedProviders, listAuthenticatedNativeProviders } = await getSmallModelService();
+      if (req.query.providers === 'native') {
+        const authenticatedProviders = isEnterpriseMode() ? [] : await listAuthenticatedNativeProviders();
+        res.json({ authenticatedProviders });
+        return;
+      }
       const directory = isString(req.query.directory) ? req.query.directory : undefined;
       const resolved = await describeSmallModel({
         directory,

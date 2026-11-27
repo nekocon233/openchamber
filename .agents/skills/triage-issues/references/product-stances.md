@@ -61,6 +61,7 @@ Sections: Runtimes and backends, Platform scope, Localization, Composer, Session
 
 ## Agent tools
 
+- Memory organizing can use the selected native CLI through its restricted utility runtime to keep background edits within shared memory.
 - Code Mode stays on for every model, with no setting to turn it off and no per-category toggles (#6608). Per-tool on and off settings stay. A model that struggles gets clearer session guidance.
 - Agent tools are split by subject, with no per-action toggles.
 - OpenChamber never reads, detects or writes another plugin's private state files, such as oh-my-openagent's. An extension can.

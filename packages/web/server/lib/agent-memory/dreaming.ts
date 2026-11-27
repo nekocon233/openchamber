@@ -1,6 +1,10 @@
 import { z } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
 
+import { isNativeSessionId, nativeBackendOfProviderId } from '../native-agents/ids.js';
 import { asNonEmptyString } from '../shared/guards.js';
+import { generateSmallModelText } from '../small-model/index.js';
+import { generateNativeDreamPlan } from './native-dreaming.js';
 import { isMemoryRecord as isRecord } from './contracts.js';
 import type { MemoryChangedEvent, MemoryEntry, MemoryScope, MemoryTarget } from './contracts.js';
 import type { AgentMemoryRuntime, DreamState } from './runtime.js';
@@ -69,6 +73,9 @@ interface DreamDependencies {
     variant?: string | null;
   };
   isAutoModel?: (model: { providerID: string; modelID: string }) => boolean;
+  generateNative?: Parameters<typeof generateNativeDreamPlan>[0]['generate'];
+  nativeDreamAllowed?: () => boolean;
+  readSessionActivity?: () => Record<string, { type: string }>;
   fetchImpl?: typeof fetch;
   now?: () => number;
   setTimer?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -255,6 +262,9 @@ export const createMemoryDreaming = (deps: DreamDependencies) => {
     isDirectoryTrusted = () => true,
     resolveSessionDefaults,
     isAutoModel = () => false,
+    generateNative = generateSmallModelText,
+    nativeDreamAllowed = () => false,
+    readSessionActivity,
     fetchImpl = fetch,
     now = () => Date.now(),
     setTimer = (callback, ms) => setTimeout(callback, ms),
@@ -383,17 +393,86 @@ export const createMemoryDreaming = (deps: DreamDependencies) => {
     return model;
   };
 
+  const runNativePass = async (pass: DreamPass, model: DreamModel, targets: DreamPassTarget[], before: Partial<Record<MemoryScope, MemoryEntry[]>>) => {
+    if (!nativeDreamAllowed()) return;
+    const { directory, projectId } = pass;
+    const cancelled = new Error('Memory organizing settings changed');
+    const authorize = async () => {
+      if (!nativeDreamAllowed()) throw cancelled;
+      const settings = await readSettings();
+      if (!nativeDreamAllowed() || settings?.agentMemoryToolEnabled !== true || settings.agentMemoryDreamingEnabled !== true) throw cancelled;
+      const projects = Array.isArray(settings.projects) ? settings.projects : [];
+      const project = projects.find((entry) => isRecord(entry) && entry.path === directory && entry.id === pass.project.id);
+      if (!isRecord(project) || !isDeepStrictEqual(resolveModel(settings, project), model)) throw cancelled;
+    };
+    const recordFailure = async (target: MemoryTarget, error: string) => {
+      const finishedAt = now();
+      await agentMemoryRuntime.recordDream(target, {
+        lastRunAt: finishedAt,
+        record: { finishedAt, status: 'failed', error },
+        snapshot: null,
+        authorize,
+      });
+    };
+    const announce = ({ key }: DreamPassTarget) => {
+      emitMemoryChanged(key === 'project' ? { scope: 'project', projectId } : { scope: 'global' });
+    };
+    let edits;
+    try {
+      edits = await generateNativeDreamPlan({
+        model, directory, snapshots: before, generate: generateNative, authorize, timeoutMs: passTimeoutMs,
+        overflows: measureIndex({ global: before.global ?? pass.global, project: before.project ?? pass.entries }).omitted > 0,
+      });
+    } catch (error) {
+      if (error === cancelled || !nativeDreamAllowed()) return;
+      const reason = z.object({ code: z.string() }).safeParse(error).data?.code;
+      const message = reason === 'context-too-small' ? 'The selected model has too little context for this memory pass'
+        : reason === 'no-provider-login' ? 'Sign in to the selected CLI before organizing memory'
+          : 'The selected native model could not finish organizing memory';
+      await Promise.allSettled(targets.map(async (entry) => {
+        await recordFailure(entry.target, message);
+        announce(entry);
+      }));
+      log('native model pass did not return a valid plan');
+      return;
+    }
+    for (const entry of targets) {
+      const snapshot = before[entry.key];
+      if (!snapshot) continue;
+      try {
+        await agentMemoryRuntime.applyNativeDream(entry.target, snapshot, edits[entry.key], now(), authorize);
+      } catch (error) {
+        if (error === cancelled || !nativeDreamAllowed()) return;
+        try {
+          await recordFailure(entry.target, 'Memory changed or could not be saved during the pass');
+        } catch (failure) {
+          if (failure === cancelled) return;
+          log(`could not record the native pass for ${entry.key} memory`);
+          continue;
+        }
+      }
+      announce(entry);
+    }
+  };
+
   const runPass = async (settings: DreamSettings | null, pass: DreamPass) => {
     const { directory, projectId, includeProject, includeGlobal } = pass;
     const targets: DreamPassTarget[] = [
       ...(includeProject ? [{ key: 'project', target: { scope: 'project', projectId } }] satisfies DreamPassTarget[] : []),
       ...(includeGlobal ? [{ key: 'global', target: { scope: 'global' } }] satisfies DreamPassTarget[] : []),
     ];
+    const model = resolveModel(settings, pass.project);
+    if (model && nativeBackendOfProviderId(model.providerID)) {
+      const snapshots: Partial<Record<MemoryScope, MemoryEntry[]>> = {};
+      if (includeProject) snapshots.project = pass.entries;
+      if (includeGlobal) snapshots.global = pass.global;
+      await runNativePass(pass, model, targets, snapshots);
+      return;
+    }
     const before: Partial<Record<MemoryScope, MemoryEntry[]>> = {};
     for (const { key, target } of targets) before[key] = (await agentMemoryRuntime.read(target)).entries;
 
     let sessionID: string | null = null;
-    const model = resolveModel(settings, pass.project);
     let error: string | null = null;
     let merged: z.infer<typeof mergedReportSchema> = { project: 0, global: 0, toDocs: [] };
     const controller = new AbortController();
@@ -495,7 +574,9 @@ export const createMemoryDreaming = (deps: DreamDependencies) => {
         await removeLeftovers().catch(() => {});
         const settings = await readSettings();
         if (settings?.agentMemoryToolEnabled !== true || settings?.agentMemoryDreamingEnabled !== true) return;
-        if ((await activeSessionIds()).length > 0) return;
+        const activity = readSessionActivity?.();
+        const nativeBusy = activity && Object.entries(activity).some(([id, status]) => isNativeSessionId(id) && status.type === 'busy');
+        if (nativeBusy || (await activeSessionIds()).length > 0) return;
         const pass = await findDuePass(settings);
         if (!pass) return;
         await runPass(settings, pass);

@@ -986,7 +986,7 @@ the browser, and a second meaning there confuses both.
 - Session defaults preserve a chat's manual model and an explicitly selected agent's pinned model. Offered choices require verified credentials and the live catalog.
 - Thinking levels belong to their model and reset on model change. Clearing the goal-model picker explicitly returns to the small model.
 - Walkthrough models exclude only an explicit lack of structured output; missing metadata keeps a model eligible because the catalog omits capabilities for working models.
-- A memory-organizing model missing from the catalog stays named. A removed browser-provider extension shows the built-in provider because the server already falls back to it.
+- Memory organizing offers native providers with signed-in utility runtimes outside enterprise mode. A saved model missing from the catalog stays named. A removed browser-provider extension shows the built-in provider because the server already falls back to it.
 - Memory refresh follows the persisted setting write; refreshing on the optimistic toggle can read the earlier disabled state and leave the tab hidden.
 - Compaction rollback restores only fields untouched by newer writes. Hand-written values outside the offered steps stay selectable so the saved choice remains visible.
 - Retention fields remain editable with automatic cleanup off because manual cleanup uses them too. The In work block never includes archived sessions.

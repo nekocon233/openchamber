@@ -239,6 +239,20 @@ OpenCode's Auto sentinel are not a model the server can send, so the session is
 created without one and OpenCode picks its own default; `POST /api/session`
 answers `{ data: session }`, and the parser also accepts a bare session.
 
+Codex and Claude Code use their restricted utility runtimes when selected
+explicitly or inherited from the session defaults. The scheduler waits for
+interactive native sessions as well as OpenCode sessions. Enterprise policy
+blocks native passes before generation and before any write.
+
+A native utility receives unflagged entries from due scopes and a bounded
+excerpt of the project's `AGENTS.md`. It returns a structured edit plan.
+The server validates every rewrite, removal and merge target before applying
+the plan. A merge keeps an existing entry in the same scope. Each scope compares
+its source snapshot and checks the current settings under the memory write lock. A changed scope fails on its
+own and preserves newer entries. The server records the actual edits for Undo.
+A failed record write restores the entries held before the apply. Missing login,
+insufficient context and malformed output are failed passes.
+
 When it ends, the runtime diffs the store against the snapshot it took and
 records the pass in `memory-dream.json` beside the scope's `memory.json`: the
 record, `lastRunAt`, and, when anything changed, the snapshot and the id and

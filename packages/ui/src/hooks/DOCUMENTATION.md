@@ -35,6 +35,7 @@ A hook here owns the lifetime of what it subscribes to. Mechanics that another m
 - A failed catalog or model-list request keeps the previous answer. An empty successful answer and a failed request are different states and never look the same.
 - Model lists are re-read when the provider catalog changes, on a provider login and on a runtime switch. A panel restored at launch otherwise keeps the empty answer OpenCode gave while it was still starting.
 - Directory-scoped lists name the current directory. Without one, the answer describes OpenCode's own working location, which need not hold the project's models.
+- Memory organizing reads native utility availability from the connected runtime. The result is scoped to that runtime and survives transient read failures within it.
 
 ### Live readouts
 

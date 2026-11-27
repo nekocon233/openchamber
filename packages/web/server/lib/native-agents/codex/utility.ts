@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { isString } from '../../shared/guards.js';
 import type { JsonObject, JsonValue } from '../../shared/json-values.js';
 import type { JsonRpcRequest } from './rpc.js';
+import type { createCodexConnections } from './connections.js';
 
 const REQUEST_TIMEOUT_MS = 60_000;
 const UTILITY_INSTRUCTIONS = 'Generate only the requested text or JSON from the supplied input. This is a standalone text transformation.';
@@ -55,11 +56,13 @@ export interface CodexDescribedModel extends CodexUtilityCatalogModel {
 export interface CodexUtilityOptions {
   request: JsonRpcRequest;
   catalog: () => Promise<CodexUtilityCatalogModel[]>;
+  connections?: Pick<ReturnType<typeof createCodexConnections>, 'catalog' | 'resolve'>;
 }
 
 export interface CodexUtilityGenerateOptions {
   modelID: string;
   effort?: string | null | undefined;
+  serviceTier?: string | undefined;
   directory?: string | null | undefined;
   prompt: string;
   system?: string | null | undefined;
@@ -78,24 +81,24 @@ type UtilityTurnStartParams = {
   threadId: string;
   input: Array<{ type: 'text'; text: string; text_elements: JsonValue[] }>;
   effort?: string | null;
+  serviceTier?: string;
   outputSchema?: JsonValue;
 };
 
-export const createCodexUtility = ({ request, catalog }: CodexUtilityOptions) => {
+export const createCodexUtility = ({ request, catalog, connections }: CodexUtilityOptions) => {
   const pending = new Map<string, UtilityHandlers>();
   const running = new Set<(error: Error) => void>();
 
-  const available = async (): Promise<boolean> => {
+  const defaultLogin = async (): Promise<boolean> => {
     const result = accountResponse.parse(await request('account/read', { refreshToken: false }));
     return result.account !== null || !result.requiresOpenaiAuth;
   };
 
+  const available = async (): Promise<boolean> => Boolean((await connections?.catalog())?.length) || defaultLogin();
+
   const describe = async (modelID: string): Promise<CodexDescribedModel> => {
-    const [hasLogin, models] = await Promise.all([
-      available(),
-      catalog(),
-    ]);
-    const model = models.find((entry) => entry.id === modelID);
+    const managed = (await connections?.catalog())?.find((entry) => entry.id === modelID);
+    const model = managed ?? (await catalog()).find((entry) => entry.id === modelID);
     if (!model) {
       throw Object.assign(new Error('The selected model is not available in Codex: ' + modelID), {
         statusCode: 404,
@@ -103,7 +106,7 @@ export const createCodexUtility = ({ request, catalog }: CodexUtilityOptions) =>
       });
     }
     const effort = model.efforts.includes('low') ? 'low' : model.defaultEffort;
-    const described: CodexDescribedModel = { ...model, hasLogin };
+    const described: CodexDescribedModel = { ...model, hasLogin: Boolean(managed) || await defaultLogin() };
     if (effort !== null) described.effort = effort;
     return described;
   };
@@ -111,6 +114,7 @@ export const createCodexUtility = ({ request, catalog }: CodexUtilityOptions) =>
   const generate = ({
     modelID,
     effort,
+    serviceTier,
     directory,
     prompt,
     system,
@@ -176,10 +180,12 @@ export const createCodexUtility = ({ request, catalog }: CodexUtilityOptions) =>
       try {
         abortSignal.throwIfAborted();
         const cwd = directory || os.homedir();
+        const selected = await connections?.resolve(modelID);
         const configured = configResponse.parse(await request('config/read', { cwd, includeLayers: false }));
         abortSignal.throwIfAborted();
         const started = threadResponse.parse(await request('thread/start', {
-          model: modelID,
+          model: selected?.model ?? modelID,
+          modelProvider: selected?.providerId ?? undefined,
           cwd,
           ephemeral: true,
           approvalPolicy: 'never',
@@ -219,6 +225,7 @@ export const createCodexUtility = ({ request, catalog }: CodexUtilityOptions) =>
           input: [{ type: 'text', text: prompt, text_elements: [] }],
         };
         if (effort !== undefined) turn.effort = effort;
+        if (serviceTier !== undefined) turn.serviceTier = serviceTier;
         if (responseSchema) turn.outputSchema = responseSchema;
         const startedTurn = turnResponse.parse(await request('turn/start', turn));
         turnId = startedTurn.turn.id;

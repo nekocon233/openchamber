@@ -7,6 +7,7 @@ const service = {
   describeSmallModel: vi.fn(),
   generateSmallModelText: vi.fn(),
   listAuthenticatedProviders: vi.fn(),
+  listAuthenticatedNativeProviders: vi.fn(),
 };
 
 const app = {
@@ -54,6 +55,17 @@ describe('small-model routes', () => {
     });
     expect(service.listAuthenticatedProviders).toHaveBeenCalledWith('/workspace');
     expect(res.statusCode).toBe(200);
+  });
+
+  it('lists native utility providers independently of the configured small model', async () => {
+    const res = response();
+    service.listAuthenticatedNativeProviders.mockResolvedValue(['codex-native', 'claude-native']);
+    service.describeSmallModel.mockRejectedValue(new Error('The configured model was removed'));
+
+    await handlers['GET /api/small-model']({ query: { providers: 'native' } }, res);
+
+    expect(res.body).toEqual({ authenticatedProviders: ['codex-native', 'claude-native'] });
+    expect(service.describeSmallModel).not.toHaveBeenCalled();
   });
 
   it('forwards the caller\'s provider without a restriction flag', async () => {

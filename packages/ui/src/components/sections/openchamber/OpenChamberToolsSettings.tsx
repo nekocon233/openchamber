@@ -14,13 +14,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
+import { useCallableModelProviders } from '@/hooks/useCallableModelProviders';
 import { BUILTIN_BROWSER_PROVIDER, browserProviderGuests } from '@/lib/guests/browser-providers';
 import { loadGuestCatalog } from '@/lib/guests/load-catalog';
 import { useGuestsStore } from '@/lib/guests/store';
 import { opencodeClient } from '@/lib/opencode/client';
+import { isNativeProviderId } from '@/lib/native-agents/ids';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useEnterpriseMode } from '@/stores/useEnterprisePolicyStore';
 import { listModelVariantIds } from '@/lib/modelVariants';
 import { parseModelIdentifier } from '@/lib/modelIdentifier';
 import { ModelVariantSelect } from './ModelVariantSelect';
@@ -94,6 +97,11 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const agentMemoryDreamingVariant = useUIStore((state) => state.agentMemoryDreamingVariant);
   const setAgentMemoryDreamingVariant = useUIStore((state) => state.setAgentMemoryDreamingVariant);
   const providers = useConfigStore((state) => state.providers);
+  const enterpriseMode = useEnterpriseMode();
+  const callableProviders = useCallableModelProviders(agentMemoryAvailable && agentMemoryToolEnabled && agentMemoryDreamingEnabled && !enterpriseMode, 'native');
+  const dreamingProviders = React.useMemo(() => providers
+    .filter(({ id }) => !isNativeProviderId(id) || (!enterpriseMode && callableProviders?.includes(id)))
+    .map(({ id }) => id), [callableProviders, enterpriseMode, providers]);
   const agentKnowledgeToolEnabled = useUIStore((state) => state.agentKnowledgeToolEnabled);
   const setAgentKnowledgeToolEnabled = useUIStore((state) => state.setAgentKnowledgeToolEnabled);
   const agentNotifyToolEnabled = useUIStore((state) => state.agentNotifyToolEnabled);
@@ -219,16 +227,17 @@ export const OpenChamberToolsSettings: React.FC = () => {
     void updateDesktopSettings({ agentMemoryDreamingEnabled: enabled });
   }, [setAgentMemoryDreamingEnabled]);
 
-  const handleDreamingModelChange = React.useCallback((providerId: string, modelId: string) => {
+  const handleDreamingModelChange = React.useCallback((providerId: string, modelId: string, selectedVariant?: string | null) => {
     const value = providerId && modelId ? `${providerId}/${modelId}` : '';
+    const variant = value ? selectedVariant ?? '' : '';
     setAgentMemoryDreamingModel(value);
-    setAgentMemoryDreamingVariant('');
-    void updateDesktopSettings({ agentMemoryDreamingModel: value, agentMemoryDreamingVariant: '' });
+    setAgentMemoryDreamingVariant(variant);
+    void updateDesktopSettings({ agentMemoryDreamingModel: value, agentMemoryDreamingVariant: variant });
   }, [setAgentMemoryDreamingModel, setAgentMemoryDreamingVariant]);
 
   const handleDreamingVariantChange = React.useCallback((variant: string | undefined) => {
     setAgentMemoryDreamingVariant(variant ?? '');
-    void updateDesktopSettings({ agentMemoryDreamingVariant: variant ?? '' });
+    void updateDesktopSettings({ agentMemoryDreamingModel: useUIStore.getState().agentMemoryDreamingModel, agentMemoryDreamingVariant: variant ?? '' });
   }, [setAgentMemoryDreamingVariant]);
 
   const dreamingModel = parseModelIdentifier(agentMemoryDreamingModel) ?? { providerId: '', modelId: '' };
@@ -481,6 +490,9 @@ export const OpenChamberToolsSettings: React.FC = () => {
                     providerId={dreamingModel.providerId}
                     modelId={dreamingModel.modelId}
                     onChange={handleDreamingModelChange}
+                    selectedVariant={agentMemoryDreamingVariant || undefined}
+                    allowedProviderIds={dreamingProviders}
+                    allowNativeModels={!enterpriseMode}
                     placeholder={t('settings.openchamber.tools.dreamingModel.default')}
                     className="min-w-0 max-w-[16rem]"
                     disabled={!agentMemoryDreamingEnabled}
@@ -491,7 +503,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
                     onChange={handleDreamingVariantChange}
                     ariaLabel={t('settings.openchamber.tools.dreamingModel.thinking')}
                     triggerClassName="w-auto min-w-0"
-                    disabled={!agentMemoryDreamingEnabled}
+                    disabled={!agentMemoryDreamingEnabled || (enterpriseMode && isNativeProviderId(dreamingModel.providerId))}
                   />
                 </div>
               </div>

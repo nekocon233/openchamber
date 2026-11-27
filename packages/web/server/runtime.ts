@@ -2080,16 +2080,16 @@ const emitAgentMemoryChangedEvent = (event: MemoryChangedEvent) => {
 
 const memoryDreaming = createMemoryDreaming({
   agentMemoryRuntime,
-  readSettings: () => readSettingsFromDiskMigrated(),
-  resolveProjectId: (directory) => resolveMemoryProjectId(directory),
-  measureIndex: measureMemoryIndex,
-  hiddenSessions,
+  readSettings: readSettingsFromDiskMigrated,
+  resolveProjectId: resolveMemoryProjectId,
+  measureIndex: measureMemoryIndex, hiddenSessions,
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   emitMemoryChanged: emitAgentMemoryChangedEvent,
   isDirectoryTrusted: (directory) => openCodeTrust.isTrusted(directory).catch(() => false),
-  resolveSessionDefaults,
-  isAutoModel,
+  resolveSessionDefaults, isAutoModel,
+  nativeDreamAllowed: () => !isShuttingDown && !isEnterpriseMode(),
+  readSessionActivity: sessionRuntime.getSessionActivitySnapshot,
 });
 const readModelCatalog = createModelCatalogReader({
   buildOpenCodeUrl,

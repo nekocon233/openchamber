@@ -1433,7 +1433,7 @@ VS Code's native adapter rejects these operations as unsupported.
 
 The small-model service accepts an explicit `codex-native/<model>` or
 `claude-native/<model>` setting and reaches the CLIs through the runtime's
-`smallModels`, keyed by provider id. Inherited CLI models use the CLI's login and catalog. Configured Claude
+`smallModels`, keyed by provider id. Inherited CLI models use the CLI's login and catalog. Configured Codex and Claude
 connections use their owning credential store. An unavailable selected model fails
 instead of silently choosing another one. Failed or empty output rejects.
 
@@ -1455,7 +1455,7 @@ pending utility calls without restarting the process for cleanup. Notification
 routing does one thread lookup, with no scan of chat sessions.
 
 `claude/utility.js` runs one Agent SDK query per request, with every built-in
-tool, setting source and MCP server off, thinking off and `dontAsk`
+tool, setting source, tool search and MCP server off and `dontAsk`
 permissions. `persistSession: false` keeps it out of the transcripts, so it
 never shows up as a session. Claude Code tells the model its working directory
 and that directory's git state, so the query runs in the system temp directory
@@ -1465,6 +1465,10 @@ Structured output uses the SDK's `outputFormat`. Claude Code answers it with a
 tool call of its own, one extra turn, so the query sets no turn limit. The
 output-token budget is a brevity instruction here too. Claude Code also makes
 a small Haiku call of its own for each query, visible in `modelUsage`.
+
+An explicit supported variant controls the utility turn's effort and Codex
+speed. Claude's automatic utility selection disables thinking. A selected
+effort uses the CLI's thinking configuration.
 
 `claude auth status --json` reports the login. It exits 1 when signed out and
 still prints the state. An API failure such as an expired login ends the query

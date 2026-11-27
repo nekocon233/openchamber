@@ -94,8 +94,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const providers: ModelPickerProvider[] = useConfigStore((state) => directory === undefined
         ? state.providers : selectProvidersForDirectory(state, directory));
     const nativeReady = allowNativeModels && Boolean(allowedProviderIds?.length)
-        && allowedProviderIds?.every(isNativeProviderId)
-        && providers.some((provider) => allowedProviderIds?.includes(provider.id) && (provider.models?.length ?? 0) > 0);
+        && providers.some((provider) => isNativeProviderId(provider.id) && allowedProviderIds?.includes(provider.id) && (provider.models?.length ?? 0) > 0);
     const isReady = openCodeReady || nativeReady || combinationsReady;
     const canOpen = isReady && !disabled;
     const loadProviders = useConfigStore((state) => state.loadProviders);

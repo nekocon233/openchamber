@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createHiddenSessionRegistry } from '../opencode/hidden-sessions.js';
 import { createAgentMemoryRuntime } from './runtime.js';
 import { buildDreamPrompt, createMemoryDreaming, diffDream } from './dreaming.js';
+import { withMemoryFileLock } from './file-lock.js';
 
 const PROJECT_DIR = '/work/acme';
 const PROJECT_ID = 'path_acme';
@@ -82,7 +83,7 @@ const createOpenCode = ({ active = {}, onPrompt = async () => {}, reply = 'Done.
   return { calls, fetchImpl };
 };
 
-const createDreaming = ({ openCode, settings = {}, clock = { now: Date.now() }, hiddenSessions = createHiddenSessionRegistry(), passTimeoutMs, resolveProjectId = async () => PROJECT_ID, log = () => {} } = {}) => createMemoryDreaming({
+const createDreaming = ({ openCode, settings = {}, clock = { now: Date.now() }, hiddenSessions = createHiddenSessionRegistry(), passTimeoutMs, resolveProjectId = async () => PROJECT_ID, log = () => {}, ...dependencies } = {}) => createMemoryDreaming({
   agentMemoryRuntime: memory,
   readSettings: async () => ({
     agentMemoryToolEnabled: true,
@@ -96,12 +97,130 @@ const createDreaming = ({ openCode, settings = {}, clock = { now: Date.now() }, 
   buildOpenCodeUrl: (pathname) => `http://opencode.test${pathname}`,
   getOpenCodeAuthHeaders: () => ({}),
   resolveSessionDefaults: () => ({ providerID: 'zai', modelID: 'glm', variant: null, agent: null }),
+  nativeDreamAllowed: () => true,
   fetchImpl: openCode.fetchImpl,
   now: () => clock.now,
   setTimer: (callback, ms) => setTimeout(callback, Math.min(ms, passTimeoutMs ?? ms)),
   passTimeoutMs,
   pollIntervalMs: 1,
   log,
+  ...dependencies,
+});
+
+describe('native CLI memory organizing', () => {
+  const plan = {
+    rewrites: [{ scope: 'project', id: 'mem-1', title: 'Merged fact', body: 'Both useful details stay.' }],
+    removals: [{ scope: 'project', id: 'mem-2', mergedInto: 'mem-1' }],
+    toDocs: ['mem-3'],
+  };
+  const generate = async () => ({ text: JSON.stringify(plan) });
+
+  for (const selection of [
+    { model: 'codex-native/test', variant: 'high-fast', explicit: true },
+    { model: 'claude-native/sonnet', variant: 'high', explicit: false },
+  ]) {
+    test(`runs ${selection.model} through the CLI, records edits, and can undo them`, async () => {
+      await fill(12);
+      const openCode = createOpenCode();
+      const generated = [];
+      const [providerID, modelID] = selection.model.split('/');
+      await createDreaming({
+        openCode,
+        settings: selection.explicit ? { agentMemoryDreamingModel: selection.model, agentMemoryDreamingVariant: selection.variant } : {},
+        resolveSessionDefaults: () => ({ providerID, modelID, variant: selection.variant }),
+        generateNative: (options) => { generated.push(options); return generate(); },
+      }).check();
+      expect(generated).toHaveLength(1);
+      expect(generated[0]).toMatchObject({ model: selection.model, variant: selection.variant, onOverflow: 'error' });
+      expect(openCode.calls.some(({ method }) => method === 'POST')).toBe(false);
+      const { record } = await memory.readDreamState(PROJECT);
+      expect(record).toMatchObject({ status: 'done', merged: 1, rewritten: 1, toDocs: ['mem-3'] });
+      const after = (await memory.read(PROJECT)).entries;
+      expect(after.find(({ id }) => id === 'mem-1')?.title).toBe('Merged fact');
+      expect(after.some(({ id }) => id === 'mem-2')).toBe(false);
+      await memory.update(PROJECT, 'mem-1', { title: 'Edited after the pass' });
+      const undone = await memory.undoDream(PROJECT);
+      expect(undone.entries.find(({ id }) => id === 'mem-1')?.title).toBe('Edited after the pass');
+      expect(undone.entries.some(({ id }) => id === 'mem-2')).toBe(true);
+    });
+  }
+
+  test('enterprise policy and active CLI sessions prevent background generation', async () => {
+    await fill(12);
+    const settings = { agentMemoryDreamingModel: 'codex-native/test' };
+    const failIfSent = async () => { throw new Error('A model call was made'); };
+    await createDreaming({ openCode: createOpenCode(), settings, generateNative: failIfSent, nativeDreamAllowed: () => false }).check();
+    await createDreaming({
+      openCode: createOpenCode(), settings, generateNative: failIfSent,
+      readSessionActivity: () => ({ ncx_fixture: { type: 'busy' } }),
+    }).check();
+    expect((await memory.readDreamState(PROJECT)).record).toBeNull();
+    expect((await memory.read(PROJECT)).entries).toHaveLength(12);
+  });
+
+  test('a changed project snapshot cannot be overwritten while an independent global scope still organizes', async () => {
+    await fill(12);
+    const global = { scope: 'global' };
+    await fill(12, global);
+    await createDreaming({
+      openCode: createOpenCode(),
+      settings: { agentMemoryDreamingModel: 'codex-native/test' },
+      generateNative: async () => {
+        await memory.update(PROJECT, 'mem-2', { body: 'Updated during generation.' });
+        return { text: JSON.stringify({ ...plan, removals: [
+          ...plan.removals, { scope: 'global', id: 'mem-14', mergedInto: 'mem-13' },
+        ] }) };
+      },
+    }).check();
+    expect((await memory.read(PROJECT)).entries.find(({ id }) => id === 'mem-2')?.body).toBe('Updated during generation.');
+    expect((await memory.read(global)).entries.some(({ id }) => id === 'mem-14')).toBe(false);
+    expect((await memory.readDreamState(PROJECT)).record?.status).toBe('failed');
+    expect((await memory.readDreamState(global)).record?.status).toBe('done');
+  });
+
+  test('an invalid merge target invalidates the whole plan before any write', async () => {
+    await fill(12);
+    await createDreaming({
+      openCode: createOpenCode(),
+      settings: { agentMemoryDreamingModel: 'codex-native/test' },
+      generateNative: async () => ({ text: JSON.stringify({
+        ...plan, removals: [...plan.removals, { scope: 'project', id: 'mem-3', mergedInto: 'mem-2' }],
+      }) }),
+    }).check();
+    expect((await memory.read(PROJECT)).entries.find(({ id }) => id === 'mem-1')?.title).toBe('Fact 0');
+    expect((await memory.read(PROJECT)).entries).toHaveLength(12);
+    expect((await memory.readDreamState(PROJECT)).record?.status).toBe('failed');
+  });
+
+  test('disabling organizing while the memory lock is busy cancels the pending edits', async () => {
+    await fill(12);
+    const lock = memory.resolveTarget(PROJECT).filePath;
+    const held = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const attempted = Promise.withResolvers();
+    const owner = withMemoryFileLock(lock, async () => {
+      held.resolve();
+      await release.promise;
+    });
+    const runtime = createAgentMemoryRuntime({
+      fsPromises: { ...fsPromises, open: (...args) => {
+        if (args[0] === `${lock}.lock`) attempted.resolve();
+        return fsPromises.open(...args);
+      } },
+      path,
+      userConfigRoot: path.join(rootDir, 'config'),
+      projectsDirPath: path.join(rootDir, 'config', 'projects'),
+    });
+    const settings = { agentMemoryDreamingModel: 'codex-native/test', agentMemoryDreamingEnabled: true };
+    await held.promise;
+    const check = createDreaming({ openCode: createOpenCode(), settings, generateNative: generate, agentMemoryRuntime: runtime }).check();
+    await attempted.promise;
+    settings.agentMemoryDreamingEnabled = false;
+    release.resolve();
+    await Promise.all([owner, check]);
+    expect((await memory.read(PROJECT)).entries).toHaveLength(12);
+    expect((await memory.readDreamState(PROJECT)).record).toBeNull();
+  });
 });
 
 describe('when a pass runs', () => {

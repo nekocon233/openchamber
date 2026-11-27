@@ -396,7 +396,7 @@ export const createNativeAgentsRuntime = ({
   const codexConnections = createCodexConnections({ dataDir });
   const codexCatalog = createCodexCatalog({ request: (method, params) => appServer.request(method, params), buildEnv: buildChildEnv });
   const codexCommands = createCodexCommands({ request: (method, params) => appServer.request(method, params) });
-  const codexUtility = createCodexUtility({ request: (method, params) => appServer.request(method, params), catalog: codexCatalog });
+  const codexUtility = createCodexUtility({ request: (method, params) => appServer.request(method, params), catalog: codexCatalog, connections: codexConnections });
   const appServer = createCodexAppServer({
     resolveExecutable: () => resolveExecutable('codex'),
     buildEnv: buildChildEnv,

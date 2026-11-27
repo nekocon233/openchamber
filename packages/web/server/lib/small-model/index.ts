@@ -6,7 +6,8 @@ import path from 'path';
 import type { JsonValue, ModelInfo } from '@opencode/client';
 import type { SmallModelRef } from './client.js';
 import type { ForwardedGenerationInput, SmallModelClient } from './contracts.js';
-import { nativeBackendOfProviderId } from '../native-agents/ids.js';
+import { codexVariantSettings, nativeModelSupportsVariant } from '../native-agents/catalog.js';
+import { nativeBackendOfProviderId, NATIVE_PROVIDER_CODEX } from '../native-agents/ids.js';
 import { readMergedSettingsSync } from '../settings/settings-files.js';
 import { asNonEmptyString } from '../shared/guards.js';
 import {
@@ -35,6 +36,7 @@ export interface GenerationOptions {
   signal?: AbortSignal | undefined;
   onOverflow?: 'truncate' | 'error';
   sessionID?: string | undefined;
+  authorizeNative?: (() => Promise<void>) | undefined;
 }
 
 export interface ModelLimits {
@@ -57,6 +59,9 @@ export interface NativeSmallModelInfo {
   contextWindow?: number;
   outputLimit?: number;
   effort?: string | null;
+  efforts?: string[] | undefined;
+  defaultEffortVariants?: string[] | undefined;
+  serviceTiers?: string[] | undefined;
 }
 
 export interface NativeSmallModelGenerateInput {
@@ -70,6 +75,8 @@ export interface NativeSmallModelGenerateInput {
   signal: AbortSignal | undefined;
   directory: string | undefined;
   effort: string | undefined;
+  variant?: string | undefined;
+  serviceTier?: string | undefined;
 }
 
 export interface NativeSmallModelRuntime {
@@ -433,7 +440,7 @@ const requestOptions = ({ timeoutMs, promptChars, signal }: {
   };
 };
 
-export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, variant: requestVariant, directory: rawDirectory, preferredProviderID, preferredModelID, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }: GenerationOptions) {
+export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, variant: requestVariant, directory: rawDirectory, preferredProviderID, preferredModelID, responseSchema, timeoutMs, signal, onOverflow = 'truncate', authorizeNative }: GenerationOptions) {
   if (!isString(prompt) || !prompt.trim()) {
     throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
   }
@@ -475,6 +482,12 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
         statusCode: 401, code: 'no-provider-login',
       });
     }
+    const requested = context.resolved.variant;
+    const descriptor = context.nativeModel;
+    const variant = requested && descriptor.efforts && nativeModelSupportsVariant({ ...descriptor, efforts: descriptor.efforts }, requested)
+      ? requested : undefined;
+    const codex = variant && context.resolved.providerID === NATIVE_PROVIDER_CODEX ? codexVariantSettings(variant) : null;
+    if (authorizeNative) await authorizeNative();
     const text = await context.runtime.generate({
       providerID: context.resolved.providerID,
       modelID: context.resolved.modelID,
@@ -485,7 +498,9 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
       timeoutMs,
       signal,
       directory,
-      effort: context.nativeModel.effort ?? undefined,
+      effort: codex ? codex.effort ?? undefined : variant ?? descriptor.effort ?? undefined,
+      variant,
+      serviceTier: codex?.serviceTier,
     });
     const result: GeneratedTextResult = {
       text: text.trim(),
@@ -575,6 +590,18 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   return result;
 }
 
+export async function listAuthenticatedNativeProviders() {
+  const ids: string[] = [];
+  for (const [providerID, runtime] of nativeRuntimes) {
+    try {
+      if (await runtime.available()) ids.push(providerID);
+    } catch {
+      continue;
+    }
+  }
+  return ids;
+}
+
 export async function listAuthenticatedProviders(directory?: string | null) {
   const ids = new Set<string>();
   const client = getSmallModelClient(directory);
@@ -598,13 +625,7 @@ export async function listAuthenticatedProviders(directory?: string | null) {
       if (refusal) throw refusal;
     }
   }
-  for (const [providerID, runtime] of nativeRuntimes) {
-    try {
-      if (await runtime.available()) ids.add(providerID);
-    } catch {
-      continue;
-    }
-  }
+  for (const providerID of await listAuthenticatedNativeProviders()) ids.add(providerID);
   return Array.from(ids);
 }
 

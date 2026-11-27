@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 const MEMORY_VERSION = 1;
 
 export const MEMORY_TITLE_MAX_LENGTH = 60;
@@ -12,7 +14,7 @@ import { findThreatPattern } from './threat-patterns.js';
 import { withMemoryFileLock } from './file-lock.js';
 import { z } from 'zod';
 import { isMemoryRecord, isMemoryText, isMemoryTimestamp, isMemoryType } from './contracts.js';
-import type { MemoryDocument, MemoryEntry, MemoryScope, MemoryTarget, MemoryWriteInput } from './contracts.js';
+import type { MemoryDocument, MemoryEntry, MemoryScope, MemoryTarget, MemoryWriteInput, NativeDreamEdits } from './contracts.js';
 
 interface MemoryRuntimeDependencies {
   fsPromises: Pick<typeof import('node:fs/promises'), 'readFile' | 'mkdir' | 'writeFile' | 'rename' | 'rm' | 'open'>;
@@ -56,6 +58,7 @@ interface DreamWriteInput {
   record: unknown;
   snapshot: unknown;
   after?: unknown;
+  authorize?: () => Promise<void>;
 }
 
 interface StoredDreamState {
@@ -433,7 +436,7 @@ export const createAgentMemoryRuntime = (deps: MemoryRuntimeDependencies) => {
     });
   };
 
-  const recordDream = async (target: MemoryTarget, { lastRunAt, record, snapshot, after = null }: DreamWriteInput) => {
+  const recordDream = async (target: MemoryTarget, { lastRunAt, record, snapshot, after = null, authorize }: DreamWriteInput) => {
     const resolved = resolveTarget(target);
     return withWriteLock(resolved, async () => {
       const state: StoredDreamState = {
@@ -442,8 +445,58 @@ export const createAgentMemoryRuntime = (deps: MemoryRuntimeDependencies) => {
         snapshot: Array.isArray(snapshot) ? snapshot : null,
         after: Array.isArray(snapshot) && Array.isArray(after) ? after : null,
       };
+      if (authorize) await authorize();
       await writeDreamState(resolved, state);
       return state;
+    });
+  };
+
+  const applyNativeDream = async (
+    target: MemoryTarget,
+    expected: MemoryEntry[],
+    edits: NativeDreamEdits,
+    finishedAt: number,
+    authorize: () => Promise<void>,
+  ) => {
+    const resolved = resolveTarget(target);
+    await withWriteLock(resolved, async () => {
+      const { entries } = await read(target);
+      await authorize();
+      if (!isDeepStrictEqual(entries, expected)) throw new Error('Memory changed while organizing');
+      const touched: MemoryEntry[] = [];
+      const after: Array<{ id: string; updatedAt: number }> = [];
+      let merged = 0;
+      let removed = 0;
+      const next = entries.flatMap((entry) => {
+        if (edits.removals.has(entry.id)) {
+          touched.push(entry);
+          if (edits.removals.get(entry.id)) merged += 1;
+          else removed += 1;
+          return [];
+        }
+        const rewrite = edits.rewrites.get(entry.id);
+        if (!rewrite || (entry.title === rewrite.title && entry.body === rewrite.body)) return [entry];
+        touched.push(entry);
+        const updatedAt = Math.max(finishedAt, entry.updatedAt + 1);
+        after.push({ id: entry.id, updatedAt });
+        return [{ ...entry, ...rewrite, updatedAt }];
+      });
+      const changed = touched.length > 0;
+      if (changed) await write(resolved, next);
+      try {
+        await writeDreamState(resolved, {
+          lastRunAt: finishedAt,
+          record: {
+            finishedAt, status: 'done', merged, removed, rewritten: after.length, undone: false, error: null,
+            toDocs: target.scope === 'project' ? edits.toDocs : [],
+          },
+          snapshot: changed ? touched : null,
+          after: changed ? after : null,
+        });
+      } catch (error) {
+        if (changed) await write(resolved, entries);
+        throw error;
+      }
     });
   };
 
@@ -473,7 +526,7 @@ export const createAgentMemoryRuntime = (deps: MemoryRuntimeDependencies) => {
     });
   };
 
-  return { read, readAll, create, update, remove, resolveTarget, readDreamState, recordDream, undoDream };
+  return { read, readAll, create, update, remove, resolveTarget, readDreamState, recordDream, applyNativeDream, undoDream };
 };
 
 export type AgentMemoryRuntime = ReturnType<typeof createAgentMemoryRuntime>;

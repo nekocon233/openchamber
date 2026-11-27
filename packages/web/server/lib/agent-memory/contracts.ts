@@ -35,6 +35,12 @@ export interface MemoryChangedEvent {
   projectId?: string;
 }
 
+export interface NativeDreamEdits {
+  rewrites: Map<string, { title: string; body: string }>;
+  removals: Map<string, string | null>;
+  toDocs: string[];
+}
+
 export interface MemoryDocument {
   version: number;
   entries: MemoryEntry[];

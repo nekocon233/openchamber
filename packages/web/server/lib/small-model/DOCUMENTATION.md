@@ -298,6 +298,10 @@ Settings pickers send the current directory with the request, so the list
 matches what the user sees in chat for that project. The name predates this
 resolution; it now means "callable".
 
+Memory organizing uses `GET /api/small-model?providers=native` to read the
+available native utility runtimes. The lookup is independent of OpenCode and
+the selected small model. Enterprise mode returns an empty native list.
+
 ## describeSmallModel
 
 Reports which model and thinking variant would be used without calling it:
