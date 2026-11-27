@@ -59,14 +59,17 @@ fragment DiscussionReference on Discussion {
 }
 `;
 
-export const REFERENCE_FRAGMENTS = `
+const ISSUE_REFERENCE_FRAGMENT = `
 fragment IssueReference on Issue {
   ${COMMON_FIELDS}
   state
   stateReason
 }
-${PULL_REFERENCE_FRAGMENT}
 `;
+
+export const REFERENCE_FRAGMENTS = `${ISSUE_REFERENCE_FRAGMENT}${PULL_REFERENCE_FRAGMENT}`;
+
+export const ISSUE_VIEWER_FIELDS = 'viewerDidAuthor assignees(first: 10) { nodes { isViewer } }';
 
 const DETAIL_COMMENT_LIMIT = 50;
 
@@ -173,6 +176,11 @@ query DiscussionDetail($owner: String!, $repo: String!, $number: Int!) {
 }
 `;
 
+export const referenceSearchPageSchema = z.object({
+  pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }),
+  nodes: z.array(z.unknown()),
+});
+
 export const SEARCH_QUERY = `
 query ReferenceSearch($q: String!, $first: Int!, $after: String, $withReviewRequests: Boolean!) {
   search(type: ISSUE, query: $q, first: $first, after: $after) {
@@ -188,8 +196,8 @@ query ReferenceSearch($q: String!, $first: Int!, $after: String, $withReviewRequ
 ${REFERENCE_FRAGMENTS}
 `;
 
-export const MINE_PULL_SEARCH_QUERY = `
-query MinePullSearch(
+export const MINE_REFERENCE_SEARCH_QUERY = `
+query MineReferenceSearch(
   $reviewQuery: String!,
   $createdQuery: String!,
   $first: Int!,
@@ -197,7 +205,8 @@ query MinePullSearch(
   $createdAfter: String,
   $includeReview: Boolean!,
   $includeCreated: Boolean!,
-  $withReviewRequests: Boolean!
+  $withReviewRequests: Boolean!,
+  $withIssueMembership: Boolean!
 ) {
   reviewRequested: search(type: ISSUE, query: $reviewQuery, first: $first, after: $reviewAfter) @include(if: $includeReview) {
     issueCount
@@ -206,6 +215,7 @@ query MinePullSearch(
       __typename
       ...IssueReference
       ...PullReference
+      ... on Issue @include(if: $withIssueMembership) { ${ISSUE_VIEWER_FIELDS} }
     }
   }
   created: search(type: ISSUE, query: $createdQuery, first: $first, after: $createdAfter) @include(if: $includeCreated) {
@@ -215,6 +225,7 @@ query MinePullSearch(
       __typename
       ...IssueReference
       ...PullReference
+      ... on Issue @include(if: $withIssueMembership) { ${ISSUE_VIEWER_FIELDS} }
     }
   }
 }
@@ -246,6 +257,19 @@ query RepositoryPulls($owner: String!, $repo: String!, $states: [PullRequestStat
   }
 }
 ${PULL_REFERENCE_FRAGMENT}
+`;
+
+export const REPOSITORY_ISSUES_QUERY = `
+query RepositoryIssues($owner: String!, $repo: String!, $states: [IssueState!], $first: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    issues(states: $states, orderBy: {field: UPDATED_AT, direction: DESC}, first: $first, after: $after) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { __typename ...IssueReference }
+    }
+  }
+}
+${ISSUE_REFERENCE_FRAGMENT}
 `;
 
 export const userSchema = z.object({ login: z.string(), avatarUrl: z.string().nullable().optional() }).nullable();

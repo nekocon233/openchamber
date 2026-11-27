@@ -332,9 +332,12 @@ Tracker then show one state for the same PR.
 - The composer keeps attached items as a list (`chat/composer/composerReferences.ts`). The same item attached again replaces its chip in place.
 - An attached item carries no guessed intent: the agent gets a one-line label of what it is and its content, with no hidden instruction or canned "review this" prompt, and the user writes what they want. Every flow that starts from an item (an issue, PR, tracker item, discussion, extension item, failed check or PR comment) opens a draft with the item as a composer chip and sends nothing on its own; a session started with a canned prompt would also run on a model nobody chose. New Worktree creates the worktree and hands the item to the new draft's composer; editing the branch name keeps the item, and only the chip's unlink button drops it (`NewWorktreeDialog.tsx`). The board's start actions do the same (`SourceBoardActions.tsx`). A button whose label states the intent (generating a commit message or a PR, resolving conflicts, plan flows) keeps its prompt. A new flow that sends a canned prompt with an attachment is turned into a plain composer attachment.
 
-## PR window restoration
+## Project list restoration
 
-The PR tool passes a workspace/account-bound state owner to `useReferenceBrowser`.
+The Issues and PR tools pass a workspace/account-bound state owner to
+`useReferenceBrowser`. Each kind keeps its own filter, query, pagination depth
+and scroll position. The selected item is read from its repository by URL on
+restore, including when it now falls outside the saved list filter.
 Its project category remains independent of picker and board filters. All's
 state, query, selected URL and loaded depth belong to the workspace binding.
 A selected URL is resolved afresh before its preview can act. A new selection

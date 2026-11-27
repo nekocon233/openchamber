@@ -306,18 +306,20 @@ export const SourceBoardStateMenuItems: React.FC<{
     item: ReferencePickerItem;
     context: SourceControlReadContext;
     onChanged: () => void;
-}> = ({ item, context, onChanged }) => {
+    onStateChanged?: () => void;
+}> = ({ item, context, onChanged, onStateChanged }) => {
     if (item.source === 'repository' && item.reference.kind === 'discussion') {
         return <DiscussionStateMenuItems discussion={item.reference} context={context} onChanged={onChanged} />;
     }
-    return <ItemStateMenuItems item={item} context={context} onChanged={onChanged} />;
+    return <ItemStateMenuItems item={item} context={context} onChanged={onChanged} onStateChanged={onStateChanged} />;
 };
 
 const ItemStateMenuItems: React.FC<{
     item: ReferencePickerItem;
     context: SourceControlReadContext;
     onChanged: () => void;
-}> = ({ item, context, onChanged }) => {
+    onStateChanged?: () => void;
+}> = ({ item, context, onChanged, onStateChanged }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const repositoryItem = item.source === 'repository' && item.reference.kind !== 'discussion' ? item.reference : null;
@@ -346,6 +348,7 @@ const ItemStateMenuItems: React.FC<{
             else await sourceControl.issueSetState(payload);
             forgetLabelWrite(repositoryItem);
             toast.success(t(nextState === 'closed' ? 'sourceBoard.toast.closed' : 'sourceBoard.toast.reopened', { reference: label }));
+            onStateChanged?.();
         } catch (error) {
             toast.error(
                 t(nextState === 'closed' ? 'sourceBoard.toast.closeFailed' : 'sourceBoard.toast.reopenFailed', { reference: label }),

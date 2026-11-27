@@ -77,7 +77,10 @@ Full-screen extension pages are separate from this rail registry. `contributes.p
   drops the walkthrough on VS Code and below `WALKTHROUGH_MIN_WIDTH`, hides the Tracker
   unless a source-control account is connected (signed in from Settings →
   Integrations) or an item is open in it, hides `ci` unless a GitHub account is
-  connected and the repository provider is not `'gitlab'`, and hides `has-content` surfaces
+  connected and the repository provider is not `'gitlab'`, and hides Issues on
+  VS Code or when the workspace uses a different host or has no GitHub account.
+  Issues stays reachable during repository discovery so it can resolve a nested
+  checkout. The filter also hides `has-content` surfaces
   until a tab of their mode exists. Both consumers use it so the digit shown
   on a rail badge always maps to the same surface the shortcut opens.
 

@@ -22,7 +22,7 @@ GitHub sits on the shared source-control route shell (`../source-control/provide
 - `repo/index.js`: remote URL parsing and directory-to-repo resolution.
 - `pr-status.js`: PR lookup across remotes, forks, and upstreams.
 - `pr-summaries.js`: batched live state for PRs already known by number.
-- `reference-search.js`: issue, PR and discussion pages for the reference picker, and an item's detail.
+- `reference-search.js`: issue, PR and discussion pages for the reference picker, and an item's detail. The Mine search merges pages in `reference-mine-search.ts` while keeping the existing PR cursor format.
 - `checks-summary.js`: the one checks summarizer shared by every PR read.
 - `review-draft.js`: a pull request's review as the diff draws it: the viewer's pending review and the open threads with their lines.
 - `change-request-patch.js`: a pull request's diff and one file's two sides for walkthroughs and the comparison view.
@@ -289,6 +289,17 @@ that page, so callers cannot mistake a partial page for a complete one.
   GitHub search does. It returns the existing items/cursor/hasMore/total shape.
   An unreadable repository or malformed page fails the read. Text and people
   searches keep the search path and its total, used by the PR panel's limit notice.
+
+- A repository Issue list with `people=any`, no text and no labels reads
+  `repository.issues` in update order. Its connection cursor supports paging
+  past the search limit. Repository-scoped Issue search and number or URL
+  lookup honor the selected Open or Closed state.
+- Repository-scoped Issue lists with `people=mine` merge the viewer's assigned
+  and authored Issue searches using the PR list's cursor and deduplication.
+  Each Issue's current author and assignees confirm membership for both
+  searches and exact lookups. GitHub permits ten assignees per issue, so the
+  membership read covers the full set. The cursor binds the Issue kind and
+  label filter, and both streams use update order.
 
 - `GET /api/source-control/github/references?<read context>&kind=issue|pull|discussion&state=&people=&query=&cursor=` takes the same bound read context as every canonical read and answers one page (30) of the project's issues or PRs across its repo network, read with that context's account (origin plus fork parent/source): `{ connected, repo, items, cursor, hasMore, total }`. `repo: null` means the project has no GitHub remote.
 - `POST /api/source-control/github/references/across` accepts JSON `{ contexts, kind, state?, people?, query?, cursor? }` for at most 100 unique directories. Every context passes the binding validator before exact-account lookup or repository resolution. A repository is read only with its folder's validated account. Searches group by account and never combine repositories from different accounts.

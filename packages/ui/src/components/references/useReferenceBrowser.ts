@@ -64,8 +64,8 @@ export const IDLE_PULL_STATUS: CachedValue<ChangeRequestListStatus | null> = { s
 export const readyValue = <T,>(state: CachedValue<T | null>): T | null => (state.status === 'ready' ? state.value : null);
 
 export type ReferenceBrowserOptions = {
-    mode?: 'references' | 'project-pulls';
-    projectPullsState?: { owner: string | null; preferences: string | null };
+    mode?: 'references' | 'project-pulls' | 'project-issues';
+    projectState?: { owner: string | null; preferences: string | null };
     active?: boolean;
     source: ReferencePickerSource;
     directory: string | null;
@@ -80,7 +80,7 @@ export type ReferenceBrowserOptions = {
 
 export function useReferenceBrowser({
     mode = 'references',
-    projectPullsState,
+    projectState,
     active = true,
     source,
     directory,
@@ -93,8 +93,12 @@ export function useReferenceBrowser({
     onScreen = true,
 }: ReferenceBrowserOptions) {
     const projectPulls = mode === 'project-pulls';
-    const [projectPeople, setProjectPeople] = useWorkspaceViewState('pullRequest', projectPulls ? projectPullsState?.preferences ?? null : null, 'people');
-    const [chosenRepositoryKind, setRepositoryKind] = React.useState<RepositoryReferenceKind>(projectPulls ? 'pull' : initialGitHubKind ?? lastRepositoryKind);
+    const projectList = mode !== 'references';
+    const viewKind = mode === 'project-issues' ? 'issue' : 'pullRequest';
+    const [projectPeople, setProjectPeople] = useWorkspaceViewState(viewKind, projectList ? projectState?.preferences ?? null : null, 'people');
+    const [chosenRepositoryKind, setRepositoryKind] = React.useState<RepositoryReferenceKind>(
+        projectList ? (projectPulls ? 'pull' : 'issue') : initialGitHubKind ?? lastRepositoryKind,
+    );
     const [chosenRepositoryFilter, setRepositoryFilter] = React.useState<RepositoryReferenceFilter>(lastRepositoryFilter.get(initialGitHubKind ?? lastRepositoryKind) ?? DEFAULT_REPOSITORY_FILTER);
     const tracker = trackerOfSource(source);
     const trackerDescriptor = useTrackerDescriptor(tracker);
@@ -107,18 +111,18 @@ export function useReferenceBrowser({
         people: trackerDescriptor.capabilities.filters.people ? rememberedFilter.people : DEFAULT_TRACKER_FILTER.people,
         priority: trackerDescriptor.capabilities.filters.priority ? rememberedFilter.priority : DEFAULT_TRACKER_FILTER.priority,
     }), [rememberedFilter, trackerDescriptor]);
-    const stateOwner = projectPulls ? projectPullsState?.owner ?? null : null;
-    const [projectAllState, setProjectAllState] = useWorkspaceViewState('pullRequest', stateOwner, 'allState');
-    const [query, setQueryState] = useWorkspaceViewState('pullRequest', stateOwner, 'query');
-    const [selectionUrl, setSelectionUrl] = useWorkspaceViewState('pullRequest', stateOwner, 'selectedUrl');
-    const [loadedCount, setLoadedCount] = useWorkspaceViewState('pullRequest', stateOwner, 'loadedCount');
+    const stateOwner = projectList ? projectState?.owner ?? null : null;
+    const [projectAllState, setProjectAllState] = useWorkspaceViewState(viewKind, stateOwner, 'allState');
+    const [query, setQueryState] = useWorkspaceViewState(viewKind, stateOwner, 'query');
+    const [selectionUrl, setSelectionUrl] = useWorkspaceViewState(viewKind, stateOwner, 'selectedUrl');
+    const [loadedCount, setLoadedCount] = useWorkspaceViewState(viewKind, stateOwner, 'loadedCount');
     const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
     const [highlightedKey, setHighlightedKey] = React.useState<string | null>(null);
     const [mobilePreviewKey, setMobilePreviewKey] = React.useState<string | null>(null);
     const now = useMinuteTickerNow(true);
     const searchRef = React.useRef<HTMLInputElement>(null);
 
-    const across = !projectPulls && directories !== null;
+    const across = !projectList && directories !== null;
     const projectProvider = useRepositoryReferenceProvider(across ? null : directory);
     const acrossProvider = useRepositoryAcrossProvider(across ? directories : null);
     const descriptor = useSourceControlProvider(across ? acrossProvider : projectProvider);
@@ -131,13 +135,13 @@ export function useReferenceBrowser({
         ? chosenRepositoryFilter
         : lastRepositoryFilter.get(repositoryKind) ?? DEFAULT_REPOSITORY_FILTER;
     const repositoryFilter = React.useMemo<RepositoryReferenceFilter>(
-        () => projectPulls
+        () => projectList
             ? { state: projectPeople === 'any' ? projectAllState : 'open', people: projectPeople, labels: [] }
             : normalizedRepositoryFilter(effectiveRepositoryFilter, repositoryKind),
-        [effectiveRepositoryFilter, projectAllState, projectPeople, projectPulls, repositoryKind],
+        [effectiveRepositoryFilter, projectAllState, projectPeople, projectList, repositoryKind],
     );
     const filterMemory = useRepositoryFilterMemory(
-        source === 'repository' && !projectPulls && !across && directory !== null,
+        source === 'repository' && !projectList && !across && directory !== null,
         directory,
         repositoryKind,
     );
@@ -169,7 +173,7 @@ export function useReferenceBrowser({
     const repositoryList = useRepositoryReferenceList({
         enabled: source === 'repository' && repositoryStatus === 'ready' && !across && !awaitingHost && !filterPending,
         active,
-        scope: projectPulls ? 'repository' : 'network',
+        scope: projectList ? 'repository' : 'network',
         directory,
         kind: repositoryKind,
         filter: repositoryFilter,
@@ -191,7 +195,7 @@ export function useReferenceBrowser({
     });
     const otherRepositoryKind: RepositoryReferenceKind = repositoryKind === 'issue' ? 'pull' : 'issue';
     useRepositoryReferenceList({
-        enabled: active && !projectPulls && source === 'repository' && repositoryStatus === 'ready' && !across,
+        enabled: active && !projectList && source === 'repository' && repositoryStatus === 'ready' && !across,
         directory,
         kind: otherRepositoryKind,
         filter: lastRepositoryFilter.get(otherRepositoryKind) ?? DEFAULT_REPOSITORY_FILTER,
@@ -206,15 +210,15 @@ export function useReferenceBrowser({
     });
     const candidateList = source === 'repository' ? (across ? acrossList : repositoryList) : trackerList;
     useTrackedItems(onScreen ? candidateList.followed : NO_FOLLOWED);
-    const includeClosedProjectPulls = projectPulls && repositoryFilter.state === 'closed';
-    const repositoryItems = React.useMemo(() => projectPulls
-        ? repositoryList.items.filter(item => item.kind === 'pull' && (includeClosedProjectPulls ? item.state !== 'open' : item.state === 'open'))
-        : repositoryList.items, [includeClosedProjectPulls, projectPulls, repositoryList.items]);
+    const showClosed = repositoryFilter.state === 'closed';
+    const repositoryItems = React.useMemo(() => projectList
+        ? repositoryList.items.filter(item => item.kind === repositoryKind && (showClosed ? item.state !== 'open' : item.state === 'open'))
+        : repositoryList.items, [projectList, repositoryKind, repositoryList.items, showClosed]);
     const filterByPullStatus = projectPulls && projectPeople === 'mine' && descriptor.features.listStatuses;
     const singlePullStatusOf = useRepositoryPullStatuses(
         across ? null : directory,
         active && source === 'repository' && !across ? repositoryItems : NO_REFERENCES,
-        { includeClosed: includeClosedProjectPulls, matchHead: filterByPullStatus },
+        { includeClosed: projectPulls && showClosed, matchHead: filterByPullStatus },
     );
     const acrossPullStatusOf = useRepositoryPullStatusesAcross(acrossList.contexts, source === 'repository' && across ? acrossList.items : NO_ACROSS_ITEMS);
     const pullStatusOf = (reference: RepositoryReference, itemFolder?: string): CachedValue<ChangeRequestListStatus | null> => (
@@ -269,7 +273,7 @@ export function useReferenceBrowser({
             ?? (key === openedKey ? openedItem : null)
         : null);
     const highlightedItem = findItem(effectiveHighlightKey);
-    const previewKey = isMobile || projectPulls ? mobilePreviewKey : effectiveHighlightKey;
+    const previewKey = isMobile || projectList ? mobilePreviewKey : effectiveHighlightKey;
     const previewItem = findItem(previewKey);
 
     const settledPreviewItem = useDebouncedValue(previewItem, DETAIL_DEBOUNCE_MS);
@@ -292,14 +296,14 @@ export function useReferenceBrowser({
     );
 
     const selectRepositoryKind = (kind: RepositoryReferenceKind) => {
-        if (projectPulls) return;
+        if (projectList) return;
         lastRepositoryKind = kind;
         setRepositoryKind(kind);
         setRepositoryFilter(lastRepositoryFilter.get(kind) ?? DEFAULT_REPOSITORY_FILTER);
         setHighlightedKey(null);
     };
     const selectRepositoryFilter = (patch: Partial<RepositoryReferenceFilter>) => {
-        if (projectPulls) {
+        if (projectList) {
             const people = patch.people ?? projectPeople;
             if (people !== 'mine' && people !== 'any') return;
             const state = people === 'any' && (patch.state === 'open' || patch.state === 'closed') ? patch.state : projectAllState;
@@ -354,12 +358,12 @@ export function useReferenceBrowser({
 
     const showItem = (key: string) => {
         // A resumed list may refresh its first page while a later-page PR is still being read.
-        if (projectPulls) {
+        if (projectList) {
             const item = findItem(key);
             setOpenedItem(item);
             if (item?.source === 'repository') setSelectionUrl(item.reference.url);
         }
-        if (isMobile || projectPulls) {
+        if (isMobile || projectList) {
             setHighlightedKey(key);
             setMobilePreviewKey(key);
             return;
@@ -377,7 +381,7 @@ export function useReferenceBrowser({
     const openItem = (item: ReferencePickerItem) => {
         setOpenedItem(item);
         const key = referencePickerItemKey(item);
-        if (projectPulls) {
+        if (projectList) {
             if (item.source === 'repository') setSelectionUrl(item.reference.url);
             setHighlightedKey(key);
             setMobilePreviewKey(key);

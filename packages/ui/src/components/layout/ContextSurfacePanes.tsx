@@ -6,6 +6,7 @@ import { FileEditorPane } from './FileEditorPane';
 
 import { TerminalView } from '@/components/views/TerminalView';
 import { PullRequestView } from '@/components/views/PullRequestView';
+import { ProjectIssueView } from '@/components/views/git/ProjectIssueView';
 import { CiRunsView } from '@/components/views/CiRunsView';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import { BrowserPane } from '@/components/browser/BrowserPane';
@@ -149,6 +150,22 @@ const ZonePane: React.FC<{
   );
 };
 
+function useVisitedRepositoryTabs<Tab extends { key: string }>(
+  tabs: readonly Tab[], runtimeKey: string, pullKey: string | null, issueKey: string | null, ciKey: string | null,
+) {
+  const isActive = (key: string) => key === pullKey || key === issueKey || key === ciKey;
+  const [visited, setVisited] = React.useState(() => ({ runtimeKey, keys: new Set<string>() }));
+  React.useEffect(() => {
+    setVisited(previous => {
+      const keys = new Set(tabs.filter(({ key }) => key === pullKey || key === issueKey || key === ciKey
+        || (previous.runtimeKey === runtimeKey && previous.keys.has(key))).map(tab => tab.key));
+      if (previous.runtimeKey === runtimeKey && previous.keys.size === keys.size && [...keys].every(key => previous.keys.has(key))) return previous;
+      return { runtimeKey, keys };
+    });
+  }, [ciKey, issueKey, pullKey, runtimeKey, tabs]);
+  return tabs.filter(({ key }) => isActive(key) || (visited.runtimeKey === runtimeKey && visited.keys.has(key)));
+}
+
 export const ContextSurfacePanes: React.FC = () => {
   const editorLayout = useIsEditorWorkspaceLayout();
   const [classicEditorHost, setClassicEditorHost] = React.useState<HTMLDivElement | null>(null);
@@ -237,55 +254,22 @@ export const ContextSurfacePanes: React.FC = () => {
   const terminalZone = zoneFor('terminal');
   const walkthroughZone = zoneFor('walkthrough');
   const pullRequestZone = zoneFor('pr');
-  const pullRequestVisible = pullRequestZone.isOpen && pullRequestZone.activeTab?.mode === 'pr';
-  const runtimeKey = React.useSyncExternalStore(subscribeRuntimeEndpointChanged, getRuntimeKey, getRuntimeKey);
-  const activePullRequestKey = pullRequestVisible && pullRequestZone.activeTab
-    ? JSON.stringify([directoryKey, pullRequestZone.activeTab.id])
-    : null;
-  const [visitedPullRequests, setVisitedPullRequests] = React.useState(() => ({ runtimeKey, keys: new Set<string>() }));
-  const openPullRequestTabs = React.useMemo(() => Object.entries(contextPanelByDirectory)
-    .flatMap(([directory, panel]) => panel.tabs
-      .filter((tab) => tab.mode === 'pr')
-      .map((tab) => ({ directory, key: JSON.stringify([directory, tab.id]) })))
-    .sort((a, b) => a.key.localeCompare(b.key)), [contextPanelByDirectory]);
-
-  // Only a PR window the person has visited stays loaded. Saved tabs in other
-  // projects do not start repository reads until opened; closing a tab releases it.
-  React.useEffect(() => {
-    setVisitedPullRequests((previous) => {
-      const keys = new Set(openPullRequestTabs
-        .filter((tab) => tab.key === activePullRequestKey || (previous.runtimeKey === runtimeKey && previous.keys.has(tab.key)))
-        .map((tab) => tab.key));
-      if (previous.runtimeKey === runtimeKey && previous.keys.size === keys.size && [...keys].every((key) => previous.keys.has(key))) return previous;
-      return { runtimeKey, keys };
-    });
-  }, [activePullRequestKey, openPullRequestTabs, runtimeKey]);
-  const retainedPullRequestTabs = openPullRequestTabs.filter((tab) => tab.key === activePullRequestKey
-    || (visitedPullRequests.runtimeKey === runtimeKey && visitedPullRequests.keys.has(tab.key)));
-
+  const issueZone = zoneFor('issues');
   const ciRunsZone = zoneFor('ci');
-  const ciRunsVisible = ciRunsZone.isOpen && ciRunsZone.activeTab?.mode === 'ci';
-  const activeCiRunsKey = ciRunsVisible && ciRunsZone.activeTab
-    ? JSON.stringify([directoryKey, ciRunsZone.activeTab.id])
-    : null;
-  const [visitedCiRuns, setVisitedCiRuns] = React.useState(() => ({ runtimeKey, keys: new Set<string>() }));
-  const openCiRunsTabs = React.useMemo(() => Object.entries(contextPanelByDirectory)
+  const runtimeKey = React.useSyncExternalStore(subscribeRuntimeEndpointChanged, getRuntimeKey, getRuntimeKey);
+  const repositoryTabs = React.useMemo(() => Object.entries(contextPanelByDirectory)
     .flatMap(([directory, panel]) => panel.tabs
-      .filter((tab) => tab.mode === 'ci')
-      .map((tab) => ({ directory, key: JSON.stringify([directory, tab.id]) })))
+      .filter(tab => tab.mode === 'pr' || tab.mode === 'issues' || tab.mode === 'ci')
+      .map(tab => ({ directory, mode: tab.mode, key: JSON.stringify([directory, tab.id]) })))
     .sort((a, b) => a.key.localeCompare(b.key)), [contextPanelByDirectory]);
-
-  React.useEffect(() => {
-    setVisitedCiRuns((previous) => {
-      const keys = new Set(openCiRunsTabs
-        .filter((tab) => tab.key === activeCiRunsKey || (previous.runtimeKey === runtimeKey && previous.keys.has(tab.key)))
-        .map((tab) => tab.key));
-      if (previous.runtimeKey === runtimeKey && previous.keys.size === keys.size && [...keys].every((key) => previous.keys.has(key))) return previous;
-      return { runtimeKey, keys };
-    });
-  }, [activeCiRunsKey, openCiRunsTabs, runtimeKey]);
-  const retainedCiRunsTabs = openCiRunsTabs.filter((tab) => tab.key === activeCiRunsKey
-    || (visitedCiRuns.runtimeKey === runtimeKey && visitedCiRuns.keys.has(tab.key)));
+  const activeRepositoryKey = (zone: typeof pullRequestZone, mode: 'pr' | 'issues' | 'ci') =>
+    zone.isOpen && zone.activeTab?.mode === mode ? JSON.stringify([directoryKey, zone.activeTab.id]) : null;
+  const activePullRequestKey = activeRepositoryKey(pullRequestZone, 'pr');
+  const activeIssueKey = activeRepositoryKey(issueZone, 'issues');
+  const activeCiRunsKey = activeRepositoryKey(ciRunsZone, 'ci');
+  const retainedRepositoryTabs = useVisitedRepositoryTabs(
+    repositoryTabs, runtimeKey, activePullRequestKey, activeIssueKey, activeCiRunsKey,
+  );
 
   const [recentBrowserTabs, setRecentBrowserTabs] = React.useState<readonly string[]>([]);
   const browserTabLastUsed = React.useRef(new Map<string, number>());
@@ -632,31 +616,15 @@ export const ContextSurfacePanes: React.FC = () => {
           </ContextPanelHeaderSlotProvider>
         </ZonePane>
       ) : null}
-      {retainedPullRequestTabs.map((tab) => {
-        const shown = tab.key === activePullRequestKey;
+      {retainedRepositoryTabs.map(tab => {
+        const activeKey = tab.mode === 'pr' ? activePullRequestKey : tab.mode === 'issues' ? activeIssueKey : activeCiRunsKey;
+        const zone = tab.mode === 'pr' ? pullRequestZone.zone : tab.mode === 'issues' ? issueZone.zone : ciRunsZone.zone;
+        const View = tab.mode === 'pr' ? PullRequestView : tab.mode === 'issues' ? ProjectIssueView : CiRunsView;
+        const shown = tab.key === activeKey;
         return (
-          <ZonePane
-            key={`${runtimeKey}\u0000${tab.key}`}
-            zone={pullRequestZone.zone}
-            isOpen={shown}
-            directoryKey={tab.directory}
-            className={cn('absolute inset-0', !shown && 'hidden')}
-          >
-            <PullRequestView directory={tab.directory} visible={shown} />
-          </ZonePane>
-        );
-      })}
-      {retainedCiRunsTabs.map((tab) => {
-        const shown = tab.key === activeCiRunsKey;
-        return (
-          <ZonePane
-            key={`${runtimeKey}\u0000${tab.key}`}
-            zone={ciRunsZone.zone}
-            isOpen={shown}
-            directoryKey={tab.directory}
-            className={cn('absolute inset-0', !shown && 'hidden')}
-          >
-            <CiRunsView directory={tab.directory} visible={shown} />
+          <ZonePane key={`${runtimeKey}\u0000${tab.key}`} zone={zone} isOpen={shown} directoryKey={tab.directory}
+            className={cn('absolute inset-0', !shown && 'hidden')}>
+            <View directory={tab.directory} visible={shown} />
           </ZonePane>
         );
       })}

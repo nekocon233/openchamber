@@ -21,18 +21,25 @@ const pullSourceSchema = z.object({
   kind: z.literal('pr'), number: z.number().int().positive(),
   sourceRepo: z.object({ owner: z.string(), repo: z.string() }),
 });
+const projectReferenceFields = {
+  allState: z.enum(['open', 'closed']).catch('open'),
+  query: text,
+  selectedUrl: nullableText,
+  loadedCount: z.number().int().nonnegative().catch(0),
+};
 const schemas = {
   pullRequest: z.object({
+    ...projectReferenceFields,
     people: z.preprocess(
       (value) => (value === 'reviewRequested' || value === 'created' ? 'mine' : value),
       z.enum(['mine', 'any']).catch('mine'),
     ),
-    allState: z.enum(['open', 'closed']).catch('open'),
-    query: text,
-    selectedUrl: nullableText,
-    loadedCount: z.number().int().nonnegative().catch(0),
     checksOpen: z.boolean().catch(false),
     link: z.object({ sourceDirectory: z.string().min(1), url: z.string().url() }).nullable().catch(null),
+  }),
+  issue: z.object({
+    ...projectReferenceFields,
+    people: z.enum(['mine', 'any']).catch('mine'),
   }),
   ci: z.object({
     filter: z.enum(['all', 'active', 'failure', 'branch']).catch('all'),
@@ -108,7 +115,8 @@ type Snapshots = { [K in WorkspaceViewKind]: Record<string, WorkspaceViewStates[
 
 // Defaults are shared so an absent owner never allocates during selection.
 export const WORKSPACE_VIEW_DEFAULTS: WorkspaceViewStates = {
-  pullRequest: schemas.pullRequest.parse({}), ci: schemas.ci.parse({}), changes: schemas.changes.parse({}),
+  pullRequest: schemas.pullRequest.parse({}), issue: schemas.issue.parse({}),
+  ci: schemas.ci.parse({}), changes: schemas.changes.parse({}),
   knowledge: schemas.knowledge.parse({}), comment: schemas.comment.parse({}),
   thread: schemas.thread.parse({}),
   diffFile: schemas.diffFile.parse({}),
@@ -130,7 +138,7 @@ export const workspaceRepositoryIdentity = (context: SourceControlReadContext): 
   context.provider, context.instance, context.accountId, context.repositoryId, context.primaryRemote, context.bindingRevision,
 ]);
 
-const emptySnapshots = (): Snapshots => ({ pullRequest: {}, ci: {}, changes: {}, knowledge: {}, comment: {}, thread: {}, diffFile: {}, pullRequestForm: {}, scroll: {} });
+const emptySnapshots = (): Snapshots => ({ pullRequest: {}, issue: {}, ci: {}, changes: {}, knowledge: {}, comment: {}, thread: {}, diffFile: {}, pullRequestForm: {}, scroll: {} });
 
 const parseSnapshots = (value: unknown): Snapshots => {
   const result = emptySnapshots();

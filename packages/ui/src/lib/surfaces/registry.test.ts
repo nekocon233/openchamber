@@ -82,7 +82,7 @@ describe('getVisibleContextRailSurfaces', () => {
       railOrder: ['notes', remoteDesktop.id, 'git', 'editor', 'pr', 'terminal', 'context'],
     });
     expect(surfaces.map((surface) => surface.id)).toEqual([
-      'notes', remoteDesktop.id, 'git', 'editor', 'pr', 'terminal', 'context', 'ci', 'diff', 'walkthrough', 'browser',
+      'notes', remoteDesktop.id, 'git', 'editor', 'pr', 'terminal', 'context', 'issues', 'ci', 'diff', 'walkthrough', 'browser',
     ]);
   });
 
@@ -98,6 +98,15 @@ describe('getVisibleContextRailSurfaces', () => {
     expect(getVisibleContextRailSurfaces({ ...baseOptions, githubConnected: false }).some((s) => s.id === 'ci')).toBe(false);
     expect(getVisibleContextRailSurfaces({ ...baseOptions, repositoryProvider: 'gitlab' }).some((s) => s.id === 'ci')).toBe(false);
     expect(getVisibleContextRailSurfaces({ ...baseOptions, isVSCode: true }).some((s) => s.id === 'ci')).toBe(false);
+  });
+
+  test('places Issues beside PRs for connected GitHub repositories', () => {
+    const shown = (options: Partial<Parameters<typeof getVisibleContextRailSurfaces>[0]>) =>
+      getVisibleContextRailSurfaces({ ...baseOptions, ...options }).map(surface => surface.id);
+    expect(shown({}).slice(2, 5)).toEqual(['pr', 'issues', 'ci']);
+    expect(shown({ githubConnected: false })).not.toContain('issues');
+    expect(shown({ repositoryProvider: 'gitlab' })).not.toContain('issues');
+    expect(shown({ isVSCode: true })).not.toContain('issues');
   });
 
   test('waits for every configured GitHub instance before considering GitHub auth settled', () => {

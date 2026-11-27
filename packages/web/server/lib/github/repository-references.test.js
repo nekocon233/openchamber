@@ -20,7 +20,12 @@ const connection = (nodes, more = false, total = nodes.length) => ({
   data: { repository: { pullRequests: { nodes, totalCount: total, pageInfo: { hasNextPage: more, endCursor: more ? 'next' : null } } } },
 });
 
-describe('single-repository PR references', () => {
+const issue = (number, { state = 'OPEN', stateReason = null, authored = false, assigned = false } = {}) => ({
+  ...node(number), __typename: 'Issue', title: `Issue ${number}`, url: `${repo.url}/issues/${number}`, state, stateReason,
+  viewerDidAuthor: authored, assignees: { nodes: assigned ? [{ isViewer: true }] : [] },
+});
+
+describe('single-repository references', () => {
   let app;
   let accountId;
   const resolveNetwork = vi.fn(async () => [{ ...repo, source: 'origin' }, upstream]);
@@ -156,7 +161,7 @@ describe('single-repository PR references', () => {
       },
     });
     const fetch = serve(({ query, variables }) => {
-      expect(query).toContain('MinePullSearch');
+      expect(query).toContain('MineReferenceSearch');
       expect(variables.withReviewRequests).toBe(true);
       expect(variables.reviewQuery).toContain('review-requested:@me');
       expect(variables.createdQuery).toContain('author:@me');
@@ -182,6 +187,53 @@ describe('single-repository PR references', () => {
     expect(resolveNetwork).not.toHaveBeenCalled();
 
     await get({ state: 'open', people: 'mine', cursor: 'bad.cursor' }).expect(400);
+  });
+
+  it('pages closed Issues from the bound repository without the search limit', async () => {
+    serve(({ query, variables }) => {
+      expect(query).toContain('issues(states:');
+      expect(variables).toEqual({ owner: 'example', repo: 'project', states: ['CLOSED'], first: 30, after: 'page-after-1000' });
+      return { data: { repository: { issues: { nodes: [
+        issue(1201, { state: 'CLOSED', stateReason: 'COMPLETED' }),
+        issue(1200, { state: 'CLOSED', stateReason: 'NOT_PLANNED' }),
+      ], totalCount: 1201, pageInfo: { endCursor: null, hasNextPage: false } } } } };
+    });
+    const { body } = await get({ kind: 'issue', state: 'closed', cursor: 'page-after-1000' }).expect(200);
+    expect(body.items.map(item => [item.number, item.state])).toEqual([[1201, 'completed'], [1200, 'not_planned']]);
+    expect(body.total).toBe(1201);
+    expect(resolveNetwork).not.toHaveBeenCalled();
+  });
+
+  it('lists assigned and authored open Issues once and drops stale membership', async () => {
+    const page = (nodes) => ({ nodes, issueCount: nodes.length, pageInfo: { endCursor: null, hasNextPage: false } });
+    const fetch = serve(({ variables }) => {
+      expect(variables).toMatchObject({ withIssueMembership: true, withReviewRequests: false });
+      expect(variables.reviewQuery).toBe('repo:example/project is:issue is:open sort:updated-desc assignee:@me error');
+      expect(variables.createdQuery).toBe('repo:example/project is:issue is:open sort:updated-desc author:@me error');
+      const both = issue(10, { authored: true, assigned: true });
+      return { data: {
+        reviewRequested: page([both, issue(9, { assigned: true }), issue(8)]),
+        created: page([both, issue(7, { authored: true }), issue(6, { state: 'CLOSED', authored: true })]),
+      } };
+    });
+    const { body } = await get({ kind: 'issue', state: 'open', people: 'mine', query: 'error' }).expect(200);
+    expect(body.items.map(item => item.number)).toEqual([10, 9, 7]);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('honors scope, membership and state on Issue links and number searches', async () => {
+    const targets = new Map([
+      [4, issue(4, { assigned: true })],
+      [5, issue(5)],
+      [6, issue(6, { state: 'CLOSED', authored: true })],
+    ]);
+    const fetch = serve(({ variables }) => ({ data: { a0: { issueOrPullRequest: targets.get(variables.number) } } }));
+    const lookup = query => get({ kind: 'issue', state: 'open', people: 'mine', query }).expect(200);
+    expect((await lookup('#4')).body.items.map(item => item.number)).toEqual([4]);
+    expect((await lookup('#5')).body.items).toEqual([]);
+    expect((await lookup(`${repo.url}/issues/6`)).body.items).toEqual([]);
+    expect((await lookup('https://github.com/upstream/project/issues/4')).body.items).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it('does not substitute an issue for a PR with the same number', async () => {

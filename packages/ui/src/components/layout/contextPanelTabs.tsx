@@ -24,6 +24,7 @@ export const getModeLabel = (
   if (mode === 'browser') return t('contextPanel.mode.browser');
   if (mode === 'git') return t('layout.rightSidebar.git');
   if (mode === 'pr') return t('contextPanel.mode.pr');
+  if (mode === 'issues') return t('references.picker.tab.issues');
   if (mode === 'ci') return t('gitView.pullRequest.tab.ci');
   if (mode === 'notes') return t('contextRail.surface.notes');
   if (mode === 'terminal') return t('layout.mainTab.terminal');

@@ -46,33 +46,27 @@ import { useEdgeSwipe } from './useEdgeSwipe';
 import { isVimEditorEventTarget } from '@/lib/editorFocus';
 import { MOBILE_HEADER_BUTTON_CLASS, MOBILE_HEADER_CLASS } from '@/components/ui/mobileHeader';
 
-export type MobileWorkspaceTab = BaseMobileWorkspaceTab | 'pr' | 'ci';
+export type MobileWorkspaceTab = BaseMobileWorkspaceTab | 'pr' | 'issues' | 'ci';
 
 const MobileBrowserSurface = React.lazy(() => import('./MobileBrowserSurface').then((module) => ({ default: module.MobileBrowserSurface })));
 const GuestPanelContent = React.lazy(() => import('@/components/layout/GuestPanelContent').then((module) => ({ default: module.GuestPanelContent })));
 const PluginPane = React.lazy(() => import('@/components/layout/PluginPane').then((module) => ({ default: module.PluginPane })));
 
-const loadPullRequestView = () => import('@/components/views/PullRequestView').then((module) => module.PullRequestView);
-const loadCiRunsView = () => import('@/components/views/CiRunsView').then((module) => module.CiRunsView);
-
-const MobilePullRequestPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
-  const draftSpace = useDraftSpaceTarget();
-  const directory = normalizePath(panelContentDirectory(draftSpace, useEffectiveDirectory())) ?? '';
-  const runtimeKey = useGitStore((state) => state.runtimeKey);
-  const View = useOnDemandComponent(visible, loadPullRequestView, onFailure);
-  return (
-    <PauseClock paused={!visible}>
-      {draftSpace?.kind === 'preparing' ? <SpacePreparing />
-        : View ? <View key={JSON.stringify([runtimeKey, directory])} directory={directory} visible={visible} /> : null}
-    </PauseClock>
-  );
+const repositoryPaneLoaders = {
+  pr: () => import('@/components/views/PullRequestView').then(module => module.PullRequestView),
+  issues: () => import('@/components/views/git/ProjectIssueView').then(module => module.ProjectIssueView),
+  ci: () => import('@/components/views/CiRunsView').then(module => module.CiRunsView),
 };
 
-const MobileCiRunsPane: React.FC<{ visible: boolean; onFailure: () => void }> = ({ visible, onFailure }) => {
+const MobileRepositoryPane: React.FC<{
+  tab: keyof typeof repositoryPaneLoaders;
+  visible: boolean;
+  onFailure: () => void;
+}> = ({ tab, visible, onFailure }) => {
   const draftSpace = useDraftSpaceTarget();
   const directory = normalizePath(panelContentDirectory(draftSpace, useEffectiveDirectory())) ?? '';
-  const runtimeKey = useGitStore((state) => state.runtimeKey);
-  const View = useOnDemandComponent(visible, loadCiRunsView, onFailure);
+  const runtimeKey = useGitStore(state => state.runtimeKey);
+  const View = useOnDemandComponent(visible, repositoryPaneLoaders[tab], onFailure);
   return (
     <PauseClock paused={!visible}>
       {draftSpace?.kind === 'preparing' ? <SpacePreparing />
@@ -206,6 +200,7 @@ export const MobileWorkspaceDrawer: React.FC<{
     status: { id: 'status', label: t('chat.workStatus.ariaLabel'), icon: <Icon name="list-indefinite" className="h-3.5 w-3.5" /> },
     changes: { id: 'changes', label: t('mobile.menu.git'), icon: <Icon name="git-branch" className="h-3.5 w-3.5" /> },
     pr: { id: 'pr', label: t('contextPanel.mode.pr'), icon: <Icon name="git-pull-request" className="h-3.5 w-3.5" /> },
+    issues: { id: 'issues', label: t('references.picker.tab.issues'), icon: <Icon name="record-circle" className="size-3.5" /> },
     ci: { id: 'ci', label: t('gitView.pullRequest.tab.ci'), icon: <Icon name="play-circle" className="h-3.5 w-3.5" /> },
     files: { id: 'files', label: t('mobile.menu.files'), icon: <Icon name="file-text" className="h-3.5 w-3.5" /> },
     terminal: { id: 'terminal', label: t('mobile.menu.terminal'), icon: <Icon name="terminal" className="h-3.5 w-3.5" /> },
@@ -245,7 +240,7 @@ export const MobileWorkspaceDrawer: React.FC<{
     };
   };
 
-  const baseTabs: MobileWorkspaceTab[] = (tab === 'pr' || tab === 'ci')
+  const baseTabs: MobileWorkspaceTab[] = (tab === 'pr' || tab === 'issues' || tab === 'ci')
     ? shownMobileWorkspaceTabs(tabOrder, hiddenTabs, extensionTabs)
     : stripMobileWorkspaceTabs(tabOrder, hiddenTabs, tab === 'pages' ? 'status' : tab, extensionTabs);
   const stripTabs: MobileWorkspaceTab[] = [...baseTabs];
@@ -254,7 +249,7 @@ export const MobileWorkspaceDrawer: React.FC<{
     withoutPages.splice(withoutPages.indexOf('status') + 1, 0, 'pages');
     stripTabs.splice(0, stripTabs.length, ...withoutPages);
   }
-  const prCiInsertAt = (() => {
+  const repositoryInsertAt = (() => {
     const changesIndex = stripTabs.indexOf('changes');
     if (changesIndex >= 0) return changesIndex + 1;
     const pagesIndex = stripTabs.indexOf('pages');
@@ -262,7 +257,7 @@ export const MobileWorkspaceDrawer: React.FC<{
     const statusIndex = stripTabs.indexOf('status');
     return statusIndex >= 0 ? statusIndex + 1 : 0;
   })();
-  stripTabs.splice(prCiInsertAt, 0, 'pr', 'ci');
+  stripTabs.splice(repositoryInsertAt, 0, 'pr', 'issues', 'ci');
 
   const tabItems = stripTabs.map((id) => (isPluginContextPanelMode(id) ? extensionTabItem(id) : tabDefinitions[id]));
   const soleTab = tabItems.length === 1 ? tabItems[0] : null;
@@ -349,20 +344,13 @@ export const MobileWorkspaceDrawer: React.FC<{
             </ErrorBoundary>
           </div>
         ) : null}
-        {visitedTabs.has('pr') ? (
-          <div className={cn('h-full', tab !== 'pr' && 'hidden')}>
+        {(['pr', 'issues', 'ci'] as const).filter(id => visitedTabs.has(id)).map(id => (
+          <div key={id} className={cn('h-full', tab !== id && 'hidden')}>
             <ErrorBoundary>
-              <MobilePullRequestPane visible={open && tab === 'pr'} onFailure={onClose} />
+              <MobileRepositoryPane tab={id} visible={open && tab === id} onFailure={onClose} />
             </ErrorBoundary>
           </div>
-        ) : null}
-        {visitedTabs.has('ci') ? (
-          <div className={cn('h-full', tab !== 'ci' && 'hidden')}>
-            <ErrorBoundary>
-              <MobileCiRunsPane visible={open && tab === 'ci'} onFailure={onClose} />
-            </ErrorBoundary>
-          </div>
-        ) : null}
+        ))}
         {visitedTabs.has('files') ? (
           <div className={cn('h-full', tab !== 'files' && 'hidden')}>
             <ErrorBoundary>

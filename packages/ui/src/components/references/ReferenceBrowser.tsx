@@ -457,7 +457,7 @@ export const ReferenceBrowserSearch: React.FC<{
                     ) : null}
                 </div>
             </div>
-            {browser.mode !== 'project-pulls' ? <ReferenceFilterMenu browser={browser} /> : null}
+            {browser.mode === 'references' ? <ReferenceFilterMenu browser={browser} /> : null}
             {trailing}
         </div>
     );
@@ -484,7 +484,7 @@ export const ReferenceBrowserList: React.FC<{
 }> = ({ browser, label, multiselectable, onOpenSettings, rowSelection, onActivate, onSelectItem, onShow, notice, renderPullFileStats, renderPullAction }) => {
     const { t } = useI18n();
     const { source, sourceStatus, list, items, term, descriptor, isMobile, directory, debouncedQuery, repositoryKind, tracker } = browser;
-    const projectPulls = browser.mode === 'project-pulls';
+    const projectList = browser.mode !== 'references';
 
     const sentinelRef = React.useRef<HTMLDivElement>(null);
     const { hasMore, loadMore, loadingMore, refreshing, error: pageError } = list;
@@ -507,7 +507,7 @@ export const ReferenceBrowserList: React.FC<{
         </div>
     );
     const emptyText = () => {
-        if (debouncedQuery.trim() || (projectPulls && (browser.repositoryFilter.people === 'mine' || browser.repositoryFilter.state === 'closed'))) {
+        if (debouncedQuery.trim() || (projectList && (browser.repositoryFilter.people === 'mine' || browser.repositoryFilter.state === 'closed'))) {
             return t('references.picker.empty.search');
         }
         if (tracker) return t('references.picker.empty.tracker');
@@ -555,7 +555,7 @@ export const ReferenceBrowserList: React.FC<{
     return (
         <>
             {notice}
-            <div role={projectPulls ? 'list' : 'listbox'} aria-label={label} aria-multiselectable={projectPulls ? undefined : multiselectable} className="flex flex-col gap-1 p-1.5">
+            <div role={projectList ? 'list' : 'listbox'} aria-label={label} aria-multiselectable={projectList ? undefined : multiselectable} className="flex flex-col gap-1 p-1.5">
                 {error !== null ? (
                     <div className="mb-1 flex items-center gap-2 rounded-lg bg-[var(--status-error-background)] px-2.5 py-1.5 typography-meta text-[var(--status-error-text)]">
                         <span className="min-w-0 flex-1 break-words">{t('references.picker.error.refresh', { error })}</span>
@@ -574,9 +574,9 @@ export const ReferenceBrowserList: React.FC<{
                             item={item}
                             pullStatus={status ? readyValue(status) : null}
                             pullStatusRead={status}
-                            showChecks={projectPulls && browser.descriptor.id === 'github'}
+                            showChecks={browser.mode === 'project-pulls' && browser.descriptor.id === 'github'}
                             pullFileStats={pull ? renderPullFileStats?.(pull) : undefined}
-                            listItem={projectPulls}
+                            listItem={projectList}
                             pullAction={pull ? renderPullAction?.(pull) : undefined}
                             showRepository={browser.across}
                             highlighted={!isMobile && key === browser.effectiveHighlightKey}

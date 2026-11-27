@@ -7,6 +7,7 @@ const BUILT_IN_CONTEXT_PANEL_MODES = [
   'browser',
   'git',
   'pr',
+  'issues',
   'ci',
   'notes',
   'terminal',

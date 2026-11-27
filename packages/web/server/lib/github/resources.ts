@@ -27,7 +27,7 @@ import {
   fetchDiscussionDetail,
   fetchPullStack,
   fetchReferenceDetail,
-  listRepositoryPullRequests,
+  readGitHubReferencePage,
   labelSearchQualifiers,
   mapReferencesAcross,
   readPullStatusRefs,
@@ -652,21 +652,17 @@ export function createGitHubResources({
       const network = scope === 'network'
         ? requireGitHubRepoNetwork(await resolveNetwork(octokit, directory, remote, { strictErrors: true }), repo)
         : null;
-      const selectedState = readReferenceState(state);
-      const selectedPeople = readReferencePeople(people);
-      const page = scope === 'repository' && kind === 'pull' && selectedState !== 'unanswered' && !text.trim() && labels.length === 0 && selectedPeople === 'any'
-        ? await listRepositoryPullRequests({ octokit, repo, state: selectedState, cursor })
-        : await searchGitHubReferences({
-          octokit,
-          repos: network ?? [{ ...repo, source: 'origin' }],
-          kind,
-          state: selectedState,
-          people: selectedPeople,
-          labels,
-          text,
-          cursor: cursor || null,
-          scope,
-        });
+      const page = await readGitHubReferencePage({
+        octokit,
+        repos: network ?? [{ ...repo, source: 'origin' }],
+        kind,
+        state: readReferenceState(state),
+        people: readReferencePeople(people),
+        labels,
+        text,
+        cursor: cursor || null,
+        scope,
+      });
       return { connected: true, repo, scope, ...page };
     }),
 

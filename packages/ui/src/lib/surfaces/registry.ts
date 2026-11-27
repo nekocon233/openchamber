@@ -9,6 +9,7 @@ type BuiltInContextSurfaceId =
   | 'editor'
   | 'git'
   | 'pr'
+  | 'issues'
   | 'ci'
   | 'diff'
   | 'walkthrough'
@@ -66,6 +67,15 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     mode: 'pr',
     icon: 'github',
     labelKey: 'contextPanel.mode.pr',
+    availability: 'always',
+  },
+  {
+    id: 'issues',
+    descriptionKey: 'contextRail.surface.issues.description',
+    defaultWidth: 540,
+    mode: 'issues',
+    icon: 'record-circle',
+    labelKey: 'references.picker.tab.issues',
     availability: 'always',
   },
   {
@@ -239,6 +249,10 @@ export const getVisibleContextRailSurfaces = (options: VisibleRailSurfacesOption
     }
     if (surface.id === 'pr' && !options.sourceControlConnected
       && !options.tabs.some((tab) => tab.mode === 'pr' && tab.targetPath)) {
+      return false;
+    }
+    const knownNonGitHub = options.repositoryProvider && options.repositoryProvider !== 'github' && options.repositoryProvider !== 'none';
+    if (surface.id === 'issues' && (options.isVSCode || !options.githubConnected || knownNonGitHub)) {
       return false;
     }
     if (surface.id === 'ci' && (

@@ -138,3 +138,7 @@ export interface GitHubEnvelope {
 
 export const hasProperty = <Key extends keyof GitHubEnvelope>(value: unknown, key: Key): value is Required<Pick<GitHubEnvelope, Key>> =>
   value != null && key in Object(value);
+
+export const repoKey = (owner: string, repo: string) => `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+export const updatedAtOf = (item: Pick<Reference, 'updatedAt'>) => Date.parse(item.updatedAt ?? '') || 0;
+export const invalidReferencesCursor = () => Object.assign(new Error('Invalid references cursor'), { status: 400, code: 'INVALID_REFERENCES_CURSOR' });
