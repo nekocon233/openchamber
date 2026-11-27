@@ -87,6 +87,7 @@ export function buildFileSourceActions({ codeNavigation, files, draft, editor, f
       icon: 'braces',
       shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('open_document_symbols', shortcutOverrides), ''),
       pressed: isSymbolsOpen,
+      pinned: true,
       onSelect: () => {
         openSourceEditor();
         setIsSymbolsOpen((open) => !sourceEditorShown || !open);

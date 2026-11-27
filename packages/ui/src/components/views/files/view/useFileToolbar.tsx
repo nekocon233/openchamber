@@ -152,9 +152,9 @@ export function useFileToolbar({ codeNavigation, fileAssets, draft, fileKinds, c
         groups={[
           [sourceActions.navigateBackAction, sourceActions.navigateForwardAction],
           [modeAction, annotateAction],
-          [searchAction, outlineAction, commentAction],
+          [searchAction, outlineAction ?? symbolsAction, commentAction],
         ]}
-        menuOnly={[goToLineAction, symbolsAction, wrapAction, readAloudAction, ...fileActions, autoSaveAction]}
+        menuOnly={[goToLineAction, outlineAction && symbolsAction, wrapAction, readAloudAction, ...fileActions, autoSaveAction]}
         trailing={[fullscreenAction]}
         fold={docked}
         onMenuOpenChange={handleToolbarDropdownOpenChange}

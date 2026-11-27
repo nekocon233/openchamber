@@ -772,10 +772,11 @@ re-renders every row.
 The Files editor's row (`renderFileToolbar`, an `ActionToolbar`) has the actions
 the open file's type allows, the same in every mode. The row itself keeps save
 state, the mode toggle (and HTML annotation), find, comment on the file and
-full screen; go to line, symbols, line wrap, read aloud, the file's own actions
-(open in app, copy contents, copy path, download) and auto-save live in "More
-actions". With every action on the row it ran to a dozen icons, most of them
-rarely used (maintainer, 2026-10-28). A tool the current mode cannot run opens
+full screen. On desktop, Symbols in file stays on the code toolbar when
+secondary actions fold. Markdown uses Outline and offers source symbols in
+"More actions". That menu also holds go to line, line wrap, read aloud, the
+file's own actions (open in app, copy contents, copy path, download), and
+auto-save. A tool the current mode cannot run opens
 the source editor first: go to line from a preview switches to the editor and
 opens the field there. Find in a Markdown preview searches the preview. A
 read-only code file has no editor, so it gets no source tools. Go to line and
