@@ -46,6 +46,13 @@ test('opening files and line links keeps the current tool and selects the reside
   ui.openContextPanelTab(directory, { mode: 'file', targetPath: '/repo/background.ts' }, { reveal: false });
   expect(selected()).toBe('/repo/b.ts');
   expect(active()?.mode).toBe('diff');
+
+  ui.moveContextSurfaceToZone('terminal', 'right');
+  ui.openContextSurface(directory, 'terminal');
+  ui.openContextFile(directory, '/repo/screenshot.png', { expanded: true });
+  expect(selected()).toBe('/repo/screenshot.png');
+  expect(active('right')?.mode).toBe('terminal');
+  expect(getZoneView(useUIStore.getState().contextPanelByDirectory[directory], 'right').expanded).toBe(false);
 });
 
 test('the file rail toggles only the directory panel, including a manually moved tree', () => {

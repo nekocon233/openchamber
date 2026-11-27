@@ -17,7 +17,7 @@ afterEach(() => {
 
 test('editor layout moves visible files across projects without dropping tabs or widths', () => {
   const ui = useUIStore.getState();
-  expect(ui.workspaceLayout).toBe('classic');
+  ui.setWorkspaceLayout('classic');
   for (const directory of ['/first', '/second']) {
     ui.openContextFile(directory, `${directory}/notes.md`);
     ui.setContextPanelWidth(directory, 'file', 680);
@@ -80,7 +80,8 @@ test('the layout round-trips through profile settings and local hydration', asyn
   expect(parseSettingsDocument({ workspaceLayout: 'invalid' })).toEqual({});
 });
 
-test('old and malformed local settings load the classic layout', async () => {
+test('editor is the default without a valid saved layout', async () => {
+  expect(useUIStore.getState().workspaceLayout).toBe('editor');
   for (const state of [{}, { workspaceLayout: 'invalid' }, { workspaceLayout: null }]) {
     useUIStore.persist.setOptions({ storage: {
       getItem: () => ({ version: options.version, state }),
@@ -88,19 +89,19 @@ test('old and malformed local settings load the classic layout', async () => {
       removeItem: () => undefined,
     } });
     await useUIStore.persist.rehydrate();
-    expect(useUIStore.getState().workspaceLayout).toBe('classic');
+    expect(useUIStore.getState().workspaceLayout).toBe('editor');
   }
 });
 
-test('a local snapshot without a layout preserves an already applied profile choice', async () => {
-  applySettingsToStores({ workspaceLayout: 'editor' });
+test('a local snapshot without a valid layout preserves an already applied profile choice', async () => {
+  applySettingsToStores({ workspaceLayout: 'classic' });
   useUIStore.persist.setOptions({ storage: {
-    getItem: () => ({ version: options.version, state: { sidebarWidth: 320 } }),
+    getItem: () => ({ version: options.version, state: { sidebarWidth: 320, workspaceLayout: 'invalid' } }),
     setItem: () => undefined,
     removeItem: () => undefined,
   } });
   await useUIStore.persist.rehydrate();
-  expect(useUIStore.getState().workspaceLayout).toBe('editor');
+  expect(useUIStore.getState().workspaceLayout).toBe('classic');
   expect(useUIStore.getState().sidebarWidth).toBe(320);
 });
 
@@ -140,6 +141,7 @@ test('a manual right placement survives reopen, project and layout changes', () 
 });
 
 test('a layout transition publishes the new layout and visible zones together', () => {
+  useUIStore.getState().setWorkspaceLayout('classic');
   useUIStore.getState().openContextSurface('/repo', 'diff');
   let updates = 0;
   const stop = useUIStore.subscribe((state) => {
@@ -153,6 +155,7 @@ test('a layout transition publishes the new layout and visible zones together', 
 });
 
 test('v24 editor hydration relocates the saved active panel and retains every surface size', async () => {
+  useUIStore.getState().setWorkspaceLayout('classic');
   useUIStore.getState().openContextSurface('/repo', 'diff');
   useUIStore.getState().setContextPanelWidth('/repo', 'plugin:notes-x', 751);
   useUIStore.getState().setContextPanelHeight('/repo', 'plugin:notes-x', 427);
@@ -175,6 +178,7 @@ test('v24 editor hydration relocates the saved active panel and retains every su
 
 test('retired task windows are dropped on hydration while other windows and sizes survive', async () => {
   const ui = useUIStore.getState();
+  ui.setWorkspaceLayout('classic');
   ui.openContextSurface('/mixed', 'git');
   ui.setContextPanelWidth('/mixed', 'git', 620);
   const mixed = useUIStore.getState().contextPanelByDirectory['/mixed'];

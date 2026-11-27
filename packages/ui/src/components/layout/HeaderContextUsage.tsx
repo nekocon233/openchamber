@@ -5,7 +5,7 @@ import { resolveUsageTone } from '@/lib/quota';
 import { cn } from '@/lib/utils';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
-import { shownContextModes } from '@/lib/workspace/zones';
+import { getDefaultContextZone, shownContextModes } from '@/lib/workspace/zones';
 import { ContextRailTooltipDetails, ContextRing } from './ContextRailUsage';
 import { useCurrentContextReading } from './useCurrentContextReading';
 
@@ -24,7 +24,7 @@ const HeaderContextUsageComponent: React.FC<{ buttonClassName: string }> = ({ bu
   const directoryKey = effectiveDirectory ? normalizeContextPanelDirectoryKey(effectiveDirectory) : '';
   const openContextSurface = useUIStore((state) => state.openContextSurface);
   const contextShown = useUIStore((state) => directoryKey !== ''
-    && shownContextModes(state.contextPanelByDirectory[directoryKey], state.contextSurfaceZones).has('context'));
+    && shownContextModes(state.contextPanelByDirectory[directoryKey], state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout)).has('context'));
   const cardShowsContext = useUIStore((state) => state.workStatusOverlayOpen
     && !state.workStatusHiddenSections.includes('session'));
 

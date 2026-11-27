@@ -12,7 +12,7 @@ import { I18nProvider } from '@/lib/i18n';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useGuestsStore } from '@/lib/guests/store';
 import type { InstalledGuest } from '@/lib/guests/types';
-import { shownContextModes } from '@/lib/workspace/zones';
+import { getDefaultContextZone, shownContextModes } from '@/lib/workspace/zones';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -71,7 +71,7 @@ test('a status section without a project opens its panel under the chat, as the 
   const restores: Array<() => void> = [];
   const shown = () => {
     const state = useUIStore.getState();
-    return [...shownContextModes(state.contextPanelByDirectory[chatDirectory], state.contextSurfaceZones)];
+    return [...shownContextModes(state.contextPanelByDirectory[chatDirectory], state.contextSurfaceZones, getDefaultContextZone(state.workspaceLayout))];
   };
   try {
     await act(async () => root.render(

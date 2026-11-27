@@ -25,6 +25,7 @@ globalThis.fetch = async (input) => {
 const { MarkdownContent } = await import('../MarkdownRendererImpl');
 const { I18nProvider } = await import('@/lib/i18n');
 const { useUIStore } = await import('@/stores/useUIStore');
+const { useFilesViewTabsStore } = await import('@/stores/useFilesViewTabsStore');
 const host = document.createElement('div');
 document.body.append(host);
 const root = createRoot(host);
@@ -34,7 +35,8 @@ afterAll(async () => {
   globalThis.fetch = realFetch;
 });
 
-test('local href clicks prevent browser navigation and open decoded files through MarkdownLink', async () => {
+for (const layout of ['classic', 'editor'] as const) test(`local href clicks open decoded files in ${layout} layout`, async () => {
+  useUIStore.getState().setWorkspaceLayout(layout);
   for (const [href, path] of [
     ['docs/%E4%B8%AD%E6%96%87.md', '/repo/docs/中文.md'],
     ['docs/a%20%20b.md', '/repo/docs/a  b.md'],
@@ -55,7 +57,11 @@ test('local href clicks prevent browser navigation and open decoded files throug
     await act(() => { link.dispatchEvent(click); });
     expect(click.defaultPrevented).toBe(true);
     expect(useUIStore.getState().pendingFileFocusPath).toBe(path);
-    const panel = useUIStore.getState().contextPanelByDirectory['/repo'];
-    expect(panel.tabs.find((tab) => tab.id === panel.activeTabId)?.targetPath).toBe(path);
+    if (layout === 'editor') {
+      expect(useFilesViewTabsStore.getState().byRoot['/repo']?.selectedPath).toBe(path);
+    } else {
+      const panel = useUIStore.getState().contextPanelByDirectory['/repo'];
+      expect(panel.tabs.find((tab) => tab.id === panel.activeTabId)?.targetPath).toBe(path);
+    }
   }
 });

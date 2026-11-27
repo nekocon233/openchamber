@@ -7,7 +7,7 @@ import { forgetLayoutForSafeStart } from './desktopSafeStart';
 const flushDeferredWrites = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 beforeEach(() => {
-  useUIStore.setState({ contextPanelByDirectory: {} });
+  useUIStore.setState({ workspaceLayout: 'classic', contextPanelByDirectory: {} });
   useFilesViewTabsStore.setState({ byRoot: {}, activeRuntimeKey: 'runtime-a', runtimeSnapshots: {} });
 });
 

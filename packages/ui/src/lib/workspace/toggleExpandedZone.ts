@@ -1,5 +1,5 @@
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
-import { canZoneExpand, getZoneView, resolveZoneActiveTabId, zoneOfMode, type ContextZone } from './zones';
+import { canZoneExpand, getDefaultContextZone, getZoneView, resolveZoneActiveTabId, zoneOfMode, type ContextZone } from './zones';
 
 const ZONE_PREFERENCE: readonly ContextZone[] = ['right', 'left', 'bottom'];
 
@@ -27,12 +27,13 @@ export const toggleExpandedContextZone = (directory: string | null): void => {
     return;
   }
 
+  const defaultZone = getDefaultContextZone(state.workspaceLayout);
   const rightTabId = panel
-    ? resolveZoneActiveTabId(panel.tabs, state.contextSurfaceZones, 'right', getZoneView(panel, 'right').activeTabId)
+    ? resolveZoneActiveTabId(panel.tabs, state.contextSurfaceZones, 'right', getZoneView(panel, 'right').activeTabId, defaultZone)
     : null;
   if (rightTabId) state.setActiveContextPanelTab(key, rightTabId);
   else state.openContextSurface(key, 'git');
-  const zone = rightTabId ? 'right' : zoneOfMode(state.contextSurfaceZones, 'git');
+  const zone = rightTabId ? 'right' : zoneOfMode(state.contextSurfaceZones, 'git', defaultZone);
   const opened = useUIStore.getState();
   const openedPanel = opened.contextPanelByDirectory[key];
   if (openedPanel && canZoneExpand(openedPanel, opened, zone) && !getZoneView(openedPanel, zone).expanded) {

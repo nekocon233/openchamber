@@ -16,7 +16,7 @@ const getTerminalTab = (directory: string) => getContextPanelTabs(directory).fin
 const originalPersistOptions = useUIStore.persist.getOptions();
 
 beforeEach(() => {
-  useUIStore.setState({ contextPanelByDirectory: {}, contextRailOrder: [], contextZoneSizes: {} });
+  useUIStore.setState({ workspaceLayout: 'classic', contextPanelByDirectory: {}, contextRailOrder: [], contextZoneSizes: {} });
   useTerminalStore.getState().clearAll();
 });
 
@@ -1434,7 +1434,7 @@ describe('useUIStore workspace zones', () => {
     expect(panel()?.expanded).toBe(false);
   });
 
-  test('state saved before zones loads with every surface on the right', async () => {
+  test('an open panel saved before zones follows the new default layout', async () => {
     useUIStore.persist.setOptions({ storage: {
       getItem: () => ({
         version: 23,
@@ -1460,8 +1460,8 @@ describe('useUIStore workspace zones', () => {
       await useUIStore.persist.rehydrate();
 
       expect(useUIStore.getState().contextSurfaceZones).toEqual({});
-      expect(panel()).toMatchObject({ isOpen: true, activeTabId: 'git' });
-      expect(panel()?.zones.left.isOpen).toBe(false);
+      expect(panel()?.isOpen).toBe(false);
+      expect(panel()?.zones.left).toMatchObject({ isOpen: true, activeTabId: 'git' });
       expect(panel()?.zones.bottom.isOpen).toBe(false);
     } finally {
       useUIStore.persist.setOptions(originalPersistOptions);

@@ -17,6 +17,7 @@ const toggleExpanded = (zone: 'left' | 'right' = 'right') => store().toggleConte
 beforeEach(() => {
   rowWidth = 1600;
   useUIStore.setState({
+    workspaceLayout: 'classic',
     contextPanelByDirectory: {},
     contextSurfaceZones: {},
     isSidebarOpen: true,

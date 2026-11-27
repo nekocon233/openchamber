@@ -86,15 +86,17 @@ export const isZoneShown = (panel: ZonedPanel | undefined, placement: ContextZon
 
 export const canZoneExpand = (
   panel: ZonedPanel<ZonedTab & { targetPath?: string | null }> | undefined,
-  view: { contextSurfaceZones: ContextZonePlacement; contextEditorVisible: boolean; contextEditorTreeVisible: boolean },
+  view: { workspaceLayout: WorkspaceLayout; contextSurfaceZones: ContextZonePlacement; contextEditorVisible: boolean; contextEditorTreeVisible: boolean },
   zone: ContextZone,
 ): boolean => {
-  const tab = panel && isZoneShown(panel, view.contextSurfaceZones, zone)
-    ? resolveZoneActiveTab(panel, view.contextSurfaceZones, zone)
+  const defaultZone = getDefaultContextZone(view.workspaceLayout);
+  const tab = panel && getZoneView(panel, zone).isOpen
+    ? resolveZoneActiveTab(panel, view.contextSurfaceZones, zone, defaultZone)
     : null;
   if (!panel || !tab) return false;
   if (zone === 'bottom' || tab.mode !== 'file') return true;
-  return panel.tabs.some((entry) => entry.mode === 'file' && entry.targetPath)
+  return view.workspaceLayout === 'classic'
+    && panel.tabs.some((entry) => entry.mode === 'file' && entry.targetPath)
     && (view.contextEditorVisible || !view.contextEditorTreeVisible);
 };
 

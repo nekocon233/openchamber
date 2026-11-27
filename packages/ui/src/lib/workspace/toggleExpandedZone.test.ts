@@ -6,6 +6,7 @@ const panel = () => useUIStore.getState().contextPanelByDirectory['/repo'];
 
 beforeEach(() => {
   useUIStore.setState({
+    workspaceLayout: 'classic',
     contextPanelByDirectory: {},
     contextSurfaceZones: {},
     contextEditorVisible: true,
@@ -40,5 +41,16 @@ describe('toggleExpandedContextZone', () => {
     toggleExpandedContextZone('/repo');
 
     expect(panel()?.zones.left).toMatchObject({ isOpen: true, expanded: true });
+  });
+
+  test('expands and collapses the visible tool in editor layout', () => {
+    const ui = useUIStore.getState();
+    ui.setWorkspaceLayout('editor');
+    ui.openContextSurface('/repo', 'terminal');
+
+    toggleExpandedContextZone('/repo');
+    expect(panel()?.zones.left).toMatchObject({ activeTabId: 'terminal', expanded: true });
+    toggleExpandedContextZone('/repo');
+    expect(panel()?.zones.left).toMatchObject({ activeTabId: 'terminal', expanded: false });
   });
 });

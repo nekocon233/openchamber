@@ -92,7 +92,7 @@ or `bottom` (under the chat column only; the side zones
 keep the full height). The chat is always the centre and cannot move.
 
 Settings > General > Navigation offers `workspaceLayout`, a profile preference
-for desktop web, PWA and Electron. `classic` remains the default. `editor`
+for desktop web, PWA and Electron. The default `editor` layout
 puts the session list at the line's start, followed by the rail, left tool zone,
 resident file editor, framed chat and right tool zone. The
 global titlebar holds session entry points, project identity and native

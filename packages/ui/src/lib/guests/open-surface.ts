@@ -4,7 +4,8 @@ import { isPluginContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/
 import { openMobileWorkspace, type MobileWorkspaceRequest } from '@/lib/mobileWorkspaceTabs';
 import { isCapacitorApp } from '@/lib/platform';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
-import { shownContextModes } from '@/lib/workspace/zones';
+import { DESKTOP_PANEL_MODE, getEditorDesktopTabState } from '@/lib/workspace/editorTabs';
+import { getDefaultContextZone, shownContextModes } from '@/lib/workspace/zones';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 import { selectWorkflowsShown } from '@/lib/workflows/availability';
 
@@ -23,7 +24,12 @@ type OpenGuestSurfaceOptions = {
 
 const isShown = (directory: string, mode: ContextPanelMode): boolean => {
   const state = useUIStore.getState();
-  return shownContextModes(state.contextPanelByDirectory[directory], state.contextSurfaceZones).has(mode);
+  const panel = state.contextPanelByDirectory[directory];
+  const defaultZone = getDefaultContextZone(state.workspaceLayout);
+  if (mode === DESKTOP_PANEL_MODE && state.workspaceLayout === 'editor') {
+    return getEditorDesktopTabState(panel, state.contextSurfaceZones, defaultZone) === 'active';
+  }
+  return shownContextModes(panel, state.contextSurfaceZones, defaultZone).has(mode);
 };
 
 const phoneTabFor = (mode: ContextPanelMode): MobileWorkspaceRequest | null => {

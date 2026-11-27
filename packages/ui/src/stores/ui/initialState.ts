@@ -243,7 +243,7 @@ export const createInitialUIState = (): Pick<UIStore,
   | 'fileEditorKeymap'
   | 'fileEditorVimMappings'
 > => ({
-  workspaceLayout: 'classic',
+  workspaceLayout: 'editor',
   editorChatSplitRatio: 0.5,
   editorToolPanelWidth: 320,
   guestFullscreen: null,

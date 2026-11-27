@@ -65,7 +65,7 @@ beforeEach(() => {
   asked.length = 0;
   drawerOpened = 0;
   toastsSeen = toastError.mock.calls.length;
-  useUIStore.setState({ contextPanelByDirectory: {} });
+  useUIStore.setState({ contextPanelByDirectory: {}, isMobile: true, pendingFileFocusPath: null });
 });
 
 const render = async (content: string) => {
@@ -94,10 +94,7 @@ const tap = async (element: HTMLElement) => {
   return click;
 };
 
-const openedPath = () => {
-  const panel = useUIStore.getState().contextPanelByDirectory['/repo'];
-  return panel?.tabs.find((tab) => tab.id === panel.activeTabId)?.targetPath;
-};
+const openedPath = () => useUIStore.getState().pendingFileFocusPath;
 
 test('asks nothing and looks like plain code until the tap', async () => {
   await render('Open `src/app.ts` first.');

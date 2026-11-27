@@ -26,7 +26,7 @@ const parseDiffFileLayouts = (value: unknown): Record<string, 'inline' | 'side-b
 };
 
 const persistedWorkspaceLayoutSchema = z.object({
-  workspaceLayout: z.enum(['classic', 'editor']).catch('classic').optional(),
+  workspaceLayout: z.enum(['classic', 'editor']).optional().catch(undefined),
   editorChatSplitRatio: z.number().refine(validEditorSplitRatio).catch(0.5).optional(),
   editorToolPanelWidth: z.number().finite().transform((width) => clampContextPanelWidth(width)).catch(320).optional(),
 }).catch({});

@@ -364,8 +364,8 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
     if (!directoryKey || !defaultInstanceAuthChecked || sourceControlConnected || hasTrackerItems || !shownModes.has('pr')) {
       return;
     }
-    closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'pr'));
-  }, [closeContextZone, contextSurfaceZones, directoryKey, defaultInstanceAuthChecked, hasTrackerItems, shownModes, sourceControlConnected]);
+    closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'pr', defaultZone));
+  }, [closeContextZone, contextSurfaceZones, defaultZone, directoryKey, defaultInstanceAuthChecked, hasTrackerItems, shownModes, sourceControlConnected]);
   React.useEffect(() => {
     if (!directoryKey || !githubAllAuthSettled || !shownModes.has('ci')) {
       return;

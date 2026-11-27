@@ -407,7 +407,7 @@ Sidebar visibility and its persisted width are independent. Opening or closing
 the sidebar never writes a width; only resizing changes the saved choice.
 The initial width is separate from the component's minimum resize width.
 
-`workspaceLayout` defaults to `classic` and persists as a profile preference
+`workspaceLayout` defaults to `editor` and persists as a profile preference
 on web and desktop. Unplaced context surfaces default left in `editor` and
 right in `classic`, across every project. The `file` placement controls the
 directory panel in editor layout; document opens and selection update the
@@ -416,9 +416,8 @@ applies and hydration preserve
 manual placements and widths. Version 25 stores explicit right choices too;
 older omitted choices follow the layout. Visible panels move atomically with
 the layout, with the most recently touched visible tab winning a collision.
-Closed surfaces stay closed. Invalid local values load as `classic`;
-missing local values preserve the current choice. Invalid remote values are
-rejected by the settings registry.
+Closed surfaces stay closed. Missing or invalid local values preserve the
+current layout. The settings registry rejects invalid remote values.
 
 `editorChatSplitRatio` is device-local, starts at 0.5 and accepts finite values
 strictly between 0 and 1. Missing stored values preserve the current ratio;

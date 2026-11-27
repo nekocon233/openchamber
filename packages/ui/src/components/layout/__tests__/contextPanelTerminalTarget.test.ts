@@ -34,7 +34,7 @@ beforeEach(async () => {
     originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   }
-  useUIStore.setState({ contextPanelByDirectory: {}, contextSurfaceZones: {} });
+  useUIStore.setState({ workspaceLayout: 'classic', contextPanelByDirectory: {}, contextSurfaceZones: {} });
   const { useDirectoryStore } = await import('@/stores/useDirectoryStore');
   useDirectoryStore.setState({ currentDirectory: '/repo' });
   const { useSessionUIStore } = await import('@/sync/session-ui-store');

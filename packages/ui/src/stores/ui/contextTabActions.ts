@@ -374,11 +374,12 @@ export const createContextTabActions: UIStoreSlice<
     openFileTab(get(), normalizedDirectory, normalizedFilePath, options?.preview === true);
     get().setPendingFileFocusPath(normalizedFilePath);
     get().setPendingFileNavigation(null);
-    if (options?.expanded) {
-      const zone = zoneOfMode(get().contextSurfaceZones, 'file');
-      const panel = get().contextPanelByDirectory[normalizedDirectory];
+    const state = get();
+    if (options?.expanded && !usesResidentEditor(state)) {
+      const zone = zoneOfMode(state.contextSurfaceZones, 'file', getDefaultContextZone(state.workspaceLayout));
+      const panel = state.contextPanelByDirectory[normalizedDirectory];
       if (panel && !getZoneView(panel, zone).expanded) {
-        get().toggleContextPanelExpanded(normalizedDirectory, zone);
+        state.toggleContextPanelExpanded(normalizedDirectory, zone);
       }
     }
   },

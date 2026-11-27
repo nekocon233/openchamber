@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { useUIStore } from '@/stores/useUIStore';
+import { DESKTOP_PANEL_MODE } from '@/lib/workspace/editorTabs';
 import { openGuestSurface } from './open-surface';
 
 describe('openGuestSurface', () => {
@@ -31,5 +32,13 @@ describe('openGuestSurface', () => {
     expect(openGuestSurface({ mode: 'workflows', directory: '/repo', supported: true })).toEqual({ ok: true });
     useUIStore.getState().setAgentWorkflowToolEnabled(false);
     expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs.some((tab) => tab.mode === 'workflows')).toBe(false);
+  });
+
+  test('opening Remote Desktop twice keeps the resident tab active in editor layout', () => {
+    useUIStore.getState().setWorkspaceLayout('editor');
+    const request = { mode: DESKTOP_PANEL_MODE, directory: '/repo', supported: true };
+    expect(openGuestSurface(request)).toEqual({ ok: true });
+    expect(openGuestSurface(request)).toEqual({ ok: true });
+    expect(useUIStore.getState().contextPanelByDirectory['/repo']?.editorDesktopTab).toBe('active');
   });
 });
