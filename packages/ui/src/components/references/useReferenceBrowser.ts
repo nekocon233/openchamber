@@ -11,11 +11,12 @@ import { useSourceControlProvider, useSourceControlProviderRegistry } from '@/li
 import { useTrackedItems } from '@/lib/trackedItems/interest';
 import type { TrackedItem } from '@/lib/trackedItems/model';
 
-import { itemDirectory, leftOutFolders, type AcrossReference } from './acrossRepositories';
+import { isOpenPull, itemDirectory, leftOutFolders, type AcrossReference } from './acrossRepositories';
 import { recordLabelWrite } from './labelWrites';
 import type { CachedValue } from './referenceCache';
 import {
     referencePickerItemKey,
+    hasRepositoryPullConflict,
     trackerOfSource,
     DEFAULT_REPOSITORY_FILTER,
     DEFAULT_TRACKER_FILTER,
@@ -130,7 +131,7 @@ export function useReferenceBrowser({
         : lastRepositoryFilter.get(repositoryKind) ?? DEFAULT_REPOSITORY_FILTER;
     const repositoryFilter = React.useMemo<RepositoryReferenceFilter>(
         () => projectPulls
-            ? { state: projectPeople === 'any' ? 'all' : 'open', people: projectPeople, labels: [] }
+            ? { state: 'open', people: projectPeople, labels: [] }
             : normalizedRepositoryFilter(effectiveRepositoryFilter, repositoryKind),
         [effectiveRepositoryFilter, projectPeople, projectPulls, repositoryKind],
     );
@@ -202,16 +203,16 @@ export function useReferenceBrowser({
         filter: lastRepositoryFilter.get(otherRepositoryKind) ?? DEFAULT_REPOSITORY_FILTER,
         query: '',
     });
-    const list = source === 'repository' ? (across ? acrossList : repositoryList) : trackerList;
-    useTrackedItems(onScreen ? list.followed : NO_FOLLOWED);
-    const includeClosedProjectPulls = projectPulls && repositoryFilter.state === 'all';
+    const candidateList = source === 'repository' ? (across ? acrossList : repositoryList) : trackerList;
+    useTrackedItems(onScreen ? candidateList.followed : NO_FOLLOWED);
     const repositoryItems = React.useMemo(() => projectPulls
-        ? repositoryList.items.filter((item) => item.kind === 'pull' && (includeClosedProjectPulls || item.state === 'open'))
-        : repositoryList.items, [includeClosedProjectPulls, projectPulls, repositoryList.items]);
+        ? repositoryList.items.filter(isOpenPull)
+        : repositoryList.items, [projectPulls, repositoryList.items]);
+    const filterByPullStatus = projectPulls && projectPeople === 'mine' && descriptor.features.listStatuses;
     const singlePullStatusOf = useRepositoryPullStatuses(
         across ? null : directory,
         active && source === 'repository' && !across ? repositoryItems : NO_REFERENCES,
-        includeClosedProjectPulls,
+        filterByPullStatus,
     );
     const acrossPullStatusOf = useRepositoryPullStatusesAcross(acrossList.contexts, source === 'repository' && across ? acrossList.items : NO_ACROSS_ITEMS);
     const pullStatusOf = (reference: RepositoryReference, itemFolder?: string): CachedValue<ChangeRequestListStatus | null> => (
@@ -222,11 +223,35 @@ export function useReferenceBrowser({
         [across, acrossList.contexts, acrossList.skipped, source],
     );
 
+    const minePullStatusOf = filterByPullStatus ? singlePullStatusOf : null;
+    const minePulls = React.useMemo(() => {
+        if (!minePullStatusOf) return null;
+        const matches: RepositoryReference[] = [];
+        let checking = false;
+        let error: string | null = null;
+        for (const reference of repositoryItems) {
+            const result = minePullStatusOf(reference);
+            if (result.status === 'error') error ??= result.error;
+            else if (result.status !== 'ready') checking = true;
+            else if (result.value?.checks?.state === 'success' && result.value.mergeable === true
+                && !hasRepositoryPullConflict(reference, result.value)) matches.push(reference);
+        }
+        return { matches, checking, error };
+    }, [minePullStatusOf, repositoryItems]);
+    const checkingPulls = minePulls?.checking ?? false;
+    const pullStatusError = minePulls?.error ?? null;
+    const loadCandidatePage = candidateList.loadMore;
+    const loadMore = React.useCallback(() => {
+        if (!checkingPulls && pullStatusError === null) loadCandidatePage();
+    }, [checkingPulls, loadCandidatePage, pullStatusError]);
+    const list = minePulls ? { ...candidateList, loadMore } : candidateList;
+    const visibleRepositoryItems = minePulls?.matches ?? repositoryItems;
+
     const items = React.useMemo<ReferencePickerItem[]>(() => {
         if (tracker) return trackerList.items.map((item) => ({ source: 'tracker', provider: tracker, item }));
         if (across) return acrossList.items.map((reference) => ({ source: 'repository', reference, directory: reference.directory }));
-        return repositoryItems.map((reference) => ({ source: 'repository', reference }));
-    }, [across, acrossList.items, repositoryItems, trackerList.items, tracker]);
+        return visibleRepositoryItems.map((reference) => ({ source: 'repository', reference }));
+    }, [across, acrossList.items, visibleRepositoryItems, trackerList.items, tracker]);
 
     const [openedItem, setOpenedItem] = React.useState<ReferencePickerItem | null>(null);
 
@@ -310,8 +335,8 @@ export function useReferenceBrowser({
         const index = items.findIndex((item) => referencePickerItemKey(item) === effectiveHighlightKey);
         const next = items[Math.min(items.length - 1, Math.max(0, index + direction))];
         if (next) setHighlightedKey(referencePickerItemKey(next));
-        if (direction === 1 && index >= items.length - 3) list.loadMore();
-    }, [effectiveHighlightKey, items, list]);
+        if (direction === 1 && index >= items.length - 3) loadMore();
+    }, [effectiveHighlightKey, items, loadMore]);
 
     const handleNavigationKey = (event: React.KeyboardEvent<HTMLInputElement>): boolean => {
         if (isIMECompositionEvent(event)) return false;
@@ -379,6 +404,8 @@ export function useReferenceBrowser({
         selectTrackerFilter,
         list,
         items,
+        checkingPulls,
+        pullStatusError,
         pullStatusOf,
         effectiveHighlightKey,
         highlightedItem,

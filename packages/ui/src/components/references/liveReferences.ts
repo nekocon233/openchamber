@@ -111,7 +111,7 @@ const followedOf = (tracked: ReadonlyArray<TrackedItem | null>): TrackedItem[] =
 
 export type LiveItems<T> = { items: T[]; followed: TrackedItem[] };
 
-export type LivePullStatus = { status: ChangeRequestListStatus; fetchedAt: number };
+export type LivePullStatus = { status: ChangeRequestListStatus; fetchedAt: number; headSha: string | undefined };
 
 export function useLiveReferences<T extends RepositoryReference>(
     items: T[],
@@ -147,8 +147,8 @@ export function useLivePullStatuses(
         const map = new Map<string, LivePullStatus>();
         records.forEach((record) => {
             if (record?.type !== 'pull' || !record.state || record.state.state !== 'open') return;
-            const { owner, repo, number, checks, mergeable, mergeableState } = record.state;
-            map.set(trackedItemKey(record.item), { status: { owner, repo, number, checks, mergeable, mergeableState }, fetchedAt: record.fetchedAt });
+            const { owner, repo, number, checks, mergeable, mergeableState, headSha } = record.state;
+            map.set(trackedItemKey(record.item), { status: { owner, repo, number, checks, mergeable, mergeableState }, fetchedAt: record.fetchedAt, headSha });
         });
         return map;
     }, [records]);

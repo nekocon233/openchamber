@@ -191,8 +191,10 @@ the diff. The Details button sits after the title in reading order and opens
 the preview. For providers without a diff, the title opens the preview directly.
 Reference pickers use listbox options for their selection model.
 
-- The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
-  open PRs in Mine and open, closed, and merged PRs in All.
+- The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. Both
+  Mine and All request open PRs and exclude terminal matches before rendering
+  rows or reading checks. The filter also applies to number and URL lookups
+  and advanced searches.
   The saved project category is restored, defaulting to Mine, and
   legacy saved `reviewRequested` or `created` selections migrate to Mine.
   The panel validates Mine and All separately from the picker and board. It
@@ -218,12 +220,12 @@ Reference pickers use listbox options for their selection model.
   Cross-directory comparisons use the source binding and restore the original
   conversation or draft before revealing its retained PR pane.
 - Each GitHub row in the project PR list shows its check result and count.
-  Mine filters closed and merged results from direct lookups and advanced
-  queries before rendering rows or reading checks. All includes those results
-  in the same status batches as open PRs. Loading, failed reads, unavailable
-  results and a successful empty check list have separate labels. Queued checks
-  are distinguished when all pending checks are queued. Other list consumers
-  continue reading statuses only for open PRs and retain their compact rows.
+  Mine requires passing checks and confirmed mergeability without conflicts.
+  Loaded candidates stay subscribed to status updates even when filtered out.
+  Mine waits for the loaded candidates' status reads before paging. A failed
+  status read shows Retry alongside any confirmed matches. All shows open PRs
+  as soon as the page arrives. Its rows distinguish queued checks, failed
+  reads, unavailable results and an empty check list.
 - A confirmed GitHub merge conflict is named in the project list and PR
   preview. Failed checks, a required review and unknown mergeability do not
   imply a conflict. A directly opened PR reads its own status even when it is
@@ -234,7 +236,7 @@ Reference pickers use listbox options for their selection model.
   failed until a list refresh, revalidation or return retries it; successful
   batches remain cached.
 - The unfiltered All list uses GitHub's repository connection to page through
-  the entire PR history. Searches use the existing
+  the open PRs. Searches use the existing
   search API. Lists retain the returned total so the panel can explain its
   1,000-result search limit and ask for a narrower search. A query cannot expand
   the repository scope, and a PR number never resolves to an issue in this mode.
@@ -295,6 +297,7 @@ carries.
   (`ReadStamp.forced`: a retry, the read after a write) is answered anew and
   counts from when it arrived, so a change the user just made is never
   replaced by the state from before it.
+- Mine uses a followed PR status only when its head matches the listed head.
 - At most the first 50 open items of a list are followed (the server reads
   GitHub PRs 25 to a query, sequentially); the client sends
   at most 300 items in all, the server's limit, the surfaces declared first in

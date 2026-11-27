@@ -34,6 +34,8 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   let failRefresh = false;
   let oldServer = false;
   let verdictApplied = false;
+  let holdStatuses = true;
+  let releaseStatuses: (() => void) | undefined;
   let releaseOld: (() => void) | undefined;
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
@@ -55,21 +57,30 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       if (query === 'old') await new Promise<void>((resolve) => { releaseOld = resolve; });
       const owner = url.searchParams.get('scope') === 'network' ? 'upstream' : 'acme';
       const otherPullNumber = owner === 'acme' && url.searchParams.get('people') === 'any' ? 4 : 2;
-      const allStates = url.searchParams.get('state') === 'all';
       const page = url.searchParams.has('cursor')
-        ? [pull(3, owner, allStates ? 'closed' : undefined)]
-        : [{ ...pull(1, owner), title: verdictApplied ? 'PR after review' : 'PR 1' }, pull(otherPullNumber, owner, allStates ? 'merged' : undefined)];
+        ? [pull(3, owner)]
+        : [{ ...pull(1, owner), title: verdictApplied ? 'PR after review' : 'PR 1' }, pull(otherPullNumber, owner)];
       const items = query === 'terminal' ? [pull(92, owner, 'merged'), pull(93, owner, 'closed')]
+        : query === 'mixed' ? Array.from({ length: 7 }, (_, index) => pull(10 + index, owner))
         : query ? [pull(query === 'old' ? 90 : 91, owner)] : page;
       return Response.json({ connected: true, scope: oldServer ? undefined : url.searchParams.get('scope'), repo: { owner: 'acme', repo: 'app', url: 'https://github.com/acme/app' }, items,
         cursor: query || url.searchParams.has('cursor') ? null : 'next', hasMore: !query && !url.searchParams.has('cursor'), total: query ? 1200 : 3 });
     }
     if (url.pathname === '/api/source-control/github/references/detail') return Response.json({ connected: true,
       detail: { number: Number(url.searchParams.get('number')), comments: [], commentTotal: 0, pull: null } });
-    if (url.pathname === '/api/source-control/github/references/status') return Response.json({ connected: true,
-      statuses: (url.searchParams.get('pulls') ?? '').split(',').map((ref) => ({ owner: 'acme', repo: 'app', number: Number(ref.split('#')[1]),
-        checks: { state: 'success', total: 2, success: 2, failure: 0, pending: 0 },
-        mergeable: verdictApplied, mergeableState: verdictApplied ? 'clean' : 'blocked' })) });
+    if (url.pathname === '/api/source-control/github/references/status') {
+      if (holdStatuses) await new Promise<void>((resolve) => { releaseStatuses = resolve; });
+      const numbers = (url.searchParams.get('pulls') ?? '').split(',').map((ref) => Number(ref.split('#')[1]));
+      return Response.json({ connected: true, statuses: numbers.map((number) => {
+        const state = number === 10 ? 'failure' : number === 11 ? 'pending' : number === 14 ? 'unknown' : 'success';
+        const conflicting = number === 12 || (number === 2 && !verdictApplied);
+        return { owner: 'acme', repo: 'app', number,
+          checks: { state, total: state === 'unknown' ? 0 : 2, success: state === 'success' ? 2 : 0,
+            failure: state === 'failure' ? 2 : 0, pending: state === 'pending' ? 2 : 0 },
+          mergeable: number === 13 ? null : !conflicting,
+          mergeableState: conflicting || number === 16 ? 'dirty' : number === 15 ? 'blocked' : 'clean' };
+      }) });
+    }
     if (url.pathname.endsWith('/location')) return Response.json({ directory: '/repo', project: { id: 'fixture', directory: '/repo', canonical: '/repo' } });
     if (url.pathname.endsWith('/session/active')) return Response.json({});
     return Response.json({ data: [] });
@@ -82,6 +93,9 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const { useSourceControlProviderRegistry } = await import('@/lib/source-control/providers/registry');
   const { githubLikeDescriptor } = await import('@/lib/source-control/providers/descriptor.fixture');
   const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
+  const { getRuntimeKey } = await import('@/lib/runtime-switch');
+  const { trackedItemKey } = await import('@/lib/trackedItems/model');
+  const { useTrackedItemsStore } = await import('@/stores/useTrackedItemsStore');
   const { useReferenceBrowser } = await import('./useReferenceBrowser');
   const { refreshProjectPullLists } = await import('./referenceSources');
   const { revalidateReferences } = await import('./referenceCache');
@@ -117,6 +131,13 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const listRequests = () => requests.filter((url) => url.pathname.endsWith('/references') && url.searchParams.get('scope') === 'repository');
   const numbers = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.number] : []);
   const states = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.state] : []);
+  const followPassingChecks = (number: number, headSha: string, fetchedAt: number) => {
+    const item = { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID, kind: 'pull', owner: 'acme', repo: 'app', number } as const;
+    useTrackedItemsStore.getState().apply(getRuntimeKey(), [{ key: trackedItemKey(item), record: {
+      type: 'pull', item, fetchedAt, state: { owner: item.owner, repo: item.repo, number, state: 'open', draft: false,
+        title: `PR ${number}`, headSha, checks: { state: 'success', total: 1, success: 1, failure: 0, pending: 0 }, mergeable: true, mergeableState: 'clean' },
+    } }]);
+  };
 
   try {
     await render();
@@ -126,8 +147,17 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(listRequests()[0]?.searchParams.get('kind')).toBe('pull');
     expect(listRequests()[0]?.searchParams.get('state')).toBe('open');
     expect(listRequests()[0]?.searchParams.get('people')).toBe('mine');
-    const listed = current().items[0];
-    expect(listed?.source === 'repository' ? listed.reference.sourceRepo.owner : null).toBe('acme');
+    await until(() => releaseStatuses !== undefined);
+    expect(current().checkingPulls).toBe(true);
+    await act(async () => followPassingChecks(1, 'previous-head', Date.now() - 60_000));
+    expect(numbers()).toEqual([]);
+    await act(async () => current().list.loadMore());
+    expect(listRequests()).toHaveLength(1);
+    holdStatuses = false;
+    await act(async () => releaseStatuses?.());
+    await until(() => !current().checkingPulls);
+    expect(numbers()).toEqual([1]);
+    expect(current().items[0]).toMatchObject({ source: 'repository', reference: { sourceRepo: { owner: 'acme' } } });
     expect(current().previewItem).toBeNull();
     expect(requests.some((url) => url.pathname.endsWith('/references/detail') && url.searchParams.get('owner') === 'acme')).toBe(false);
     await until(() => current().pullStatusOf(pull(2)).status === 'ready');
@@ -138,7 +168,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     const beforeReview = listRequests().length;
     await act(async () => refreshProjectPullLists(apis.sourceControl, { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID,
       repositoryId: 'repo', bindingRevision: 1, primaryRemote: 'origin', directory: '/repo' }));
-    await until(() => current().list.items[0]?.title === 'PR after review');
+    await until(() => current().list.items[0]?.title === 'PR after review' && !current().checkingPulls);
     expect(listRequests()).toHaveLength(beforeReview + 1);
     expect(current().list.pageReads[0]?.read.forced).toBe(true);
     expect(current().items).toHaveLength(2);
@@ -155,7 +185,7 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(numbers()).toEqual([1, 2]);
     failNextPage = false;
     await act(async () => current().list.loadMore());
-    await until(() => current().list.items.length === 3);
+    await until(() => numbers().length === 3);
     expect(current().list.hasMore).toBe(false);
 
     failRefresh = true;
@@ -190,12 +220,12 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     await act(async () => current().closeMobilePreview());
 
     await act(async () => current().selectRepositoryFilter({ state: 'closed', people: 'any' }));
-    expect(current().repositoryFilter).toEqual({ state: 'all', people: 'any', labels: [] });
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
     await until(() => numbers().includes(4));
-    expect(states()).toEqual(['open', 'merged']);
+    expect(states()).toEqual(['open', 'open']);
     await act(async () => current().list.loadMore());
     await until(() => !current().list.hasMore && current().items.length === 3);
-    expect(states()).toEqual(['open', 'merged', 'closed']);
+    expect(states()).toEqual(['open', 'open', 'open']);
     await act(async () => current().selectRepositoryFilter({ people: 'assigned' }));
     expect(current().repositoryFilter.people).toBe('any');
     await act(async () => current().selectRepositoryFilter({ people: 'mine' }));
@@ -206,18 +236,23 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     await render(false); await render(true);
     expect(current().repositoryFilter.people).toBe('mine');
 
+    await act(async () => current().setQuery('mixed'));
+    await until(() => numbers().includes(15));
+    expect(numbers()).toEqual([15]);
+    await act(async () => followPassingChecks(11, 'sha-11', Date.now()));
+    expect(numbers()).toEqual([11, 15]);
+
     await act(async () => current().setQuery('terminal'));
     await until(() => current().list.items.some(item => 'number' in item && item.number === 92));
     expect(current().items).toEqual([]);
     expect(requests.filter(url => url.pathname.endsWith('/references/status')).some(url => /#9[23]/.test(url.searchParams.get('pulls') ?? ''))).toBe(false);
 
     await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
-    expect(current().repositoryFilter).toEqual({ state: 'all', people: 'any', labels: [] });
-    await until(() => numbers()[0] === 92);
-    expect(states()).toEqual(['merged', 'closed']);
-    await until(() => [pull(92, 'acme', 'merged'), pull(93, 'acme', 'closed')]
-      .every(reference => current().pullStatusOf(reference).status === 'ready'));
-    expect(listRequests().every(url => url.searchParams.get('state') === (url.searchParams.get('people') === 'any' ? 'all' : 'open'))).toBe(true);
+    expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
+    await until(() => current().list.items.some(item => 'number' in item && item.number === 92));
+    expect(current().items).toEqual([]);
+    expect(requests.filter(url => url.pathname.endsWith('/references/status')).some(url => /#9[23]/.test(url.searchParams.get('pulls') ?? ''))).toBe(false);
+    expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
 
     await act(async () => current().setQuery('old'));
     await until(() => releaseOld !== undefined);

@@ -90,13 +90,14 @@ test('a list that mounts while its statuses are already on the way shows them wh
     });
     const apis = createWebAPIs();
     const pulls = Array.from({ length: 23 }, (_, index) => pull(index + 1));
-    pulls[0].state = 'merged';
-    pulls[1].state = 'closed';
+    const closed = { ...pull(24), state: 'closed' } as const;
+    const candidates = [...pulls, closed];
     const Probe: React.FC = () => {
-      const statusOf = useRepositoryPullStatuses('/repo', pulls, true);
+      const statusOf = useRepositoryPullStatuses('/repo', candidates);
       const status = statusOf(pulls[0]);
       return <><span id="status">{status.status === 'ready' ? `ready:${status.value?.checks?.total}` : status.status}</span>
-        <span id="last-status">{statusOf(pulls[22]).status}</span></>;
+        <span id="last-status">{statusOf(pulls[22]).status}</span>
+        <span id="closed-status">{statusOf(closed).status}</span></>;
     };
     // Lets the held answer go while the probe renders: it lands after that
     // render but before React runs the probe's effects.
@@ -127,6 +128,7 @@ test('a list that mounts while its statuses are already on the way shows them wh
     expect(asked).toHaveLength(3);
     expect(container.querySelector('#status')?.textContent).toBe('ready:3');
     expect(container.querySelector('#last-status')?.textContent).toBe('ready');
+    expect(container.querySelector('#closed-status')?.textContent).toBe('idle');
 
     failLastBatch = true;
     forgetRepositoryPullStatuses();

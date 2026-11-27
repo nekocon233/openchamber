@@ -321,8 +321,8 @@ that page, so callers cannot mistake a partial page for a complete one.
 - `GET /api/source-control/github/references/detail?<read context>&owner=&repo=&number=` answers what the preview adds for one item: the newest 50 comments, oldest first, plus for a PR its reviews (a review's text or verdict, and each line comment with `path`/`line`), its newest 50 commits with `commitTotal`, size and review decision. Its checks come from `references/status`, the same answer that colours it. The repo must be in the project's network. These fields stay off the page query: on a 30-PR page size, review decision and checks together ran past GitHub's 10 s search timeout (measured 2026-10-01), while one item answers in about a second.
 - `GET /api/source-control/github/references/status?<read context>&pulls=owner/repo#n,...` answers what colours the PRs a picker page shows, at most 30: `{ connected, statuses: [{ owner, repo, number, checks, mergeable, mergeableState }] }` from `fetchPrSummaries`, the sidebar's summaries, so the picker and the sidebar colour a PR the same way. Every repo must be in the project's network. A PR GitHub could not resolve is left out. Mergeability is most of its cost (30 PRs: about 2 s with checks only, 4 to 7 s with mergeability, measured 2026-10-06), so it is a request after the page, not part of it.
 - Failures are errors, never an empty page; GraphQL `RATE_LIMITED` records the shared cooldown and answers `503`. The client cache lives in `packages/ui/src/components/references/`.
-- The status route includes checks for closed and merged PRs so the project PR
-  list can display historical results. It summarizes the check contexts already
+- The status route includes checks for closed and merged PRs for clients that
+  request historical results. It summarizes the check contexts already
   returned by the batch, with no additional GitHub calls. An empty successful
   summary has `total: 0`; an unresolved PR remains absent.
 - Attaching still reads full context through the canonical `issues/get` + `issues/comments` and `pulls/context`.

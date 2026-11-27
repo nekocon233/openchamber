@@ -29,6 +29,7 @@ import type { ChangeRequestTerm } from '@/lib/source-control/providers/descripto
 import { cn } from '@/lib/utils';
 
 import { ReferenceLabelChips, ReferencePickerRow } from './ReferencePickerRow';
+import { revalidateReferences } from './referenceCache';
 import { useRepositoryLabelReader } from './useRepositoryLabelReader';
 import {
     REPOSITORY_PEOPLE,
@@ -486,16 +487,19 @@ export const ReferenceBrowserList: React.FC<{
     const projectPulls = browser.mode === 'project-pulls';
 
     const sentinelRef = React.useRef<HTMLDivElement>(null);
-    const { hasMore, loadMore, loadingMore, refreshing, error } = list;
+    const { hasMore, loadMore, loadingMore, refreshing, error: pageError } = list;
+    const { checkingPulls, pullStatusError } = browser;
+    const error = pageError ?? pullStatusError;
+    const retry = pageError ? list.retry : revalidateReferences;
     React.useEffect(() => {
         const sentinel = sentinelRef.current;
-        if (!sentinel || !hasMore || loadingMore || error) return;
+        if (!sentinel || !hasMore || loadingMore || error || checkingPulls) return;
         const observer = new IntersectionObserver((entries) => {
             if (entries.some((entry) => entry.isIntersecting)) loadMore();
         }, { rootMargin: '200px' });
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [error, hasMore, loadMore, loadingMore, refreshing, items.length]);
+    }, [checkingPulls, error, hasMore, loadMore, loadingMore, refreshing, items.length]);
 
     const centered = (children: React.ReactNode) => (
         <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 px-6 py-10 text-center typography-meta text-muted-foreground">
@@ -503,7 +507,7 @@ export const ReferenceBrowserList: React.FC<{
         </div>
     );
     const emptyText = () => {
-        if (debouncedQuery.trim()) return t('references.picker.empty.search');
+        if (debouncedQuery.trim() || (projectPulls && browser.repositoryFilter.people === 'mine')) return t('references.picker.empty.search');
         if (tracker) return t('references.picker.empty.tracker');
         if (repositoryKind === 'issue') return t('references.picker.empty.issues');
         if (repositoryKind === 'discussion') return t('references.picker.empty.discussions');
@@ -530,7 +534,7 @@ export const ReferenceBrowserList: React.FC<{
             </>
         );
     }
-    if (list.status === 'loading') {
+    if (list.status === 'loading' || (checkingPulls && items.length === 0 && !error)) {
         return centered(
             <span className="inline-flex items-center gap-2">
                 <Icon name="loader-4" className="size-4 animate-spin" />
@@ -550,13 +554,13 @@ export const ReferenceBrowserList: React.FC<{
         <>
             {notice}
             <div role={projectPulls ? 'list' : 'listbox'} aria-label={label} aria-multiselectable={projectPulls ? undefined : multiselectable} className="flex flex-col gap-1 p-1.5">
-                {list.error ? (
+                {error !== null ? (
                     <div className="mb-1 flex items-center gap-2 rounded-lg bg-[var(--status-error-background)] px-2.5 py-1.5 typography-meta text-[var(--status-error-text)]">
-                        <span className="min-w-0 flex-1 break-words">{t('references.picker.error.refresh', { error: list.error })}</span>
-                        <Button size="xs" variant="ghost" onClick={list.retry}>{t('references.picker.actions.retry')}</Button>
+                        <span className="min-w-0 flex-1 break-words">{t('references.picker.error.refresh', { error })}</span>
+                        <Button size="xs" variant="ghost" onClick={retry}>{t('references.picker.actions.retry')}</Button>
                     </div>
                 ) : null}
-                {items.length === 0 && !list.hasMore ? centered(emptyText()) : null}
+                {items.length === 0 && !list.hasMore && !pullStatusError ? centered(emptyText()) : null}
                 {items.map((item) => {
                     const key = referencePickerItemKey(item);
                     const status = item.source === 'repository' ? browser.pullStatusOf(item.reference, item.directory) : null;

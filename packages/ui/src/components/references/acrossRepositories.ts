@@ -63,8 +63,8 @@ export function itemDirectory(item: ReferencePickerItem | null, fallback: string
     return item?.source === 'repository' ? item.directory ?? fallback : fallback;
 }
 
-export const needsPullStatus = (reference: RepositoryReference, includeClosed = false): reference is RepositoryChangeRequestReference => (
-    reference.kind === 'pull' && (includeClosed || reference.state === 'open')
+export const isOpenPull = (reference: RepositoryReference): reference is RepositoryChangeRequestReference => (
+    reference.kind === 'pull' && reference.state === 'open'
 );
 
 export type PullStatusGroup = {
@@ -76,12 +76,11 @@ export type PullStatusGroup = {
 export function groupPullsByDirectory(
     items: ReadonlyArray<{ reference: RepositoryReference; directory: string }>,
     folders: AcrossContexts['asked'],
-    includeClosed = false,
 ): PullStatusGroup[] {
     const groups = new Map<string, PullStatusGroup>();
     for (const { directory, context } of folders) groups.set(directory, { directory, context, pulls: [] });
     for (const { reference, directory } of items) {
-        if (needsPullStatus(reference, includeClosed)) groups.get(directory)?.pulls.push(reference);
+        if (isOpenPull(reference)) groups.get(directory)?.pulls.push(reference);
     }
     return [...groups.values()].filter((group) => group.pulls.length > 0);
 }
