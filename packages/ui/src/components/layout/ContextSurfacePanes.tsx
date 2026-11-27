@@ -12,6 +12,7 @@ import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import { BrowserPane } from '@/components/browser/BrowserPane';
 import { ChatView } from '@/components/views/ChatView';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useGuestFullscreen } from '@/hooks/useGuestFullscreen';
 import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
 import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
@@ -24,7 +25,7 @@ import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-sw
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import { useGuestsStore } from '@/lib/guests/store';
 import { guestHasSharedSurface, guestSurfaceDocking, type GuestSurfaceDocking } from '@/lib/guests/surfaces';
-import { isPluginContextPanelMode, pluginIdFromMode, type PluginContextPanelMode } from '@/lib/surfaces/modes';
+import { isPluginContextPanelMode, pluginIdFromMode } from '@/lib/surfaces/modes';
 import {
   getZoneView,
   resolveZoneActiveTab,
@@ -38,7 +39,6 @@ import { markSessionViewed } from '@/sync/notification-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
 import { ContextPanelHeaderSlotProvider, ContextPanelHeaderToolbar } from './contextPanelHeaderSlot';
 import { GuestHeaderControls } from './GuestHeaderControls';
-import { useGuestFullscreen } from './useGuestFullscreen';
 import { useWorkspaceHosts } from './workspaceHosts';
 import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { getSessionIDFromDedupeKey } from './contextPanelSessionTitles';
@@ -61,34 +61,23 @@ const GuestPanelContent = React.lazy(() => import('./GuestPanelContent').then((m
 
 const PluginPane = React.lazy(() => import('./PluginPane').then((module) => ({ default: module.PluginPane })));
 
-// How an extension page sits beside its shared surface: flex direction puts
-// the page first on top/left and last on bottom/right; the page's size is
-// fixed across the docked edge and the picture takes the rest.
-
-/**
- * A shared-surface extension's own page, docked to one edge of the picture.
- * It starts at the manifest's `panel.size` and follows the page's
- * `host.setHeight` after that (the thickness across its edge, so a width
- * for a left or right dock), never below the manifest minimum and never past
- * half the panel, so the picture always stays in view.
- */
-
-const GuestPanelPane: React.FC<{
-  mode: PluginContextPanelMode;
+const RemoteDesktopPane: React.FC<{
   headerSlot: HTMLElement | null;
   active: boolean;
-  onDismiss?: () => void;
-}> = ({ mode, headerSlot, active, onDismiss }) => {
-  const guestId = pluginIdFromMode(mode);
+  showDockedFullscreen?: boolean;
+  onDismiss: () => void;
+}> = ({ headerSlot, active, showDockedFullscreen = true, onDismiss }) => {
   const fullscreenHeader = useWorkspaceHosts((state) => state.fullscreenHeader);
-  const { isFullscreen, toggleFullscreen } = useGuestFullscreen(guestId, 'panel', active);
+  const { isFullscreen, toggleFullscreen } = useGuestFullscreen(DESKTOP_GUEST_ID, 'panel', active);
   const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
+  const fullscreenToggle = isFullscreen || showDockedFullscreen ? toggleFullscreen : undefined;
 
   const toolbarContent = (
     <GuestHeaderControls
       controls={controls}
       fullscreen={isFullscreen}
-      onToggleFullscreen={toggleFullscreen}
+      onToggleFullscreen={fullscreenToggle}
+      onClose={onDismiss}
       className={isFullscreen ? undefined : 'py-1 pe-1'}
     />
   );
@@ -97,14 +86,14 @@ const GuestPanelPane: React.FC<{
     <>
       {isFullscreen ? (
         fullscreenHeader ? createPortal(toolbarContent, fullscreenHeader) : null
-      ) : headerSlot && (controls || toggleFullscreen) ? (
+      ) : headerSlot && (controls || fullscreenToggle) ? (
         <ContextPanelHeaderSlotProvider value={headerSlot}>
           <ContextPanelHeaderToolbar preserveTitle>
             {toolbarContent}
           </ContextPanelHeaderToolbar>
         </ContextPanelHeaderSlotProvider>
       ) : null}
-      <PluginPane mode={mode} onStatusControls={setControls} onDismiss={onDismiss} />
+      <PluginPane mode={DESKTOP_PANEL_MODE} onStatusControls={setControls} onDismiss={onDismiss} />
     </>
   );
 };
@@ -676,8 +665,7 @@ export const ContextSurfacePanes: React.FC = () => {
               className={cn('absolute inset-0', !active && 'hidden')}
             >
               <React.Suspense fallback={null}>
-                <GuestPanelPane
-                  mode={tab.mode}
+                <RemoteDesktopPane
                   active={active}
                   headerSlot={active ? editorDesktopHeaderSlot : null}
                   onDismiss={() => {
@@ -695,20 +683,30 @@ export const ContextSurfacePanes: React.FC = () => {
         const docking = surfaceDockings.get(guestId);
         const shown = pluginZone.activeTab?.id === tab.id;
         const surfaceMounted = shown && pluginZone.isOpen;
-        const isFullscreen = !sharedSurface && guestId === DESKTOP_GUEST_ID && surfaceMounted && guestFullscreen?.id === guestId && guestFullscreen.surface === 'panel';
+        const isRemoteDesktop = tab.mode === DESKTOP_PANEL_MODE;
+        const isFullscreen = isRemoteDesktop && surfaceMounted && guestFullscreen?.id === guestId && guestFullscreen.surface === 'panel';
         if (sharedSurface && !docking && !surfaceMounted) return null;
         return (
           <ZonePane
             key={tab.id}
             zone={pluginZone.zone}
-            interactive={interactive[pluginZone.zone]}
+            interactive={isFullscreen || interactive[pluginZone.zone]}
             host={isFullscreen && fullscreenBody ? fullscreenBody : undefined}
             isOpen={pluginZone.isOpen}
-            hidden={contentHidden(pluginZone.zone)}
+            hidden={!isFullscreen && contentHidden(pluginZone.zone)}
             className={cn('absolute inset-0', shown ? 'block' : 'hidden')}
           >
             <React.Suspense fallback={null}>
-              <GuestPanelContent mode={tab.mode} sharedSurface={sharedSurface} docking={docking ?? null} surfaceMounted={surfaceMounted} />
+              {isRemoteDesktop ? (
+                <RemoteDesktopPane
+                  active={surfaceMounted}
+                  headerSlot={headerSlotFor(pluginZone.zone, surfaceMounted)}
+                  showDockedFullscreen={false}
+                  onDismiss={() => closeContextPanelTab(directoryKey, tab.id)}
+                />
+              ) : (
+                <GuestPanelContent mode={tab.mode} sharedSurface={sharedSurface} docking={docking ?? null} surfaceMounted={surfaceMounted} />
+              )}
             </React.Suspense>
           </ZonePane>
         );

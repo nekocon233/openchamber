@@ -29,15 +29,22 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
   const { I18nProvider } = await import('@/lib/i18n');
   const { getRuntimeKey } = await import('@/lib/runtime-switch');
   const { useGuestsStore } = await import('@/lib/guests/store');
+  const { useGuestItemStore } = await import('@/lib/guests/item-store');
   const { DESKTOP_GUEST_ID } = await import('@/lib/workspace/editorTabs');
   const { useUIStore } = await import('@/stores/useUIStore');
   const { useWorkspaceHosts } = await import('./workspaceHosts');
   const { GuestFullscreenOverlay } = await import('./GuestFullscreenOverlay');
   const { GuestHeaderControls } = await import('./GuestHeaderControls');
-  const { useGuestFullscreen } = await import('./useGuestFullscreen');
+  const { useGuestFullscreen } = await import('@/hooks/useGuestFullscreen');
 
   const runtimeKey = getRuntimeKey();
   const initialUI = useUIStore.getState();
+  const pendingItem = {
+    providerId: DESKTOP_GUEST_ID,
+    id: 'preview',
+    title: 'Preview',
+    url: 'http://localhost:5173/',
+  };
   useUIStore.setState({ ...useUIStore.getInitialState(), guestFullscreen: null }, true);
   useGuestsStore.getState().resetForRuntimeSwitch(runtimeKey);
   useGuestsStore.getState().replaceCatalog([
@@ -53,6 +60,7 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
     },
   ], runtimeKey);
 
+  let dismissed = false;
   const Harness: React.FC<{ active: boolean }> = ({ active }) => {
     const { isFullscreen, toggleFullscreen } = useGuestFullscreen(DESKTOP_GUEST_ID, 'panel', active);
     const events: string[] = [];
@@ -65,6 +73,7 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
           }}
           fullscreen={isFullscreen}
           onToggleFullscreen={toggleFullscreen}
+          onClose={() => { dismissed = true; }}
         />
         <GuestFullscreenOverlay />
       </>
@@ -80,15 +89,28 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
     const overlay = container.querySelector<HTMLElement>('[data-guest-fullscreen]');
     if (!overlay) throw new Error('Fullscreen overlay did not mount');
     expect(overlay.dataset.guestFullscreen).toBe('closed');
+    expect(container.querySelector('button[aria-label="Close"]')).toBeNull();
     expect(overlay.className).toContain('hidden');
     expect(useWorkspaceHosts.getState().fullscreenBody).not.toBeNull();
     expect(useWorkspaceHosts.getState().fullscreenHeader).not.toBeNull();
+
+    await act(async () => useGuestItemStore.getState().setPendingItem(DESKTOP_GUEST_ID, pendingItem));
+    expect(overlay.dataset.guestFullscreen).toBe('open');
+    await act(async () => { useGuestItemStore.getState().takePendingItem(DESKTOP_GUEST_ID); });
+    const exitButton = container.querySelector<HTMLButtonElement>('[data-guest-fullscreen-toggle="exit"]');
+    if (!exitButton) throw new Error('Fullscreen exit button did not render');
+    await act(async () => exitButton.click());
+    expect(overlay.dataset.guestFullscreen).toBe('closed');
 
     const enterButton = container.querySelector<HTMLButtonElement>('[data-guest-fullscreen-toggle="enter"]');
     if (!enterButton) throw new Error('Fullscreen toggle button did not render');
     await act(async () => enterButton.click());
     expect(useUIStore.getState().guestFullscreen).toEqual({ id: DESKTOP_GUEST_ID, surface: 'panel' });
     expect(overlay.dataset.guestFullscreen).toBe('open');
+    const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+    if (!close) throw new Error('Fullscreen close button did not render');
+    await act(async () => close.click());
+    expect(dismissed).toBe(true);
     expect(overlay.className).not.toContain('hidden');
     const headerBar = overlay.querySelector<HTMLElement>('header > div');
     expect(headerBar?.style.paddingInlineStart).toBe('calc(0.75rem + var(--oc-wco-left-inset, 0px))');
@@ -127,6 +149,9 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
     expect(useUIStore.getState().guestFullscreen).toEqual({ id: DESKTOP_GUEST_ID, surface: 'panel' });
     await act(async () => root.render(<I18nProvider><Harness active={false} /></I18nProvider>));
     expect(useUIStore.getState().guestFullscreen).toBeNull();
+    await act(async () => useGuestItemStore.getState().setPendingItem(DESKTOP_GUEST_ID, pendingItem));
+    expect(overlay.dataset.guestFullscreen).toBe('closed');
+    await act(async () => { useGuestItemStore.getState().takePendingItem(DESKTOP_GUEST_ID); });
 
     // Disabling the extension clears fullscreen.
     await act(async () => root.render(<I18nProvider><Harness active /></I18nProvider>));
@@ -149,6 +174,7 @@ test('GuestFullscreenOverlay keeps hosts mounted, toggles via GuestHeaderControl
   } finally {
     await act(async () => root.unmount());
     useWorkspaceHosts.setState({ fullscreenHeader: null, fullscreenBody: null });
+    useGuestItemStore.getState().takePendingItem(DESKTOP_GUEST_ID);
     useGuestsStore.getState().resetForRuntimeSwitch(runtimeKey);
     useUIStore.setState(initialUI, true);
     await dom.happyDOM.close();

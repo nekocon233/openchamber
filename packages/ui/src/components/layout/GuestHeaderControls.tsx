@@ -11,6 +11,7 @@ type Props = {
   controls: GuestStatusControlBinding | null;
   fullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  onClose?: () => void;
   className?: string;
 };
 
@@ -19,10 +20,12 @@ export const GuestHeaderControls: React.FC<Props> = ({
   controls,
   fullscreen = false,
   onToggleFullscreen,
+  onClose,
   className,
 }) => {
   const { t } = useI18n();
-  if (!controls && !onToggleFullscreen) return null;
+  const close = fullscreen ? onClose : undefined;
+  if (!controls && !onToggleFullscreen && !close) return null;
 
   const fullscreenLabel = t(fullscreen ? 'filesView.editor.exitFullscreen' : 'filesView.editor.fullscreen');
 
@@ -48,6 +51,17 @@ export const GuestHeaderControls: React.FC<Props> = ({
         >
           <Icon name={fullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-3.5" />
           <span className="truncate">{fullscreenLabel}</span>
+        </Button>
+      ) : null}
+      {close ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={close}
+          aria-label={t('dialog.common.actions.close')}
+          title={t('dialog.common.actions.close')}
+        >
+          <Icon name="close" className="size-3.5" />
         </Button>
       ) : null}
     </div>

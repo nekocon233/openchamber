@@ -7,7 +7,7 @@ import { EditorWorkspaceColumns } from './EditorWorkspaceColumns';
 import { setChatHeaderHost, useWorkspaceHosts } from './workspaceHosts';
 import { GuestFullscreenOverlay } from './GuestFullscreenOverlay';
 import { GuestHeaderControls } from './GuestHeaderControls';
-import { useGuestFullscreen } from './useGuestFullscreen';
+import { useGuestFullscreen } from '@/hooks/useGuestFullscreen';
 import { MovablePane } from './MovablePane';
 import type { GuestStatusControlBinding } from '@/lib/guests/status-controls';
 import { Sidebar } from './Sidebar';
@@ -61,6 +61,7 @@ const GuestPagePane: React.FC<{ guestId: string }> = ({ guestId }) => {
     const { isFullscreen, toggleFullscreen } = useGuestFullscreen(guestId, 'page');
     const [controls, setControls] = React.useState<GuestStatusControlBinding | null>(null);
     const toolbarHost = isFullscreen ? fullscreenHeader : headerHost;
+    const dismiss = () => useUIStore.getState().setOpenGuestPage(null);
 
     return (
         <>
@@ -69,6 +70,7 @@ const GuestPagePane: React.FC<{ guestId: string }> = ({ guestId }) => {
                     controls={controls}
                     fullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreen}
+                    onClose={dismiss}
                 />,
                 toolbarHost,
             ) : null}
@@ -80,7 +82,7 @@ const GuestPagePane: React.FC<{ guestId: string }> = ({ guestId }) => {
                         surface="page"
                         item={null}
                         onStatusControls={setControls}
-                        onDismiss={() => useUIStore.getState().setOpenGuestPage(null)}
+                        onDismiss={dismiss}
                     />
                 </div>
             </MovablePane>
