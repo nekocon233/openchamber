@@ -890,9 +890,9 @@ and cited as `[name](absolute path)` (a plain link: a draft starting with `!`
 turns into a shell command), so the model, a subagent or a tool reads the file
 by path; OpenCode's agents may read that folder without asking.
 `imageSaveModeForModel` picks one of three cases. A model whose metadata lists
-no `image` input gets only the link, since it could not read the attachment
-(#5087), and the modality toast says where the images went. Any other model,
-unknown metadata included, also gets the image attached under the link's name,
+no `image` input gets the saved file's path (#5087). The link in the composer
+confirms the save. Any other model, unknown metadata included, also gets the
+image attached under the link's name,
 with no second `[name]` citation (#5218). An image that could not be saved
 attaches as before, with an error toast. A HEIC the bundled decoder cannot read
 (Apple's HDR gain-map photos) is saved unconverted under its own name and gets
@@ -909,11 +909,10 @@ its temp folder and its filesystem, and an external OpenCode or a space runs
 elsewhere than the server.
 
 A model whose metadata lists no `image` input never receives an image part,
-whatever the setting says: an image part to such a model fails the turn. Every
-image a send or a launch still carries (a pasted image attached with the
-setting off or under a model picked earlier, the annotation screenshot, a
-comment-field paste) goes through `sync/text-model-images.ts` and arrives as a
-text note naming the file under the same filename (`sync/DOCUMENTATION.md`).
+whatever the setting says. OpenCode sends go through
+`sync/text-model-images.ts` when a prompt still carries an image. The native
+Antigravity adapter saves inline images and converts them to file references
+before writing the prompt to its CLI.
 The composer says so once per model in a toast when such an image lands or the
 model changes to a text-only one. Converting at send, and not at attach, keeps
 the image a real attachment while the model can still change: picking a model

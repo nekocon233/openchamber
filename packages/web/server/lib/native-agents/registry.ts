@@ -85,6 +85,7 @@ const sendRecordSchema = z.object({
     requestFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     literalChangeRequestHeaders: z.number().int().nonnegative().optional().catch(undefined),
     inputDelivery: z.enum(['reserved', 'written', 'not-written']).optional(),
+    manualCompaction: z.literal(true).optional(),
     interactionReply: z.literal(true).optional(),
     denial: z.object({
       actions: z.array(z.string().min(1).max(256)).min(1).max(32),

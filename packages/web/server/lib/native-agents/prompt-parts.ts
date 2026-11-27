@@ -202,7 +202,15 @@ export const codexPromptInput = (parts: ReadonlyArray<PromptPart>): CodexPromptI
   return input;
 };
 
-export const antigravityPromptText = (parts: ReadonlyArray<PromptPart>): string => {
+export const antigravityImageReference = (path: string): string => (
+  `Attached image: ${path}
+Open it with read_file if you need to inspect it.`
+);
+
+export const antigravityPromptText = (
+  parts: ReadonlyArray<PromptPart>,
+  embeddedImage?: (part: PromptFilePart, data: { mime: string; base64: string }) => string,
+): string => {
   const blocks: string[] = [];
   for (const part of parts) {
     if (part.type === 'text') {
@@ -211,13 +219,14 @@ export const antigravityPromptText = (parts: ReadonlyArray<PromptPart>): string 
     }
     const filePath = pathOf(part.url);
     if (filePath !== null) {
-      if (part.mime.startsWith('image/')) throw unsupported('Antigravity', part);
-      blocks.push(`Attached file: ${filePath}`);
+      blocks.push(part.mime.startsWith('image/') ? antigravityImageReference(filePath) : `Attached file: ${filePath}`);
       continue;
     }
     const data = decodeDataUrl(part.url);
     if (data?.mime.startsWith('text/')) {
       blocks.push(fileTextBlock(part.filename ?? 'file', data));
+    } else if (data?.mime.startsWith('image/') && embeddedImage) {
+      blocks.push(embeddedImage(part, data));
     } else {
       throw unsupported('Antigravity', part);
     }

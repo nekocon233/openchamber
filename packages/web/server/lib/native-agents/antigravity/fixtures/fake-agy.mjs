@@ -176,13 +176,23 @@ const run = (text) => {
   active = true;
   const visible = text.replace(/<openchamber-instructions>[\s\S]*?<\/openchamber-instructions>/g, '').trim();
   if (process.env.AGY_FIXTURE_REQUESTS) {
-    fs.appendFileSync(process.env.AGY_FIXTURE_REQUESTS, `${JSON.stringify({ conversationId, cwd, model, mode, effort, resumed, text, visible })}\n`);
+    fs.appendFileSync(process.env.AGY_FIXTURE_REQUESTS, `${JSON.stringify({ conversationId, cwd, model, mode, effort, resumed, text, visible, slashCommands: args.includes('--disable-slash-commands=false') })}\n`);
   }
   const userIndex = stepIndex++;
   append({ step_index: userIndex, type: 'USER_INPUT', content: `<USER_REQUEST>\n${text}\n</USER_REQUEST>` });
   frame({ event: 'step_update', step_update: {
     conversation_id: conversationId, step_index: userIndex, state: 'DONE', step_type: 'user_input',
   } });
+  if (visible === '/compact' && args.includes('--disable-slash-commands=false')) {
+    if (text !== '/compact') throw new Error('Compaction received other prompt text');
+    const index = stepIndex++;
+    append({ step_index: index, type: 'CHECKPOINT', content: 'Fixture compacted context.' });
+    frame({ event: 'step_update', step_update: {
+      conversation_id: conversationId, step_index: index, state: 'DONE', step_type: 'checkpoint',
+    } });
+    finish('SUCCESS', '');
+    return;
+  }
   if (visible === 'retained-child-followup' || visible === 'retained-child-followup-result-only') {
     if (!retainedChildId) throw new Error('No retained fixture child');
     const task = '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=' + conversationId
@@ -320,6 +330,7 @@ const run = (text) => {
   }
   if (visible === 'mode-probe') {
     const response = JSON.stringify({ mode, model, effort, resumed, nodeEnv: process.env.NODE_ENV ?? null, pid: process.pid,
+      slashCommands: args.includes('--disable-slash-commands=false'),
       settingsFile: option('--settings'), contextBudgets: Object.fromEntries(Object.entries(contextSettings?.customModelsConfig?.customModels ?? {})
         .map(([id, value]) => [id, value.maxTokens ?? null])) });
     planner(response);

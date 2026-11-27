@@ -11,6 +11,7 @@ export interface AgyProcessArgsOptions {
   agent?: 'build' | 'plan' | null | undefined;
   effort?: string | null | undefined;
   settingsFile?: string | null | undefined;
+  allowSlashCommands?: boolean | undefined;
 }
 
 export interface StartAgyProcessOptions {
@@ -38,11 +39,12 @@ export const agyProcessArgs = ({
   agent = 'build',
   effort = null,
   settingsFile = null,
+  allowSlashCommands = false,
 }: AgyProcessArgsOptions): string[] => [
   '--input-format', 'stream-json',
   '--output-format', 'stream-json',
   '--add-dir', cwd,
-  agent === 'plan' ? '--disable-slash-commands=false' : '--disable-slash-commands',
+  allowSlashCommands || agent === 'plan' ? '--disable-slash-commands=false' : '--disable-slash-commands',
   '--print-timeout', '0',
   ...(agent ? ['--mode', agent === 'plan' ? 'plan' : 'accept-edits'] : []),
   ...(agent ? ['--dangerously-skip-permissions'] : []),

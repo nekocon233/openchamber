@@ -43,6 +43,7 @@ export interface AgyBackendPromptRequest {
   variant?: string | undefined;
   agent: string;
   parts: PromptPart[];
+  manualCompaction?: true;
 }
 
 export interface CreateAntigravityBackendOptions {
@@ -78,6 +79,7 @@ export interface AntigravityBackend {
   loadHistory: (sessionId: string, directory: string) => Promise<AgyHistoryResult | null>;
   createSession: (input: { directory: string; title?: string | undefined }) => Promise<NativeSessionRecord>;
   prompt: (sessionId: string, request: AgyBackendPromptRequest, signal?: AbortSignal | null) => Promise<void>;
+  compact: (sessionId: string, request: Omit<AgyBackendPromptRequest, 'parts' | 'messageID' | 'manualCompaction'> & { instructions?: string | undefined }) => Promise<void>;
   abort: (sessionId: string) => Promise<boolean>;
   whenIdle: (sessionId: string) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
@@ -105,6 +107,7 @@ export interface AgySessionState {
   effort: string | null;
   process: AgyProcessHandle | null;
   firstPrompt: boolean;
+  manualCompactionProcess?: boolean;
   globalInstructions?: string;
   toolKey?: string;
   contextSettings?: AgyContextSettingsData | null;

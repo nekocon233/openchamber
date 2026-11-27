@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -422,6 +423,7 @@ export const dict: Record<I18nKey, string> = {
   ...operatorChildrenI18n.pl,
   ...omniSearchI18n.pl,
   ...markdownOutlineI18n['pl'],
+  ...fileSymbolsI18n['pl'],
   ...subagentsI18n['pl'],
   ...tooltipsDiffI18n['pl'],
   ...tooltipsFilesI18n['pl'],
@@ -1782,7 +1784,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachNamedFailed': 'Nie udało się dołączyć {name}',
   'chat.chatInput.toast.unsupportedAttachmentModalities': 'Model {model} nie obsługuje danych wejściowych {modalities} wymaganych przez {files}. Nadal możesz wysłać wiadomość, ale te załączniki mogą zostać zignorowane.',
   'chat.chatInput.toast.imagesSaving': 'Zapisywanie {files}…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} nie odczytuje obrazów. Zapisano {files} w {folder}.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} nie odczytuje obrazów. Wiadomość przekaże mu ścieżkę pliku dla {files}.',
   'chat.chatInput.toast.textModelImageSaveFailed': 'Nie udało się zapisać {files} jako plików dla modelu, który nie odczytuje obrazów. Wiadomość nie została wysłana.',
   'chat.chatInput.toast.imageSaveFailed': 'Nie udało się zapisać {files}. Dołączono zamiast tego.',

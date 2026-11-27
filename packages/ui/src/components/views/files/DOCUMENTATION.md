@@ -925,6 +925,10 @@ The text editor's helpers live in `lib/codemirror/` and are assembled by
   function, class or C# namespace/type whose body fills the top of the editor,
   up to three, innermost kept, and show the active `path > namespace > class >
   method` chain in `EditorBreadcrumbs` above the editor.
+- **Symbols in file.** The outline lists declarations from the file's parser
+  with their nesting. It filters by type or name, collapses nested declarations
+  and highlights the current symbol as the caret moves. Picking a row jumps to
+  its declaration and leaves the outline open.
 - **Code navigation and LSP bridge** (`lspWorkspaceBridge.ts`,
   `symbolNavigation.ts`, `renameSymbol.ts`). `@codemirror/lsp-client` connects
   to a hybrid `Transport`: when a host language server (`csharp-ls` /

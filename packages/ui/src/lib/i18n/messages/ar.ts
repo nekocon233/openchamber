@@ -65,6 +65,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -2747,7 +2748,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachNamedFailed': 'تعذّر إرفاق {name}',
   'chat.chatInput.toast.unsupportedAttachmentModalities': 'لا يدعم {model} إدخال {modalities} المطلوب لـ {files}. لا يزال بإمكانك إرسال الرسالة، لكن قد يتم تجاهل هذه المرفقات.',
   'chat.chatInput.toast.imagesSaving': 'جارٍ حفظ {files}…',
-  'chat.chatInput.toast.imagesSavedForTextModel': 'لا يستطيع {model} قراءة الصور. تم حفظ {files} في {folder}.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': 'لا يستطيع {model} قراءة الصور. ستمرّر الرسالة مسار ملف بدلًا من {files}.',
   'chat.chatInput.toast.textModelImageSaveFailed': 'تعذّر حفظ {files} كملفات لنموذج لا يقرأ الصور. لم تُرسل الرسالة.',
   'chat.chatInput.toast.imageSaveFailed': 'تعذّر حفظ {files}. أُرفق بدلًا من ذلك.',
@@ -4065,6 +4065,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['ar'],
   ...diffFindI18n['ar'],
   ...markdownOutlineI18n['ar'],
+  ...fileSymbolsI18n['ar'],
   ...markdownGithubI18n['ar'],
   ...autocompleteScopeI18n['ar'],
   ...workflowsI18n['ar'],

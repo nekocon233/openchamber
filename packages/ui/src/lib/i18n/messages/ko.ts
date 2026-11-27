@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -418,6 +419,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['ko'],
   ...diffFindI18n['ko'],
   ...markdownOutlineI18n['ko'],
+  ...fileSymbolsI18n['ko'],
   ...markdownGithubI18n['ko'],
   ...autocompleteScopeI18n['ko'],
   ...workflowsI18n['ko'],
@@ -3021,7 +3023,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachNamedFailed': '첨부 {name} 실패',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model}은(는) {files}에 필요한 {modalities} 입력을 지원하지 않습니다. 메시지를 보낼 수는 있지만 해당 첨부 파일이 무시될 수 있습니다.',
   'chat.chatInput.toast.imagesSaving': '{files} 저장 중…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model}은(는) 이미지를 읽을 수 없습니다. {files}을(를) {folder}에 저장했습니다.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model}은(는) 이미지를 읽을 수 없습니다. 메시지에는 {files} 대신 파일 경로가 전달됩니다.',
   'chat.chatInput.toast.textModelImageSaveFailed': '이미지를 읽을 수 없는 모델을 위해 {files}을(를) 파일로 저장하지 못했습니다. 메시지를 보내지 않았습니다.',
   'chat.chatInput.toast.imageSaveFailed': '{files}을(를) 저장하지 못했습니다. 대신 첨부했습니다.',

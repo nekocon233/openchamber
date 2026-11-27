@@ -65,6 +65,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -417,6 +418,7 @@ export const dict = {
   ...unifiedConversationsI18n['de'],
   ...diffFindI18n['de'],
   ...markdownOutlineI18n['de'],
+  ...fileSymbolsI18n['de'],
   ...markdownGithubI18n['de'],
   ...autocompleteScopeI18n['de'],
   ...workflowsI18n['de'],
@@ -3885,7 +3887,6 @@ export const dict = {
   'chat.messageBody.actions.contextPinFailed': 'Kontext konnte nicht angeheftet werden',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model} unterstützt den von {files} benötigten Eingabetyp {modalities} nicht. Du kannst die Nachricht trotzdem senden, aber diese Anhänge werden möglicherweise ignoriert.',
   'chat.chatInput.toast.imagesSaving': '{files} wird gespeichert…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} kann keine Bilder lesen. {files} in {folder} gespeichert.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} kann keine Bilder lesen. Die Nachricht gibt ihm für {files} einen Dateipfad.',
   'chat.chatInput.toast.textModelImageSaveFailed': '{files} konnte nicht als Datei für ein Modell ohne Bildeingabe gespeichert werden. Die Nachricht wurde nicht gesendet.',
   'chat.chatInput.toast.imageSaveFailed': '{files} konnte nicht gespeichert werden. Stattdessen angehängt.',

@@ -232,7 +232,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
         id: `native:${command.name}`, name: command.name, source: 'native', cliName,
         description: [t(command.descriptionKey), CODEX_COMMAND_USAGE.get(command.name)].filter(Boolean).join('\n'),
       })) : []),
-      ...(hasSession && nativeBackend !== 'antigravity' ? [{ id: 'native:compact', name: 'compact', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.compactDescription'), isBuiltIn: true }] : []),
+      ...(hasSession ? [{ id: 'native:compact', name: 'compact', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.compactDescription'), isBuiltIn: true }] : []),
       ...(hasSession
         ? [
             { id: 'openchamber:undo', name: 'undo', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.undoDescription'), isBuiltIn: true },

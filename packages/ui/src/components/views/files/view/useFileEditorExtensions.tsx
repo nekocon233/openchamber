@@ -20,6 +20,7 @@ import { importLinks, resolveRelativeImport } from '@/lib/codemirror/importLinks
 import { indentGuides } from '@/lib/codemirror/indentGuides';
 import { isLintedJsonPath, jsonSyntaxLint } from '@/lib/codemirror/jsonSyntaxLint';
 import { stickyScope } from '@/lib/codemirror/stickyScope';
+import { documentOutlineUpdates } from '@/lib/codemirror/documentSymbols';
 import { gitBaselineTarget } from '../gitBaselineTarget';
 import { type useFileLanguage } from './useFileLanguage';
 import { type useFileMobileKeyboard } from './useFileMobileKeyboard';
@@ -207,6 +208,7 @@ export function useFileEditorExtensions({ codeNavigation, editor, fileLanguage, 
       }),
       highlightSelectionMatches({ highlightWordAroundCursor: true, minSelectionLength: 2 }),
       pinPreviewOnEditExtension,
+      documentOutlineUpdates,
       bracketAids(),
       indentGuides(),
       isMobile ? importLinksExtension : codeNavigation.extension(selectedFile.path, highlightLanguage ?? undefined),

@@ -64,6 +64,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -2741,7 +2742,6 @@ export const dict = {
   'chat.chatInput.toast.attachNamedFailed': 'לא ניתן היה לצרף את {name}',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model} לא תומך בקלט מסוג {modalities} שנדרש עבור {files}. עדיין אפשר לשלוח את ההודעה, אבל ייתכן שהקבצים המצורפים האלה יתעלמו.',
   'chat.chatInput.toast.imagesSaving': 'שומר את {files}…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} לא יכול לקרוא תמונות. {files} נשמר ב-{folder}.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} לא יכול לקרוא תמונות. ההודעה תעביר לו נתיב קובץ במקום {files}.',
   'chat.chatInput.toast.textModelImageSaveFailed': 'לא ניתן היה לשמור את {files} כקבצים עבור מודל שלא קורא תמונות. ההודעה לא נשלחה.',
   'chat.chatInput.toast.imageSaveFailed': 'לא ניתן לשמור את {files}. צורף במקום זאת.',
@@ -4059,6 +4059,7 @@ export const dict = {
   ...unifiedConversationsI18n['he'],
   ...diffFindI18n['he'],
   ...markdownOutlineI18n['he'],
+  ...fileSymbolsI18n['he'],
   ...markdownGithubI18n['he'],
   ...autocompleteScopeI18n['he'],
   ...workflowsI18n['he'],

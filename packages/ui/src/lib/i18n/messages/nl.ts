@@ -64,6 +64,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -300,6 +301,7 @@ export const dict = {
   ...unifiedConversationsI18n['nl'],
   ...diffFindI18n['nl'],
   ...markdownOutlineI18n['nl'],
+  ...fileSymbolsI18n['nl'],
   ...markdownGithubI18n['nl'],
   ...autocompleteScopeI18n['nl'],
   ...workflowsI18n['nl'],
@@ -2855,7 +2857,6 @@ export const dict = {
   'chat.chatInput.toast.attachNamedFailed': 'Kan {name} niet toevoegen',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model} ondersteunt geen {modalities}-invoer die {files} vereist. U kunt het bericht toch verzenden, maar deze bijlagen worden mogelijk genegeerd.',
   'chat.chatInput.toast.imagesSaving': '{files} opslaan…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} kan geen afbeeldingen lezen. {files} opgeslagen in {folder}.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} kan geen afbeeldingen lezen. Het bericht geeft het een bestandspad voor {files}.',
   'chat.chatInput.toast.textModelImageSaveFailed': 'Kon {files} niet als bestand opslaan voor een model dat geen afbeeldingen leest. Het bericht is niet verstuurd.',
   'chat.chatInput.toast.imageSaveFailed': 'Kon {files} niet opslaan. In plaats daarvan bijgevoegd.',

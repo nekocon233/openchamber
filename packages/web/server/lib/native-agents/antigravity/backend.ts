@@ -7,6 +7,7 @@ import { prepareAgyDelegation } from './mcp-setup.js';
 import {
   decodeNativeSessionId,
   encodeAntigravitySessionId,
+  newNativeClientUserMessageId,
   NATIVE_PROVIDER_ANTIGRAVITY,
 } from '../ids.js';
 import {
@@ -26,6 +27,7 @@ import type { RegistrySendRecordInput, RegistrySessionInput } from '../registry.
 import { agyProcessArgs, startAgyProcess } from './process.js';
 import type { AgyProcessHandle } from './process.js';
 import { resolveAgyCommand } from './command.js';
+import { canReuseAntigravitySend, planAntigravityPrompt } from './prompt.js';
 import { literalChangeRequestHeaders } from './change-request-context.js';
 import { createAntigravityLiveProjection } from './projector.js';
 import type { AgyLiveProjection } from './projector.js';
@@ -187,6 +189,7 @@ export const createAntigravityBackend = ({
     const turn = session.turn;
     if (!turn) return;
     if (turn.completion) return turn.completion;
+    if (turn.send.antigravity?.manualCompaction) void turn.process?.stop('close');
     turn.completion = (async () => {
       turn.projection.finish({ outcome, response, error, responseStep, time: now() });
       let completionSaved = false;
@@ -358,6 +361,7 @@ export const createAntigravityBackend = ({
     model: string,
     agent: 'build' | 'plan',
     effort: string | null,
+    manualCompaction: boolean,
   ): Promise<AgySessionState> => {
     let session = sessions.get(sessionId);
     if (!session) {
@@ -401,7 +405,7 @@ export const createAntigravityBackend = ({
     const context = await prepareContextSettings({ home, modelId: model });
     let adopted = false;
     try {
-      if (activeSession.process && (activeSession.model !== model || activeSession.agent !== agent || activeSession.effort !== effort
+      if (activeSession.process && (manualCompaction || activeSession.manualCompactionProcess || activeSession.model !== model || activeSession.agent !== agent || activeSession.effort !== effort
         || (activeSession.toolKey ?? '') !== toolKey
         || !isDeepStrictEqual(activeSession.contextSettings ?? null, context?.data ?? null))) {
         const previous = activeSession.process;
@@ -430,6 +434,7 @@ export const createAntigravityBackend = ({
               agent,
               effort,
               settingsFile: context?.file ?? null,
+              allowSlashCommands: manualCompaction,
             }),
           ],
           cwd: activeSession.directory,
@@ -447,6 +452,7 @@ export const createAntigravityBackend = ({
         });
         adopted = true;
         activeSession.process = agyProcess;
+        activeSession.manualCompactionProcess = manualCompaction;
         activeSession.toolKey = toolKey;
         activeSession.contextSettings = context?.data ?? null;
         activeSession.globalInstructions = globalInstructions;
@@ -611,6 +617,8 @@ export const createAntigravityBackend = ({
     async prompt(sessionId, request, signal = null) {
       if (subagents.session(sessionId)) throw invalidRequestError('Antigravity subagent sessions are read-only');
       const previous = admissions.get(sessionId) ?? Promise.resolve();
+      let cleanupImages: (() => Promise<void>) | undefined;
+      let attempted = false;
       const run = previous.catch(() => undefined).then(async () => {
         signal?.throwIfAborted();
         if (request.agent !== 'build' && request.agent !== 'plan') {
@@ -618,9 +626,9 @@ export const createAntigravityBackend = ({
         }
         const effort = request.variant ?? null;
         if (effort !== null && !EFFORTS.has(effort)) throw invalidRequestError('Unsupported Antigravity reasoning effort');
-        const userText = antigravityPromptText(request.parts);
+        const prompt = planAntigravityPrompt(request.parts);
         const requestFingerprint = createHash('sha256').update(JSON.stringify([
-          request.model.providerID, request.model.modelID, request.agent, effort, userText,
+          request.model.providerID, request.model.modelID, request.agent, effort, prompt.fingerprintText,
         ])).digest('hex');
         const previousSend = (await registry.sendRecords(sessionId)).get(request.messageID);
         if (previousSend) {
@@ -628,16 +636,7 @@ export const createAntigravityBackend = ({
           const owner = sessions.get(sessionId)?.directory ?? (await registry.getSession(sessionId))?.directory
             ?? (decoded?.backend === 'antigravity' ? (await store.getSession(sessionId, decoded.conversationId, request.directory))?.directory : undefined);
           if (!owner || !sameDirectory(owner, request.directory)) throw sessionNotFoundError(sessionId);
-          const receipt = previousSend.antigravity;
-          if (receipt?.requestFingerprint && receipt.requestFingerprint !== requestFingerprint) {
-            throw invalidRequestError('This message ID belongs to a different Antigravity prompt');
-          }
-          if (receipt?.requestFingerprint === requestFingerprint && (receipt.inputDelivery === 'written' || receipt.stepIndex !== undefined)) return;
-          if (receipt?.inputDelivery !== 'not-written') {
-            throw new NativeAgentError('The earlier Antigravity prompt could not be confirmed. Check the conversation before sending again.', {
-              code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN', status: 502,
-            });
-          }
+          if (canReuseAntigravitySend(previousSend.antigravity, requestFingerprint)) return;
         }
         let launchModel = request.model.modelID;
         if (effort && /-(low|medium|high|xhigh|max)$/.test(launchModel)) {
@@ -647,15 +646,17 @@ export const createAntigravityBackend = ({
         }
         let session: AgySessionState;
         try {
-          session = await ensureSession(sessionId, request.directory, launchModel, request.agent, effort);
+          session = await ensureSession(sessionId, request.directory, launchModel, request.agent, effort, request.manualCompaction === true);
         } catch (error) {
           if (error instanceof NativeAgentError) throw error;
           throw backendError(error instanceof Error ? error.message : String(error));
         }
         signal?.throwIfAborted();
-        const nativeText = session.firstPrompt && session.globalInstructions
-          ? `${userText}\n\n${antigravityPromptText(withInstructions([], session.globalInstructions))}`
-          : userText;
+        const prepared = await prompt.materialize();
+        cleanupImages = prepared.cleanup;
+        const nativeText = !request.manualCompaction && session.firstPrompt && session.globalInstructions
+          ? `${prepared.text}\n\n${antigravityPromptText(withInstructions([], session.globalInstructions))}`
+          : prepared.text;
         const send: RegistrySendRecordInput = {
           messageId: request.messageID,
           providerID: NATIVE_PROVIDER_ANTIGRAVITY,
@@ -664,6 +665,7 @@ export const createAntigravityBackend = ({
           sentAt: now(),
           antigravity: { fingerprint: antigravityPromptFingerprint(nativeText), requestFingerprint, inputDelivery: 'reserved' },
         };
+        if (request.manualCompaction && send.antigravity) send.antigravity.manualCompaction = true;
         const literalHeaders = literalChangeRequestHeaders(request.parts);
         if (literalHeaders !== undefined && send.antigravity) send.antigravity.literalChangeRequestHeaders = literalHeaders;
         if (request.variant !== undefined) send.variant = request.variant;
@@ -679,7 +681,6 @@ export const createAntigravityBackend = ({
         session.abortRequested = false;
         publisher.records(session.directory, sessionId, projection.records());
         publisher.status(session.directory, sessionId, 'busy');
-        let attempted = false;
         try {
           const currentProcess = session.process;
           if (!currentProcess?.acceptsInput()) throw backendError('Antigravity exited before accepting the prompt');
@@ -707,7 +708,8 @@ export const createAntigravityBackend = ({
             code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN', status: 502,
           });
         }
-      }).finally(() => {
+      }).finally(async () => {
+        if (!attempted) await cleanupImages?.().catch(eventFailure);
         const session = sessions.get(sessionId);
         if (session && !session.turn) scheduleIdleClose(session);
       });
@@ -717,6 +719,14 @@ export const createAntigravityBackend = ({
       } finally {
         if (admissions.get(sessionId) === run) admissions.delete(sessionId);
       }
+    },
+
+    async compact(sessionId, request) {
+      if (request.instructions !== undefined) throw invalidRequestError('Antigravity compacts without instructions');
+      return this.prompt(sessionId, {
+        ...request, messageID: newNativeClientUserMessageId(sessionId), manualCompaction: true,
+        parts: [{ type: 'text', text: '/compact' }],
+      });
     },
 
     async abort(sessionId) {

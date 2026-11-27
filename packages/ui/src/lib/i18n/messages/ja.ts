@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -418,6 +419,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['ja'],
   ...diffFindI18n['ja'],
   ...markdownOutlineI18n['ja'],
+  ...fileSymbolsI18n['ja'],
   ...markdownGithubI18n['ja'],
   ...autocompleteScopeI18n['ja'],
   ...workflowsI18n['ja'],
@@ -3020,7 +3022,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachNamedFailed': '{name}の添付に失敗しました',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model} は {files} に必要な {modalities} 入力をサポートしていません。メッセージは送信できますが、これらの添付ファイルは無視される可能性があります。',
   'chat.chatInput.toast.imagesSaving': '{files} を保存中…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} は画像を読み取れません。{files} を {folder} に保存しました。',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} は画像を読めません。メッセージでは {files} の代わりにファイルのパスを渡します。',
   'chat.chatInput.toast.textModelImageSaveFailed': '画像を読めないモデル向けに {files} をファイルとして保存できませんでした。メッセージは送信されていません。',
   'chat.chatInput.toast.imageSaveFailed': '{files} を保存できませんでした。代わりに添付しました。',

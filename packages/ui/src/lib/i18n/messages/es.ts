@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -434,6 +435,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['es'],
   ...diffFindI18n['es'],
   ...markdownOutlineI18n['es'],
+  ...fileSymbolsI18n['es'],
   ...markdownGithubI18n['es'],
   ...autocompleteScopeI18n['es'],
   ...workflowsI18n['es'],
@@ -2977,7 +2979,6 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.toast.attachNamedFailed": "No se pudo adjuntar {name}",
   "chat.chatInput.toast.unsupportedAttachmentModalities": "{model} no admite la entrada de {modalities} necesaria para {files}. Aún puedes enviar el mensaje, pero estos adjuntos podrían ignorarse.",
   "chat.chatInput.toast.imagesSaving": "Guardando {files}…",
-  "chat.chatInput.toast.imagesSavedForTextModel": "{model} no puede leer imágenes. {files} se guardó en {folder}.",
   "chat.chatInput.toast.imagesSentAsPathsForTextModel": "{model} no puede leer imágenes. El mensaje le dará una ruta de archivo para {files}.",
   "chat.chatInput.toast.textModelImageSaveFailed": "No se pudo guardar {files} como archivo para un modelo que no lee imágenes. El mensaje no se envió.",
   "chat.chatInput.toast.imageSaveFailed": "No se pudo guardar {files}. Se adjuntó en su lugar.",

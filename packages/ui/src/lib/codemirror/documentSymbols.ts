@@ -1,9 +1,10 @@
 import type { EditorState } from '@codemirror/state';
 import { ensureSyntaxTree, type syntaxTree } from '@codemirror/language';
+import { EditorView, type ViewUpdate } from '@codemirror/view';
 
 type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
 
-export type DocumentSymbolKind = 'function' | 'method' | 'class' | 'type' | 'module' | 'heading';
+export type DocumentSymbolKind = 'function' | 'method' | 'class' | 'interface' | 'enum' | 'field' | 'property' | 'type' | 'module' | 'heading';
 
 export type DocumentSymbol = {
     name: string;
@@ -16,6 +17,15 @@ export type DocumentSymbol = {
     /** End offset of the declaration body or scope. */
     scopeTo?: number;
 };
+
+const outlineListeners = new WeakMap<EditorView, (update: ViewUpdate) => void>();
+
+export const documentOutlineUpdates = EditorView.updateListener.of((update) => outlineListeners.get(update.view)?.(update));
+
+export function observeDocumentOutline(view: EditorView, listener: (update: ViewUpdate) => void): () => void {
+    outlineListeners.set(view, listener);
+    return () => { if (outlineListeners.get(view) === listener) outlineListeners.delete(view); };
+}
 
 type SymbolDocumentation = {
     signature: string;
@@ -31,13 +41,15 @@ const DECLARATION_KINDS = new Map<string, DocumentSymbolKind>(Object.entries({
     MethodDecl: 'method',
     ClassDeclaration: 'class',
     ClassDefinition: 'class',
-    InterfaceDeclaration: 'class',
+    InterfaceDeclaration: 'interface',
+    PropertyType: 'property',
+    MethodType: 'method',
     StructItem: 'class',
     TraitItem: 'class',
     ImplItem: 'class',
     TypeAliasDeclaration: 'type',
-    EnumDeclaration: 'type',
-    EnumItem: 'type',
+    EnumDeclaration: 'enum',
+    EnumItem: 'enum',
     TypeSpec: 'type',
     ModItem: 'module',
     NamespaceDefinition: 'module',
@@ -48,6 +60,7 @@ const BINDING_DECLARATIONS = new Map<string, DocumentSymbolKind>([
     ['PropertyDeclaration', 'method'],
 ]);
 const FUNCTION_VALUES = new Set(['ArrowFunction', 'FunctionExpression']);
+const ACCESSORS = new Set(['get', 'set']);
 
 const NAME_NODES = new Set([
     'VariableDefinition',
@@ -71,6 +84,8 @@ const childNamed = (node: SyntaxNode, names: ReadonlySet<string>): SyntaxNode | 
 
 export const symbolKindOf = (node: SyntaxNode): DocumentSymbolKind | null => {
     if (HEADING_RE.test(node.name)) return 'heading';
+    if (node.name === 'MethodDeclaration' && childNamed(node, ACCESSORS)) return 'property';
+    if (node.name === 'PropertyDeclaration' && !childNamed(node, FUNCTION_VALUES)) return 'field';
     const declared = DECLARATION_KINDS.get(node.name);
     if (declared) return declared;
     const binding = BINDING_DECLARATIONS.get(node.name);
@@ -89,6 +104,17 @@ const isBraceDelim = (state: EditorState, node: SyntaxNode | null): boolean => (
 const isParenDelim = (state: EditorState, node: SyntaxNode | null): boolean => (
     Boolean(node && node.name === 'Delim' && state.sliceDoc(node.from, node.from + 1) === '(')
 );
+
+const CSHARP_DECLARATION_BOUNDARIES = new Set(['{', '}', ';', ',']);
+
+const csharpDeclarationStart = (state: EditorState, name: SyntaxNode): number => {
+    let start = name.from;
+    for (let node = name.prevSibling; node; node = node.prevSibling) {
+        if (CSHARP_DECLARATION_BOUNDARIES.has(node.name) || isBraceDelim(state, node)) break;
+        start = node.from;
+    }
+    return start;
+};
 
 /**
  * Walks `@replit/codemirror-lang-csharp`'s `Program` tree, where each `{ ... }`
@@ -124,7 +150,7 @@ const walkCSharpSymbols = (
                             line: line.number,
                             from: firstFrom,
                             depth: currentDepth,
-                            scopeFrom: line.from,
+                            scopeFrom: csharpDeclarationStart(state, child),
                             scopeTo: cursor.to,
                         });
                         walkCSharpSymbols(state, cursor, currentDepth + 1, null, out);
@@ -136,7 +162,7 @@ const walkCSharpSymbols = (
                             line: line.number,
                             from: firstFrom,
                             depth: currentDepth,
-                            scopeFrom: line.from,
+                            scopeFrom: csharpDeclarationStart(state, child),
                             scopeTo: container.to,
                         });
                         currentDepth += 1;
@@ -154,7 +180,7 @@ const walkCSharpSymbols = (
                 while (nameNode && nameNode.name === '⚠') nameNode = nameNode.nextSibling;
                 if (nameNode && nameNode.name === 'TypeIdentifier') {
                     const typeName = state.sliceDoc(nameNode.from, nameNode.to);
-                    const kind: DocumentSymbolKind = keyword === 'enum' ? 'type' : 'class';
+                    const kind = keyword === 'enum' || keyword === 'interface' ? keyword : 'class';
                     const line = state.doc.lineAt(nameNode.from);
                     let cursor: SyntaxNode | null = nameNode.nextSibling;
                     while (cursor && cursor.name !== ';' && !isBraceDelim(state, cursor)) {
@@ -167,7 +193,7 @@ const walkCSharpSymbols = (
                         line: line.number,
                         from: nameNode.from,
                         depth: currentDepth,
-                        scopeFrom: line.from,
+                        scopeFrom: csharpDeclarationStart(state, child),
                         scopeTo,
                     });
                     if (cursor && isBraceDelim(state, cursor)) {
@@ -195,14 +221,22 @@ const walkCSharpSymbols = (
                         line: line.number,
                         from: lastTypeId.from,
                         depth: currentDepth,
-                        scopeFrom: line.from,
+                        scopeFrom: csharpDeclarationStart(state, child),
                         scopeTo: cursor ? cursor.to : lastTypeId.to,
                     });
                     if (cursor) child = cursor;
                 }
             }
         } else if (enclosingTypeName) {
-            if (child.name === 'PropertyName' || child.name === 'MethodName') {
+            if (child.name === 'VarName') {
+                const name = state.sliceDoc(child.from, child.to).replace(/;$/, '');
+                let end = child.nextSibling;
+                while (end && end.name !== ',' && end.name !== ';' && end.name !== '}') end = end.nextSibling;
+                out.push({
+                    name, kind: 'field', line: state.doc.lineAt(child.from).number, from: child.from,
+                    depth: currentDepth, scopeFrom: csharpDeclarationStart(state, child), scopeTo: end?.from ?? child.to,
+                });
+            } else if (child.name === 'PropertyName' || child.name === 'MethodName') {
                 const name = state.sliceDoc(child.from, child.to);
                 const line = state.doc.lineAt(child.from);
                 let cursor: SyntaxNode | null = child.nextSibling;
@@ -218,11 +252,11 @@ const walkCSharpSymbols = (
                 }
                 out.push({
                     name,
-                    kind: 'method',
+                    kind: child.name === 'PropertyName' ? 'property' : 'method',
                     line: line.number,
                     from: child.from,
                     depth: currentDepth,
-                    scopeFrom: line.from,
+                    scopeFrom: csharpDeclarationStart(state, child),
                     scopeTo: cursor ? cursor.to : child.to,
                 });
                 if (cursor) child = cursor;
@@ -241,7 +275,7 @@ const walkCSharpSymbols = (
                         line: line.number,
                         from: child.from,
                         depth: currentDepth,
-                        scopeFrom: line.from,
+                        scopeFrom: csharpDeclarationStart(state, child),
                         scopeTo: cursor ? cursor.to : next.to,
                     });
                     if (cursor) child = cursor;

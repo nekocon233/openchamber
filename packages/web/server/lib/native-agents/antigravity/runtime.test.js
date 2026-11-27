@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -92,6 +93,66 @@ describe('Antigravity native runtime', () => {
     expect(saved.parts[0].metadata).toBeUndefined();
     expect(saved.parts[1]).toMatchObject({ id: referenceEvent.payload.properties.part.id,
       type: 'text', text: context, metadata: { openchamberContext: reference } });
+  });
+
+  it('delivers embedded images and existing image paths through the native prompt route', async () => {
+    const { runtime, session, directory, requestsFile } = await setup();
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aW/0AAAAASUVORK5CYII=', 'base64');
+    const existing = path.join(directory, 'existing.png');
+    fs.writeFileSync(existing, image);
+    const app = express();
+    app.use(express.json());
+    registerNativeAgentRoutes(app, { runtime });
+    const endpoint = `/api/native/sessions/${session.id}/prompt`;
+    const payload = {
+      directory, messageID: `nag_u_${randomUUID()}`,
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build',
+      parts: [
+        { type: 'text', text: 'Compare the two images.' },
+        { type: 'file', filename: 'uploaded.png', mime: 'image/png', url: `data:image/png;base64,${image.toString('base64')}` },
+        { type: 'file', filename: 'existing.png', mime: 'image/png', url: pathToFileURL(existing).href },
+      ],
+    };
+    await request(app).post(endpoint).send(payload).expect(200, { accepted: true });
+    await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    const delivered = JSON.parse(fs.readFileSync(requestsFile, 'utf8').trim());
+    const stagedPath = delivered.visible.match(/Attached image: ([^\r\n]+uploaded\.png)/)?.[1];
+    expect(stagedPath).toBeTruthy();
+    cleanups.unshift(() => fs.rmSync(path.dirname(stagedPath), { recursive: true, force: true }));
+    expect(fs.readFileSync(stagedPath)).toEqual(image);
+    expect(delivered.visible).toContain(`Attached image: ${existing}`);
+    expect(delivered.visible).not.toContain('data:image');
+    await request(app).post(endpoint).send(payload).expect(200, { accepted: true });
+    expect(fs.readFileSync(requestsFile, 'utf8').trim().split('\n')).toHaveLength(1);
+    await runtime.shutdown();
+    const history = await runtime.loadMessages(session.id, directory, { limit: 20 });
+    expect(history.records.find(({ info }) => info.id === payload.messageID).parts[0].text).toContain(stagedPath);
+  });
+
+  it('compacts a unified Antigravity session and resumes ordinary prompts on the same source', async () => {
+    const { runtime, directory, requestsFile } = await setup();
+    const selection = { model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build' };
+    const session = await runtime.createSession({ backend: 'antigravity', kind: 'unified', directory, selection });
+    const say = async (text) => {
+      await runtime.prompt(session.id, { ...selection, directory, messageID: `ncv_u_${randomUUID()}`, parts: [{ type: 'text', text }] });
+      await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    };
+    await say('before compacting');
+    const app = express();
+    app.use(express.json());
+    registerNativeAgentRoutes(app, { runtime });
+    const endpoint = `/api/native/sessions/${session.id}/compact`;
+    await request(app).post(endpoint).send({ ...selection, directory, instructions: 'summarize' }).expect(400);
+    await request(app).post(endpoint).send({ ...selection, directory }).expect(200, { accepted: true });
+    await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    const history = await runtime.loadMessages(session.id, directory, { limit: 20 });
+    expect(history.records.filter(({ info }) => info.role === 'compaction').map(({ info }) => info))
+      .toEqual([expect.objectContaining({ status: 'completed', reason: 'manual', summary: 'Fixture compacted context.' })]);
+    await say('after compacting');
+    const launches = fs.readFileSync(requestsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(launches.map(({ conversationId }) => conversationId)).toEqual(Array(3).fill(launches[0].conversationId));
+    expect(launches.map(({ slashCommands }) => slashCommands)).toEqual([false, true, false]);
+    expect(launches[1].text).toBe('/compact');
   });
 
   it('validates source-bound stops through HTTP and rejects a stale source before interrupting', async () => {
@@ -259,7 +320,7 @@ describe('Antigravity native runtime', () => {
     const capabilities = await runtime.capabilities();
     expect(capabilities.backends.antigravity).toMatchObject({
       cli: true,
-      actions: { revert: false, delete: false, fork: false, compact: false },
+      actions: { revert: false, delete: false, fork: false, compact: true },
     });
     expect((await runtime.catalog()).backends.antigravity.models).toMatchObject([
       { id: 'gemini-test', efforts: ['low', 'high'] },
@@ -296,10 +357,10 @@ describe('Antigravity native runtime', () => {
     expect(page.records[0].info.id).toBe(messageID);
     expect(page.records[1].info.parentID).toBe(messageID);
     expect((await runtime.getSession(conversation.id, directory)).metadata.openchamber.native).toMatchObject({
-      backend: 'antigravity', actions: { revert: true, fork: true, delete: false, compact: false },
+      backend: 'antigravity', actions: { revert: true, fork: true, delete: false, compact: true },
     });
     const selection = { model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, agent: 'build' };
-    await expect(runtime.compact(session.id, { directory, ...selection })).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
+    await expect(runtime.compact(session.id, { directory, ...selection, instructions: 'summarize' })).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
     await expect(runtime.revert(session.id, 'nag_u_any', directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
     await expect(runtime.unrevert(session.id, directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
     await expect(runtime.fork(session.id, null, directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });

@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -418,6 +419,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['zh-TW'],
   ...diffFindI18n['zh-TW'],
   ...markdownOutlineI18n['zh-TW'],
+  ...fileSymbolsI18n['zh-TW'],
   ...markdownGithubI18n['zh-TW'],
   ...autocompleteScopeI18n['zh-TW'],
   ...workflowsI18n['zh-TW'],
@@ -2997,7 +2999,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachNamedFailed': '附加 {name} 失敗',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model} 不支援 {files} 所需的 {modalities} 輸入。你仍可傳送訊息，但這些附件可能會被忽略。',
   'chat.chatInput.toast.imagesSaving': '正在儲存 {files}…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} 無法讀取圖片。已將 {files} 儲存到 {folder}。',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} 無法讀取圖片。訊息會改為傳遞 {files} 的檔案路徑。',
   'chat.chatInput.toast.textModelImageSaveFailed': '無法為不能讀取圖片的模型將 {files} 儲存為檔案。訊息未傳送。',
   'chat.chatInput.toast.imageSaveFailed': '無法儲存 {files}。已改為附加。',

@@ -53,6 +53,7 @@ export interface AgyLiveProjectionRequest {
   agent: string;
   sentAt: number;
   parts: readonly PromptPart[];
+  manualCompaction?: true;
 }
 
 export interface AgyLiveProjectionFinishInput {
@@ -509,7 +510,7 @@ export const createAntigravityLiveProjection = ({
           sessionID: sessionId,
           created: timeCreated,
           status: step.state === 'DONE' ? 'completed' : step.state === 'ERROR' ? 'failed' : 'running',
-          auto: true,
+          auto: !request.manualCompaction,
           error: step.state === 'ERROR' ? unknownError(step.tool_info?.error?.message ?? 'Antigravity compaction failed') : null,
         });
         const record: AgyCompactionRecord = {
@@ -518,7 +519,7 @@ export const createAntigravityLiveProjection = ({
             id: partId(nativeId, step.step_index, 'compaction'),
             sessionID: sessionId,
             messageID: info.id,
-            auto: true,
+            auto: !request.manualCompaction,
           })],
         };
         records.set(info.id, record);

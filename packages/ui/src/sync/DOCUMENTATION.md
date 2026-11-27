@@ -1808,10 +1808,9 @@ handoff and auto-review rules go as its `instructions`.
 In the composer, `/compact` in a native session calls
 `compactNativeSession` with the selected model and any summary instructions.
 The command keeps attachments in the draft and compaction appears through the
-CLI's history marker. A failed request restores the command text. Antigravity
-returns an unsupported error for manual compaction. The command picker offers
-`/compact` for Claude Code, Codex and DeepSeek Harness, plus OpenChamber's
-other local commands and the CLI's own commands (`useNativeCommands`).
+native transcript. A failed request restores the command text. The picker
+offers `/compact` for Claude Code, Codex, DeepSeek Harness and Antigravity,
+alongside OpenChamber commands and the CLI's own commands (`useNativeCommands`).
 Picking one inserts it as typed, and `/btw` opens the btw composer.
 
 Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and

@@ -66,6 +66,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -434,6 +435,7 @@ export const dict: Record<I18nKey, string> = {
   ...unifiedConversationsI18n['uk'],
   ...diffFindI18n['uk'],
   ...markdownOutlineI18n['uk'],
+  ...fileSymbolsI18n['uk'],
   ...markdownGithubI18n['uk'],
   ...autocompleteScopeI18n['uk'],
   ...workflowsI18n['uk'],
@@ -2977,7 +2979,6 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.toast.attachNamedFailed": "Не вдалося прикріпити {name}",
   "chat.chatInput.toast.unsupportedAttachmentModalities": "{model} не підтримує вхідні дані {modalities}, потрібні для {files}. Повідомлення все одно можна надіслати, але ці вкладення можуть бути проігноровані.",
   "chat.chatInput.toast.imagesSaving": "Зберігаю {files}…",
-  "chat.chatInput.toast.imagesSavedForTextModel": "{model} не читає зображень. {files} збережено в {folder}.",
   "chat.chatInput.toast.imagesSentAsPathsForTextModel": "{model} не читає зображення. Замість {files} повідомлення передасть шлях до файлу.",
   "chat.chatInput.toast.textModelImageSaveFailed": "Не вдалося зберегти {files} як файли для моделі, яка не читає зображення. Повідомлення не надіслано.",
   "chat.chatInput.toast.imageSaveFailed": "Не вдалося зберегти {files}. Додано як вкладення.",

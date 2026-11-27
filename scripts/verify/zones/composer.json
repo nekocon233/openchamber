@@ -632,6 +632,24 @@
             {"do": "gone", "on": "composer.dropNote"},
             {"do": "see", "on": "composer.attachmentChip", "name": "dropped.txt"}
           ]
+        },
+        {
+          "id": "saved-image-link",
+          "kind": "path",
+          "title": "The file link confirms a successful image save for a text-only model",
+          "steps": [
+            {"do": "file.write", "path": "opencode.json", "content": "{\"providers\":{\"attachment-fixture\":{\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"baseURL\":\"http://localhost:1/v1\",\"apiKey\":\"unused\"},\"models\":{\"text-only\":{\"modelID\":\"text-only\",\"name\":\"Fixture text-only model\",\"capabilities\":{\"tools\":false,\"input\":[\"text\"],\"output\":[\"text\"]}}}}}}"},
+            {"do": "settings", "values": {"savePastedImagesAsFiles": true, "defaultModel": "attachment-fixture/text-only"}},
+            {"do": "session.create", "as": "s", "title": "Composer image path"},
+            {"do": "open", "session": "s"},
+            {"do": "see", "on": "composer.control", "text": "Fixture text-only model"},
+            {"do": "chooseFiles", "files": [{"name": "reference.svg", "content": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><circle cx=\"8\" cy=\"8\" r=\"6\"/></svg>"}]},
+            {"do": "click", "on": "composer.attach"},
+            {"do": "click", "on": "menu.item", "text": "Attach files"},
+            {"do": "see", "on": "composer.pathChip", "text": "reference.svg", "exact": true},
+            {"do": "see", "on": "composer.control", "text": "Fixture text-only model"},
+            {"do": "steady", "on": "toast", "text": "Saved reference.svg", "count": 0, "ms": 1000}
+          ]
         }
       ]
     },

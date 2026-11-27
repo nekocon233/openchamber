@@ -825,7 +825,7 @@ export const createNativeAgentsRuntime = ({
     claude: { retire: (id: string) => { delegation?.retire(id); return claudeLive.closeSession(id); }, stop: stopConversationSource, delete: true, compact: true, rewind: true },
     codex: { retire: async (id: string) => { delegation?.retire(id); }, stop: stopConversationSource, delete: true, compact: true, rewind: true },
     deepseek: { retire: async (id: string) => { delegation?.retire(id); }, stop: (id: string) => deepseek.stop(id), delete: true, compact: true, rewind: true },
-    antigravity: { retire: (id: string) => { delegation?.retire(id); return antigravity.closeSession(id); }, stop: stopConversationSource, delete: false, compact: false, rewind: false },
+    antigravity: { retire: (id: string) => { delegation?.retire(id); return antigravity.closeSession(id); }, stop: stopConversationSource, delete: false, compact: true, rewind: false },
   } satisfies Record<NativeBackend, ConversationSourceLifecycle>;
 
   const native = {
@@ -920,7 +920,7 @@ export const createNativeAgentsRuntime = ({
             cli: agyCli !== null,
             blockedByEnterprise: false,
             tasks: { checklist: nodeCli !== null, background: true, output: true, stop: false },
-            actions: { revert: false, delete: false, fork: false, compact: false },
+            actions: { revert: false, delete: false, fork: false, compact: true },
           },
         },
         registry: registry.status(),
@@ -1002,7 +1002,7 @@ export const createNativeAgentsRuntime = ({
       await assertDelegationRoot(sessionId);
       const { backend } = decodeOwnSession(sessionId);
       assertSessionBackend(backend, request.model.providerID);
-      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('compaction');
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) return antigravity.compact(sessionId, request);
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
         await deepseek.executeCommand(sessionId, request.directory, request.instructions ? `/compact ${request.instructions}` : '/compact');
         return;

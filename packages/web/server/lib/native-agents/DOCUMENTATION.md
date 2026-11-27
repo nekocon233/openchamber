@@ -941,7 +941,9 @@ restored or deleted, and cannot be renamed, archived or deleted on its own
 composer picked. Claude Code gets `/compact` (with any summary instructions)
 as a prompt that shows no user message of its own; Codex runs
 `thread/compact/start`, which takes no instructions (`400`) and streams in as
-a turn of its own. A pending revert commits first, as for a prompt. Either
+a turn of its own. Antigravity resumes the active source for a dedicated
+`/compact` turn without summary instructions. A pending revert commits first
+on backends that support it. Either
 way the conversation shows a `compaction` message with explicit lifecycle and
 Claude's summary. IDs and legacy compaction parts remain stable. A successful
 compaction clears the measured window until the next response; a running or
@@ -1521,7 +1523,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 
 | Route | Answer |
 |---|---|
-| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli, tasks: { plan, todos } }, antigravity: { cli, actions: { revert: false, delete: false, fork: false, compact: false } } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
+| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli, tasks: { plan, todos } }, antigravity: { cli, actions: { revert: false, delete: false, fork: false, compact: true } } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
 | `GET /catalog` | Models per backend; Codex from `model/list`, reported per backend like listing |
 | `GET /sessions?directory=` | Root sessions per backend (see Listing) |
 | `GET /sessions/status?directory=` | Sessions with a running turn, as busy; every other session is idle |

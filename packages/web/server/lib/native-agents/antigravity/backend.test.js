@@ -108,6 +108,22 @@ describe('Antigravity CLI adapter', () => {
     expect((await backend.loadHistory(session.id, directory)).childSessions[0].metadata.openchamber.native.activityKnown).toBe(false);
   });
 
+  it('restores ordinary prompt handling after a compaction receipt cannot be saved', async () => {
+    const { backend, directory, registry, prompt } = await setup();
+    const session = await backend.createSession({ directory });
+    const receipt = vi.spyOn(registry, 'recordSend').mockRejectedValueOnce(new Error('Fixture receipt write failure'));
+    try {
+      await expect(backend.compact(session.id, {
+        directory, model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, agent: 'build',
+      })).rejects.toThrow('Fixture receipt write failure');
+      await prompt(session, 'mode-probe');
+      const reply = backend.liveRecords(session.id).at(-1).parts[0].text;
+      expect(JSON.parse(reply).slashCommands).toBe(false);
+    } finally {
+      receipt.mockRestore();
+    }
+  });
+
   it('lists skills in the requested directory without using the prompt wrapper or starting a conversation', async () => {
     const { backend, directory, home, resolveCommand } = await setup();
     expect(await backend.commands(directory)).toEqual({ commands: [{ name: 'fixture-skill', description: 'Fixture skill', argumentHint: '' }] });
@@ -839,7 +855,7 @@ describe('Antigravity CLI adapter', () => {
     expect(backend.busySessionIds(directory)).toEqual([]);
   });
 
-  it('rejects unknown agents, unsupported effort, another directory and image prompts', async () => {
+  it('rejects unknown agents, unsupported effort, another directory and malformed image prompts', async () => {
     const { backend, directory } = await setup();
     const session = await backend.createSession({ directory });
     await expect(backend.prompt(session.id, {
@@ -858,7 +874,7 @@ describe('Antigravity CLI adapter', () => {
     await expect(backend.prompt(session.id, {
       directory,
       messageID: `nag_u_${randomUUID()}`,
-      parts: [{ type: 'file', mime: 'image/png', url: 'data:image/png;base64,AA==' }],
+      parts: [{ type: 'file', mime: 'image/png', url: 'data:image/png;base64,!' }],
       model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' },
       agent: 'build',
     })).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });

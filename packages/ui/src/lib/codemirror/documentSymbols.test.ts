@@ -24,6 +24,8 @@ describe('readDocumentSymbols', () => {
             'const notAFunction = 3;',
             'class Baz {',
             '  method() {}',
+            '  count = 1;',
+            '  static get width() { return 1; }',
             '  static helper = () => 1;',
             '}',
             'interface Shape { a: string }',
@@ -35,10 +37,13 @@ describe('readDocumentSymbols', () => {
             ['bar', 'function', 2, 0],
             ['Baz', 'class', 4, 0],
             ['method', 'method', 5, 1],
-            ['helper', 'method', 6, 1],
-            ['Shape', 'class', 8, 0],
-            ['Alias', 'type', 9, 0],
-            ['Color', 'type', 10, 0],
+            ['count', 'field', 6, 1],
+            ['width', 'property', 7, 1],
+            ['helper', 'method', 8, 1],
+            ['Shape', 'interface', 10, 0],
+            ['a', 'property', 10, 1],
+            ['Alias', 'type', 11, 0],
+            ['Color', 'enum', 12, 0],
         ]);
     });
 
@@ -83,14 +88,15 @@ describe('readDocumentSymbols', () => {
         ].join('\n');
         expect(outline(doc, csharp())).toEqual([
             ['Demo.Core', 'module', 2, 0],
-            ['IUserService', 'class', 3, 1],
+            ['IUserService', 'interface', 3, 1],
             ['Save', 'method', 4, 2],
             ['UserDto', 'class', 6, 1],
             ['Point', 'class', 7, 1],
-            ['Role', 'type', 8, 1],
+            ['X', 'field', 7, 2],
+            ['Role', 'enum', 8, 1],
             ['Notify', 'type', 9, 1],
             ['UserService', 'class', 10, 1],
-            ['Title', 'method', 11, 2],
+            ['Title', 'property', 11, 2],
             ['UserService', 'method', 12, 2],
             ['Save', 'method', 13, 2],
         ]);
@@ -123,6 +129,13 @@ describe('readDocumentSymbols', () => {
         expect(docInfo.documentation).toContain('Saves a user record.');
         expect(docInfo.documentation).toContain('`id`: User identifier');
         expect(docInfo.documentation).toContain('Returns: True when saved');
+    });
+
+    test('separates C# declarations on a shared line when finding the caret scope', () => {
+        const doc = 'class C { void A() {} void B() {} }';
+        const state = EditorState.create({ doc, extensions: [csharp()] });
+        expect(enclosingSymbolsAtPosition(state, doc.indexOf('A')).map(({ name }) => name)).toEqual(['C', 'A']);
+        expect(enclosingSymbolsAtPosition(state, doc.indexOf('void B')).map(({ name }) => name)).toEqual(['C', 'B']);
     });
 
     test('lists Markdown headings indented by level', () => {

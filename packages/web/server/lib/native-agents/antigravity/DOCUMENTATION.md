@@ -18,8 +18,8 @@ Antigravity uses backend `antigravity`, provider `antigravity-native` and
 `nag_<conversation uuid>` session IDs. It supports independent native sessions,
 dynamic models, Build and Plan, streamed text and tools, native history, model and effort changes,
 interruption and archive. It participates in unified `ncv_` conversations through
-the parent conversation controller. Standalone revert, fork, manual compaction
-and native deletion remain unsupported. Native mid-turn question
+the parent conversation controller. It supports manual compaction. Standalone
+revert, fork and native deletion remain unsupported. Native mid-turn question
 replies, mid-turn steering, Small Model and terminal memory hooks are
 also unsupported. Server routes return `NATIVE_ANTIGRAVITY_UNSUPPORTED` or
 the corresponding unified unsupported-operation error; UI capabilities keep
@@ -208,10 +208,22 @@ two CLI calls. A cold direct prompt using an old slug with an explicit effort
 reads the catalog once before admission if discovery has not happened yet.
 Canonical ids and prompts without an explicit effort need no extra discovery.
 
-Output limits and non-text input are unknown and therefore not advertised. Images are
-refused before native input; text files and file references follow the shared
-prompt-parts conversion. Authentication failure is reported separately as
-`reason: 'unauthenticated'` in the native catalog partition.
+The catalog describes the CLI's text input. Inline PNG, JPEG, GIF and WebP
+attachments are saved in a private temporary folder on the CLI host. Existing
+image references use their paths. The prompt tells the agent how to open those
+paths with `read_file`. A failed write rejects the prompt and removes partial
+copies. Once delivery has been attempted, the host's temporary-file policy
+governs the copy so follow-up turns can still open the file. The original bytes identify a retry independently of the
+temporary path. Authentication failure is reported as `reason: 'unauthenticated'`
+in the native catalog partition.
+
+### Why manual compaction gets its own process
+
+OpenChamber closes the idle stream and resumes the same native conversation
+with slash commands enabled for the fixed `/compact` request. The CLI publishes
+the checkpoint through the existing turn stream. The send receipt marks it as
+manual when the transcript is loaded again. The compaction process closes at
+turn completion so the next Build prompt uses the usual launch flags.
 
 ### Why context pressure uses the saved generation
 

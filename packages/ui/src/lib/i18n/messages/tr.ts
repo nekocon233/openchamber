@@ -65,6 +65,7 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
 import { markdownOutlineI18n } from './markdown-outline.i18n';
+import { fileSymbolsI18n } from './file-symbols.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -356,6 +357,7 @@ export const dict = {
   ...unifiedConversationsI18n['tr'],
   ...diffFindI18n['tr'],
   ...markdownOutlineI18n['tr'],
+  ...fileSymbolsI18n['tr'],
   ...markdownGithubI18n['tr'],
   ...autocompleteScopeI18n['tr'],
   ...workflowsI18n['tr'],
@@ -2832,7 +2834,6 @@ export const dict = {
   'chat.chatInput.toast.attachNamedFailed': '{name} eklenemedi',
   'chat.chatInput.toast.unsupportedAttachmentModalities': '{model}, {files} için gereken {modalities} girişini desteklemiyor. Mesajı yine de gönderebilirsiniz ancak bu ekler yok sayılabilir.',
   'chat.chatInput.toast.imagesSaving': '{files} kaydediliyor…',
-  'chat.chatInput.toast.imagesSavedForTextModel': '{model} görselleri okuyamıyor. {files}, {folder} klasörüne kaydedildi.',
   'chat.chatInput.toast.imagesSentAsPathsForTextModel': '{model} görsel okuyamıyor. Mesaj, {files} için ona bir dosya yolu verecek.',
   'chat.chatInput.toast.textModelImageSaveFailed': '{files}, görsel okuyamayan bir model için dosya olarak kaydedilemedi. Mesaj gönderilmedi.',
   'chat.chatInput.toast.imageSaveFailed': '{files} kaydedilemedi. Bunun yerine eklendi.',

@@ -359,7 +359,7 @@ export const projectAntigravityHistory = ({
         sessionID: sessionId,
         created: time,
         status: incomplete ? 'failed' : 'completed',
-        auto: true,
+        auto: !parentSend?.antigravity?.manualCompaction,
         error: incomplete ? unknownError(entry.error || 'Antigravity compaction completion was not recorded') : null,
       });
       info.summary = entry.content ?? '';
@@ -370,7 +370,7 @@ export const projectAntigravityHistory = ({
           id: partId(nativeId, entry.step_index, 'compaction'),
           sessionID: sessionId,
           messageID: info.id,
-          auto: true,
+          auto: !parentSend?.antigravity?.manualCompaction,
         })],
       });
       continue;

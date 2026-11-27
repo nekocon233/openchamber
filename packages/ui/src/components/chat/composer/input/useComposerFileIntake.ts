@@ -55,8 +55,6 @@ export function useComposerFileIntake({
 
     const imageSaveMode = imageSaveModeForModel(savePastedImagesAsFiles, currentModelMetadata?.modalities?.input);
 
-    const currentModelName = currentModelMetadata?.name ?? currentModelId ?? '';
-
     const currentModelKey = `${currentProviderId ?? ''}/${currentModelId ?? ''}`;
 
     const saveImagesWithPathCitation = React.useCallback(async (
@@ -98,17 +96,11 @@ export function useComposerFileIntake({
 
         if (saved.length > 0) {
             insertCitationAtSelection(buildImagePathCitationText(saved), leadingText);
-            const firstPath = saved[0].path.replace(/\\/g, '/');
-            const savedFiles = saved.map((result) => result.filename).join(', ');
-            const folder = firstPath.slice(0, firstPath.lastIndexOf('/'));
             if (mode === 'alongside') {
+                const firstPath = saved[0].path.replace(/\\/g, '/');
+                const savedFiles = saved.map((result) => result.filename).join(', ');
+                const folder = firstPath.slice(0, firstPath.lastIndexOf('/'));
                 toast.info(t('chat.chatInput.toast.imagesSaved', { files: savedFiles, folder }), { id: `images-saved:${currentModelKey}` });
-            } else {
-                toast.info(t('chat.chatInput.toast.imagesSavedForTextModel', {
-                    model: currentModelName,
-                    files: savedFiles,
-                    folder,
-                }), unsaved.length > 0 ? undefined : { id: `attachment-modalities:${currentModelKey}` });
             }
         }
         if (unsaved.length > 0) {
@@ -122,7 +114,7 @@ export function useComposerFileIntake({
             attachable: images.filter((_file, index) => isSaved(index) && !prepared[index]?.linkOnly),
             unsaved,
         };
-    }, [currentDirectory, currentModelKey, currentModelName, insertCitationAtSelection, t, composerText, composerRef]);
+    }, [currentDirectory, currentModelKey, insertCitationAtSelection, t, composerText, composerRef]);
 
     const renameCitation = React.useCallback((from: string, to: string) => {
         const editor = composerRef.current;
