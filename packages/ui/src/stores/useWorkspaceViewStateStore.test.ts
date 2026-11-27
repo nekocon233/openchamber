@@ -20,10 +20,11 @@ afterAll(() => {
 
 test('each project and runtime retains its own columns without notifying an unchanged selection', () => {
   const a = owner('host-a', '/a'); const b = owner('host-a', '/b');
-  views.getState().update('pullRequest', a, previous => ({ ...previous, people: 'mine', query: 'fix' }));
+  views.getState().update('pullRequest', a, previous => ({ ...previous, people: 'mine', allState: 'closed', query: 'fix' }));
   const selection = read(views.getState(), 'pullRequest', a);
   views.getState().update('pullRequest', b, previous => ({ ...previous, people: 'any' }));
   expect(read(views.getState(), 'pullRequest', a)).toBe(selection);
+  expect(read(views.getState(), 'pullRequest', b).allState).toBe('open');
   expect(read(views.getState(), 'pullRequest', owner('host-b', '/a')).people).toBe('mine');
   expect(workspaceViewKey('host-a', '/a/')).toBe(a);
 });
@@ -35,7 +36,7 @@ test('columns, opened entries and unfinished text round trip through page hide a
   drafts.getState().write(a, 'Unfinished reply', '');
   dom.dispatchEvent(new dom.Event('pagehide'));
   await views.persist.rehydrate(); await drafts.persist.rehydrate();
-  expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ people: 'mine', query: 'fix' });
+  expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ people: 'mine', allState: 'closed', query: 'fix' });
   expect(read(views.getState(), 'ci', a)).toEqual({ filter: 'failure', query: 'lint', selectedRunId: '9001', loadedCount: 30 });
   expect(read(views.getState(), 'knowledge', a)).toMatchObject({ tab: 'plans', query: 'design', entry: { section: 'plans', id: 'p1' } });
   expect(drafts.getState().drafts[a]?.value).toBe('Unfinished reply');
@@ -67,7 +68,7 @@ test('retired branch tabs, split people categories, and Changes returns restore 
     pullRequest: {
       [a]: { tab: 'branch', people: 'created', query: 'retained query', selectedUrl: returnTo.url },
       [b]: { tab: 'ci', people: 'any' },
-      [c]: { people: 'reviewRequested' },
+      [c]: { people: 'reviewRequested', allState: 'merged' },
     },
     ci: { [a]: { filter: 'branch', query: 'build' } },
     changes: {
@@ -77,8 +78,8 @@ test('retired branch tabs, split people categories, and Changes returns restore 
   } }, version: 0 }));
   await views.persist.rehydrate();
   expect(read(views.getState(), 'pullRequest', a)).toMatchObject({ people: 'mine', query: 'retained query', selectedUrl: returnTo.url });
-  expect(read(views.getState(), 'pullRequest', b)).toMatchObject({ people: 'any' });
-  expect(read(views.getState(), 'pullRequest', c)).toMatchObject({ people: 'mine' });
+  expect(read(views.getState(), 'pullRequest', b)).toMatchObject({ people: 'any', allState: 'open' });
+  expect(read(views.getState(), 'pullRequest', c)).toMatchObject({ people: 'mine', allState: 'open' });
   expect(read(views.getState(), 'ci', a)).toMatchObject({ filter: 'branch', query: 'build' });
   expect(read(views.getState(), 'changes', a)).toMatchObject({ pullRequest: source, returnTo: { ...returnTo, tab: 'project' } });
   expect(read(views.getState(), 'changes', b).returnTo?.showList).toBe(true);

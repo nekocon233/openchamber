@@ -43,7 +43,7 @@ import {
     fetchAcrossPage,
     ensurePullStatuses,
     groupPullsByDirectory,
-    isOpenPull,
+    needsPullStatus,
     partitionAcrossContexts,
     pullStatusKey,
     type AcrossContexts,
@@ -463,6 +463,7 @@ const pullStatusScope = (group: Pick<PullStatusGroup, 'context' | 'directory'>):
 function usePullStatusGroups(
     groups: readonly PullStatusGroup[],
     fallback?: Pick<PullStatusGroup, 'context' | 'directory'> | null,
+    includeClosed = false,
 ) {
     const { sourceControl } = useRuntimeAPIs();
     const keys = React.useMemo(
@@ -507,14 +508,14 @@ function usePullStatusGroups(
     }, [groups, hasIdleStatuses, revalidation, sourceControl]);
 
     return React.useCallback((reference: RepositoryReference, directory: string | null): AskedPullStatus => {
-        if (!isOpenPull(reference)) return { value: IDLE, read: null };
+        if (!needsPullStatus(reference, includeClosed)) return { value: IDLE, read: null };
         const group = groups.find((candidate) => candidate.directory === directory)
             ?? (fallback && fallback.directory === directory ? fallback : undefined);
         if (!group) return { value: IDLE, read: null };
         const key = pullStatusKey(pullStatusScope(group), reference);
         // An opened preview may outlive the page that contained its PR.
         return { value: statuses.get(key) ?? repositoryPullStatuses.read(key) ?? IDLE, read: repositoryPullStatuses.readOf(key) };
-    }, [fallback, groups, statuses]);
+    }, [fallback, groups, includeClosed, statuses]);
 }
 
 type AskedPullStatus = { value: CachedValue<ChangeRequestListStatus | null>; read: ReadStamp | null };
@@ -524,20 +525,24 @@ const newerStatus = (asked: AskedPullStatus, live: LivePullStatus | null): Cache
     return { status: 'ready', value: live.status };
 };
 
-export function useRepositoryPullStatuses(directory: string | null, references: readonly RepositoryReference[], matchHead = false) {
+export function useRepositoryPullStatuses(
+    directory: string | null,
+    references: readonly RepositoryReference[],
+    { includeClosed = false, matchHead = false }: { includeClosed?: boolean; matchHead?: boolean } = {},
+) {
     const context = useRepositoryReadContext(directory);
     const readable = useReferenceReadContext(context, references.some((reference) => reference.linked));
     const listed = useSourceControlProvider(readable?.provider).features.listStatuses;
     const asked = listed ? readable : null;
     const groups = React.useMemo(
-        () => (asked && directory ? groupPullsByDirectory(references.map((reference) => ({ reference, directory })), [{ directory, context: asked }]) : []),
-        [asked, directory, references],
+        () => (asked && directory ? groupPullsByDirectory(references.map((reference) => ({ reference, directory })), [{ directory, context: asked }], includeClosed) : []),
+        [asked, directory, includeClosed, references],
     );
     const fallback = React.useMemo(
         () => (asked && directory ? { directory, context: asked } : null),
         [asked, directory],
     );
-    const askedOf = usePullStatusGroups(groups, fallback);
+    const askedOf = usePullStatusGroups(groups, fallback, includeClosed);
     const pulls = React.useMemo(() => references.map((reference) => ({ reference, context: readable })), [readable, references]);
     const liveOf = useLivePullStatuses(pulls);
     return React.useCallback((reference: RepositoryReference): CachedValue<ChangeRequestListStatus | null> => {

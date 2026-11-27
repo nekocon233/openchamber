@@ -11,7 +11,7 @@ import { useSourceControlProvider, useSourceControlProviderRegistry } from '@/li
 import { useTrackedItems } from '@/lib/trackedItems/interest';
 import type { TrackedItem } from '@/lib/trackedItems/model';
 
-import { isOpenPull, itemDirectory, leftOutFolders, type AcrossReference } from './acrossRepositories';
+import { itemDirectory, leftOutFolders, type AcrossReference } from './acrossRepositories';
 import { recordLabelWrite } from './labelWrites';
 import type { CachedValue } from './referenceCache';
 import {
@@ -108,6 +108,7 @@ export function useReferenceBrowser({
         priority: trackerDescriptor.capabilities.filters.priority ? rememberedFilter.priority : DEFAULT_TRACKER_FILTER.priority,
     }), [rememberedFilter, trackerDescriptor]);
     const stateOwner = projectPulls ? projectPullsState?.owner ?? null : null;
+    const [projectAllState, setProjectAllState] = useWorkspaceViewState('pullRequest', stateOwner, 'allState');
     const [query, setQueryState] = useWorkspaceViewState('pullRequest', stateOwner, 'query');
     const [selectionUrl, setSelectionUrl] = useWorkspaceViewState('pullRequest', stateOwner, 'selectedUrl');
     const [loadedCount, setLoadedCount] = useWorkspaceViewState('pullRequest', stateOwner, 'loadedCount');
@@ -131,9 +132,9 @@ export function useReferenceBrowser({
         : lastRepositoryFilter.get(repositoryKind) ?? DEFAULT_REPOSITORY_FILTER;
     const repositoryFilter = React.useMemo<RepositoryReferenceFilter>(
         () => projectPulls
-            ? { state: 'open', people: projectPeople, labels: [] }
+            ? { state: projectPeople === 'any' ? projectAllState : 'open', people: projectPeople, labels: [] }
             : normalizedRepositoryFilter(effectiveRepositoryFilter, repositoryKind),
-        [effectiveRepositoryFilter, projectPeople, projectPulls, repositoryKind],
+        [effectiveRepositoryFilter, projectAllState, projectPeople, projectPulls, repositoryKind],
     );
     const filterMemory = useRepositoryFilterMemory(
         source === 'repository' && !projectPulls && !across && directory !== null,
@@ -205,14 +206,15 @@ export function useReferenceBrowser({
     });
     const candidateList = source === 'repository' ? (across ? acrossList : repositoryList) : trackerList;
     useTrackedItems(onScreen ? candidateList.followed : NO_FOLLOWED);
+    const includeClosedProjectPulls = projectPulls && repositoryFilter.state === 'closed';
     const repositoryItems = React.useMemo(() => projectPulls
-        ? repositoryList.items.filter(isOpenPull)
-        : repositoryList.items, [projectPulls, repositoryList.items]);
+        ? repositoryList.items.filter(item => item.kind === 'pull' && (includeClosedProjectPulls ? item.state !== 'open' : item.state === 'open'))
+        : repositoryList.items, [includeClosedProjectPulls, projectPulls, repositoryList.items]);
     const filterByPullStatus = projectPulls && projectPeople === 'mine' && descriptor.features.listStatuses;
     const singlePullStatusOf = useRepositoryPullStatuses(
         across ? null : directory,
         active && source === 'repository' && !across ? repositoryItems : NO_REFERENCES,
-        filterByPullStatus,
+        { includeClosed: includeClosedProjectPulls, matchHead: filterByPullStatus },
     );
     const acrossPullStatusOf = useRepositoryPullStatusesAcross(acrossList.contexts, source === 'repository' && across ? acrossList.items : NO_ACROSS_ITEMS);
     const pullStatusOf = (reference: RepositoryReference, itemFolder?: string): CachedValue<ChangeRequestListStatus | null> => (
@@ -298,9 +300,12 @@ export function useReferenceBrowser({
     };
     const selectRepositoryFilter = (patch: Partial<RepositoryReferenceFilter>) => {
         if (projectPulls) {
-            const people = patch.people;
+            const people = patch.people ?? projectPeople;
             if (people !== 'mine' && people !== 'any') return;
-            setProjectPeople(people);
+            const state = people === 'any' && (patch.state === 'open' || patch.state === 'closed') ? patch.state : projectAllState;
+            if (people === projectPeople && state === projectAllState) return;
+            if (people !== projectPeople) setProjectPeople(people);
+            if (state !== projectAllState) setProjectAllState(state);
             setLoadedCount(0);
             setHighlightedKey(null);
             return;
@@ -380,7 +385,7 @@ export function useReferenceBrowser({
     };
 
     return {
-        mode, selectionUrl, loadedCount, setLoadedCount,
+        mode, selectionUrl, loadedCount, setLoadedCount, projectAllState,
         source,
         directory,
         across,

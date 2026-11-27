@@ -27,6 +27,7 @@ const schemas = {
       (value) => (value === 'reviewRequested' || value === 'created' ? 'mine' : value),
       z.enum(['mine', 'any']).catch('mine'),
     ),
+    allState: z.enum(['open', 'closed']).catch('open'),
     query: text,
     selectedUrl: nullableText,
     loadedCount: z.number().int().nonnegative().catch(0),

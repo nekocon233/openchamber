@@ -507,7 +507,9 @@ export const ReferenceBrowserList: React.FC<{
         </div>
     );
     const emptyText = () => {
-        if (debouncedQuery.trim() || (projectPulls && browser.repositoryFilter.people === 'mine')) return t('references.picker.empty.search');
+        if (debouncedQuery.trim() || (projectPulls && (browser.repositoryFilter.people === 'mine' || browser.repositoryFilter.state === 'closed'))) {
+            return t('references.picker.empty.search');
+        }
         if (tracker) return t('references.picker.empty.tracker');
         if (repositoryKind === 'issue') return t('references.picker.empty.issues');
         if (repositoryKind === 'discussion') return t('references.picker.empty.discussions');

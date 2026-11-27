@@ -191,14 +191,14 @@ the diff. The Details button sits after the title in reading order and opens
 the preview. For providers without a diff, the title opens the preview directly.
 Reference pickers use listbox options for their selection model.
 
-- The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. Both
-  Mine and All request open PRs and exclude terminal matches before rendering
-  rows or reading checks. The filter also applies to number and URL lookups
-  and advanced searches.
+- The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. Mine
+  requests open PRs. All offers Open by default and Closed, which includes
+  merged PRs. The active state bounds rows and status reads, including
+  number and URL lookups and advanced searches.
   The saved project category is restored, defaulting to Mine, and
   legacy saved `reviewRequested` or `created` selections migrate to Mine.
   The panel validates Mine and All separately from the picker and board. It
-  does not preload issues or expose their state filter. It requests
+  does not preload issues. It requests
   `scope=repository`. Existing callers keep `network`. Scope joins the list cache key. A hidden panel reads
   its cached list without fetching or revalidating; an explicit selection
   opens details, so the first row does not fetch a preview by itself. The
@@ -223,9 +223,10 @@ Reference pickers use listbox options for their selection model.
   Mine requires passing checks and confirmed mergeability without conflicts.
   Loaded candidates stay subscribed to status updates even when filtered out.
   Mine waits for the loaded candidates' status reads before paging. A failed
-  status read shows Retry alongside any confirmed matches. All shows open PRs
-  as soon as the page arrives. Its rows distinguish queued checks, failed
-  reads, unavailable results and an empty check list.
+  status read shows Retry alongside any confirmed matches. All shows matching
+  rows as soon as the page arrives and reads checks in batches for either
+  state. Status cache keys include the PR state so a closed result cannot
+  supply mergeability when a PR reopens at the same head.
 - A confirmed GitHub merge conflict is named in the project list and PR
   preview. Failed checks, a required review and unknown mergeability do not
   imply a conflict. A directly opened PR reads its own status even when it is
@@ -235,8 +236,8 @@ Reference pickers use listbox options for their selection model.
   request updates that snapshot without fetching again. A failed batch stays
   failed until a list refresh, revalidation or return retries it; successful
   batches remain cached.
-- The unfiltered All list uses GitHub's repository connection to page through
-  the open PRs. Searches use the existing
+- All uses GitHub's repository connection to page through the selected state
+  when the query is empty. Searches use the existing
   search API. Lists retain the returned total so the panel can explain its
   1,000-result search limit and ask for a narrower search. A query cannot expand
   the repository scope, and a PR number never resolves to an issue in this mode.
@@ -334,11 +335,12 @@ Tracker then show one state for the same PR.
 ## PR window restoration
 
 The PR tool passes a workspace/account-bound state owner to `useReferenceBrowser`.
-Its project category remains independent of picker and board filters. The query,
-selected URL and loaded depth survive reloads; a selected URL is resolved afresh
-before its preview can act. A new selection supersedes an older lookup, and
-returning from Changes can select an item absent from the list. Category and
-query changes reset list positioning; revisiting or restarting restores it.
+Its project category remains independent of picker and board filters. All's
+state, query, selected URL and loaded depth belong to the workspace binding.
+A selected URL is resolved afresh before its preview can act. A new selection
+supersedes an older lookup, and returning from Changes can select an item absent
+from the list. Category, status and query changes reset list positioning.
+Revisiting or restarting restores the current position.
 PR preview scopes retain discussion expansion, unfinished thread replies,
 ordinary replies and check-dialog visibility. Reply text is acknowledged only
 after the provider confirms the corresponding write.

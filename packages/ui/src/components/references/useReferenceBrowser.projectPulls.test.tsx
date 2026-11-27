@@ -57,7 +57,10 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
       if (query === 'old') await new Promise<void>((resolve) => { releaseOld = resolve; });
       const owner = url.searchParams.get('scope') === 'network' ? 'upstream' : 'acme';
       const otherPullNumber = owner === 'acme' && url.searchParams.get('people') === 'any' ? 4 : 2;
-      const page = url.searchParams.has('cursor')
+      const nextPage = url.searchParams.has('cursor');
+      const page = url.searchParams.get('state') === 'closed'
+        ? (nextPage ? [pull(6, owner, 'closed')] : [pull(4, owner, 'closed'), pull(5, owner, 'merged')])
+        : nextPage
         ? [pull(3, owner)]
         : [{ ...pull(1, owner), title: verdictApplied ? 'PR after review' : 'PR 1' }, pull(otherPullNumber, owner)];
       const items = query === 'terminal' ? [pull(92, owner, 'merged'), pull(93, owner, 'closed')]
@@ -131,6 +134,8 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
   const listRequests = () => requests.filter((url) => url.pathname.endsWith('/references') && url.searchParams.get('scope') === 'repository');
   const numbers = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.number] : []);
   const states = () => current().items.flatMap((item) => item.source === 'repository' ? [item.reference.state] : []);
+  const statusRequestsFor = (number: number) => requests.filter(url => url.pathname.endsWith('/references/status')
+    && url.searchParams.get('pulls')?.split(',').includes(`acme/app#${number}`));
   const followPassingChecks = (number: number, headSha: string, fetchedAt: number) => {
     const item = { provider: 'github', instance: 'github.com', accountId: ACCOUNT_ID, kind: 'pull', owner: 'acme', repo: 'app', number } as const;
     useTrackedItemsStore.getState().apply(getRuntimeKey(), [{ key: trackedItemKey(item), record: {
@@ -219,17 +224,32 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(numbers()).not.toContain(500);
     await act(async () => current().closeMobilePreview());
 
-    await act(async () => current().selectRepositoryFilter({ state: 'closed', people: 'any' }));
+    await act(async () => current().selectRepositoryFilter({ people: 'any' }));
     expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
     await until(() => numbers().includes(4));
     expect(states()).toEqual(['open', 'open']);
     await act(async () => current().list.loadMore());
     await until(() => !current().list.hasMore && current().items.length === 3);
     expect(states()).toEqual(['open', 'open', 'open']);
+    await until(() => current().pullStatusOf(pull(4)).status === 'ready');
+    const openStatusReads = statusRequestsFor(4).length;
+
+    await act(async () => current().selectRepositoryFilter({ state: 'closed' }));
+    expect(current().repositoryFilter).toEqual({ state: 'closed', people: 'any', labels: [] });
+    await until(() => numbers().includes(5));
+    expect(states()).toEqual(['closed', 'merged']);
+    await until(() => current().pullStatusOf(pull(4, 'acme', 'closed')).status === 'ready');
+    expect(statusRequestsFor(4)).toHaveLength(openStatusReads + 1);
+    await act(async () => current().list.loadMore());
+    await until(() => numbers().includes(6));
+    expect(states()).toEqual(['closed', 'merged', 'closed']);
+    expect(listRequests().filter(url => url.searchParams.get('state') === 'closed')
+      .map(url => [url.searchParams.get('people'), url.searchParams.get('cursor')])).toEqual([['any', null], ['any', 'next']]);
     await act(async () => current().selectRepositoryFilter({ people: 'assigned' }));
     expect(current().repositoryFilter.people).toBe('any');
     await act(async () => current().selectRepositoryFilter({ people: 'mine' }));
     expect(current().repositoryFilter).toEqual({ state: 'open', people: 'mine', labels: [] });
+    expect(current().projectAllState).toBe('closed');
     await until(() => numbers().includes(2) && !numbers().includes(4));
     await act(async () => current().selectRepositoryKind('issue'));
     expect(current().repositoryKind).toBe('pull');
@@ -247,12 +267,17 @@ test('project PR browsing isolates filters, pagination and late reads and pauses
     expect(current().items).toEqual([]);
     expect(requests.filter(url => url.pathname.endsWith('/references/status')).some(url => /#9[23]/.test(url.searchParams.get('pulls') ?? ''))).toBe(false);
 
-    await act(async () => current().selectRepositoryFilter({ people: 'any', state: 'merged' }));
+    await act(async () => current().selectRepositoryFilter({ people: 'any' }));
+    expect(current().repositoryFilter.state).toBe('closed');
+    await until(() => numbers().includes(92));
+    expect(states()).toEqual(['merged', 'closed']);
+
+    await act(async () => current().selectRepositoryFilter({ state: 'open' }));
     expect(current().repositoryFilter).toEqual({ state: 'open', people: 'any', labels: [] });
     await until(() => current().list.items.some(item => 'number' in item && item.number === 92));
     expect(current().items).toEqual([]);
-    expect(requests.filter(url => url.pathname.endsWith('/references/status')).some(url => /#9[23]/.test(url.searchParams.get('pulls') ?? ''))).toBe(false);
-    expect(listRequests().every(url => url.searchParams.get('state') === 'open')).toBe(true);
+    expect(listRequests().filter(url => url.searchParams.get('people') === 'mine')
+      .every(url => url.searchParams.get('state') === 'open')).toBe(true);
 
     await act(async () => current().setQuery('old'));
     await until(() => releaseOld !== undefined);

@@ -11,6 +11,8 @@ import { useOpenSourceBoardPull } from '@/components/sourceBoard/useOpenSourceBo
 import { useBoardRevalidation } from '@/components/sourceBoard/useBoardRevalidation';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { useOpenSourceControlSettings } from '@/hooks/useOpenSourceControlSettings';
@@ -18,10 +20,12 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
+import { useWidthMorph } from '@/lib/motion/useSizeMorph';
 import { captureRuntimeInstance, getRuntimeKey } from '@/lib/runtime-switch';
 import { hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import { useChangeRequestDiffServing } from '@/lib/source-control/providers/registry';
 import { formatChangeRequestLabel } from '@/lib/source-control/providers/terminology';
+import { cn } from '@/lib/utils';
 import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { PullRequestDetail } from './PullRequestDetail';
 import { useWorkspaceScroll } from '@/hooks/useWorkspaceViewState';
@@ -100,13 +104,17 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [active, closeMobilePreview, context, openItem, returning]);
   const scrollRef = React.useRef<HTMLElement>(null);
+  const stateTriggerRef = React.useRef<HTMLButtonElement>(null);
+  useWidthMorph(stateTriggerRef);
+  const stateValueId = React.useId();
   const scrollTop = React.useRef(0);
   const listVisibleRef = React.useRef(false);
   const preview = browser.previewItem;
   const selectedPull = !restoring && preview?.source === 'repository' && preview.reference.kind === 'pull' ? preview.reference : null;
   const showingDetail = selectedPull !== null;
   const showingList = active && !showingDetail && !restoring;
-  const depthIdentity = JSON.stringify([browser.repositoryFilter.people, browser.query]);
+  const { people, state } = browser.repositoryFilter;
+  const depthIdentity = JSON.stringify([stateOwner, people, state, browser.query]);
   const savedDepth = React.useRef({ identity: depthIdentity, count: browser.loadedCount });
   if (savedDepth.current.identity !== depthIdentity) savedDepth.current = { identity: depthIdentity, count: browser.loadedCount };
   React.useEffect(() => {
@@ -114,7 +122,7 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     if (browser.list.items.length < savedDepth.current.count && browser.list.hasMore && !browser.list.error) browser.list.loadMore();
     if (browser.list.items.length > browser.loadedCount) browser.setLoadedCount(browser.list.items.length);
   }, [browser, showingList]);
-  const searching = Boolean(browser.debouncedQuery.trim()) || browser.repositoryFilter.people !== 'any';
+  const searching = Boolean(browser.debouncedQuery.trim()) || people !== 'any';
   useBoardRevalidation(active);
 
   React.useLayoutEffect(() => {
@@ -123,9 +131,23 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
     // Hidden Activity boundaries disconnect effects before the list can report a hidden scroll offset.
     return () => { listVisibleRef.current = false; };
   }, [showingList]);
-  useWorkspaceScroll(scrollRef, stateOwner ? JSON.stringify([stateOwner, 'list', browser.repositoryFilter.people, browser.query]) : null,
+  const scrollOwnerFor = (people: typeof browser.repositoryFilter.people, state: typeof browser.repositoryFilter.state) => {
+    if (!stateOwner) return null;
+    const scope = [stateOwner, 'list', people, browser.query];
+    if (state === 'closed') scope.push(state);
+    return JSON.stringify(scope);
+  };
+  useWorkspaceScroll(scrollRef, scrollOwnerFor(people, state),
     showingList && browser.list.status === 'ready' && (browser.list.items.length >= savedDepth.current.count || !browser.list.hasMore), showingList);
 
+  const selectListFilter = (nextPeople: 'mine' | 'any', nextState: typeof browser.projectAllState) => {
+    if (nextPeople === people && nextState === state) return;
+    const scrollOwner = scrollOwnerFor(nextPeople, nextState);
+    if (scrollOwner) useWorkspaceViewStateStore.getState().update('scroll', scrollOwner, () => WORKSPACE_VIEW_DEFAULTS.scroll);
+    browser.selectRepositoryFilter({ people: nextPeople, state: nextState });
+    scrollTop.current = 0;
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  };
   const rememberScroll = () => { scrollTop.current = scrollRef.current?.scrollTop ?? 0; };
   const openRow = (item: ReferencePickerItem) => {
     rememberScroll();
@@ -188,30 +210,54 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
               { id: 'mine', label: t('references.projectPulls.group.mine') },
               { id: 'any', label: t('references.projectPulls.group.all') },
             ]}
-            activeId={browser.repositoryFilter.people}
+            activeId={people}
             onSelect={id => {
-              if ((id !== 'mine' && id !== 'any') || id === browser.repositoryFilter.people) return;
-              if (stateOwner) useWorkspaceViewStateStore.getState().update('scroll', JSON.stringify([stateOwner, 'list', id, browser.query]), () => WORKSPACE_VIEW_DEFAULTS.scroll);
-              browser.selectRepositoryFilter({ people: id });
-              scrollTop.current = 0;
-              if (scrollRef.current) scrollRef.current.scrollTop = 0;
+              if (id === 'mine' || id === 'any') selectListFilter(id, id === 'mine' ? 'open' : browser.projectAllState);
             }}
             variant="active-pill"
             layoutMode="fit"
             intrinsicWidth
           />
         </div>
-        <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2">
-          <ReferenceBrowserSearch browser={browser} onKeyDown={(event) => {
-            if (isIMECompositionEvent(event) || browser.handleNavigationKey(event)) return;
-            if (event.key === 'Enter' && browser.highlightedItem) {
-              event.preventDefault();
-              openRow(browser.highlightedItem);
-            }
-          }} />
-          <Button size="sm" variant="ghost" disabled={refreshingFromHost || !context || context === 'missing'} onClick={() => void refreshFromHost()} aria-label={t('gitView.pr.actions.refresh')} title={t('gitView.pr.actions.refresh')}>
-            <Icon name="refresh" className={`size-4${refreshingFromHost || browser.list.refreshing ? ' animate-spin' : ''}`} />
-          </Button>
+        <div className="shrink-0 border-b border-border/60 px-4 py-2">
+          <ReferenceBrowserSearch
+            browser={browser}
+            onKeyDown={(event) => {
+              if (isIMECompositionEvent(event) || browser.handleNavigationKey(event)) return;
+              if (event.key === 'Enter' && browser.highlightedItem) {
+                event.preventDefault();
+                openRow(browser.highlightedItem);
+              }
+            }}
+            trailing={<>
+              {people === 'any' ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    ref={stateTriggerRef}
+                    className={cn(dropdownTriggerVariants({ size: isMobile ? 'touch' : 'default' }), 'max-w-36 shrink-0')}
+                    aria-label={t('references.picker.filter.group.status')}
+                    aria-describedby={stateValueId}
+                  >
+                    <span id={stateValueId} className="truncate">
+                      {t(browser.projectAllState === 'closed' ? 'references.picker.state.closed' : 'references.picker.state.open')}
+                    </span>
+                    <Icon name="arrow-down-s" className="size-4 opacity-50" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup value={browser.projectAllState} onValueChange={value => {
+                      if (value === 'open' || value === 'closed') selectListFilter('any', value);
+                    }}>
+                      <DropdownMenuRadioItem value="open" closeOnClick>{t('references.picker.state.open')}</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="closed" closeOnClick>{t('references.picker.state.closed')}</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+              <Button size="sm" variant="ghost" disabled={refreshingFromHost || !context || context === 'missing'} onClick={() => void refreshFromHost()} aria-label={t('gitView.pr.actions.refresh')} title={t('gitView.pr.actions.refresh')}>
+                <Icon name="refresh" className={`size-4${refreshingFromHost || browser.list.refreshing ? ' animate-spin' : ''}`} />
+              </Button>
+            </>}
+          />
         </div>
         {searching && (browser.list.total ?? 0) > 1_000 ? (
           <p className="px-4 py-2 typography-meta text-muted-foreground">{t('gitView.pullRequest.searchLimit', { count: 1_000 })}</p>

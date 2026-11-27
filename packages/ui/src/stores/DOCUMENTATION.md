@@ -348,8 +348,8 @@ replaying that request. `useWorkspaceViewState` subscribes to individual fields,
 uses shared defaults for absent owners, and leaves unrelated records stable.
 
 PR column preferences belong to the runtime and registered project; worktrees
-share those columns. PR lists and details also name the workspace and current
-repository/account/binding authority. Changes identifies its checked-out branch,
+share those columns. The All status filter, list and detail snapshots name the
+workspace and current repository/account/binding authority. Changes identifies its checked-out branch,
 comparison source and, for turn diffs, the conversation. Knowledge uses the same
 project reference and context ID as its server data. Existing zone geometry and
 global display preferences stay in `useUIStore`; per-file diff layouts now round
