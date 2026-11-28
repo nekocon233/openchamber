@@ -186,6 +186,120 @@ describe('native compaction handoff boundaries', () => {
 });
 
 
+describe('first Antigravity side question', () => {
+  const model = { providerID: 'antigravity-native', modelID: 'gemini-test' };
+  const request = (overrides = {}) => ({
+    manifest: {
+      directory: '/fixture', active: null, segments: [], historyRevision: 0,
+      metadata: { openchamber: { kind: 'btw' } },
+    },
+    entries: [
+      { record: { info: { id: 'earlier', role: 'user' }, parts: [{ type: 'text', text: 'Original user request' }] } },
+      { record: { info: { id: 'tool', role: 'assistant' }, parts: [{
+        type: 'tool', tool: 'read', state: {
+          status: 'completed', title: 'Read fixture', input: { path: 'notes.txt' },
+          output: `Start of older output\n${'x'.repeat(1_100_000)}\nMiddle of older output\n${'x'.repeat(1_100_000)}\nEnd of older output`,
+        },
+      }] } },
+      { record: { info: { id: 'recent', role: 'user' }, parts: [{ type: 'text', text: 'Recent user request' }] } },
+      { record: { info: {
+        id: 'answer', role: 'assistant', time: { completed: 1 }, ...model, variant: 'high',
+        contextWindow: 1_000_000, metadata: { nativeContextSource: 'provider' },
+      }, parts: [
+        { type: 'text', text: 'Recent answer' },
+        { type: 'tool', tool: 'bash', state: { status: 'completed', input: {}, output: 'Complete recent result' } },
+      ] } },
+    ],
+    target: { model, variant: 'high' },
+    catalog: { models: [{ id: model.modelID, contextWindow: null }] },
+    signal: new AbortController().signal,
+    smallModels: async () => ({ describeSmallModel: async () => null }),
+    saveCheckpoint: async () => {},
+    ...overrides,
+  });
+
+  it.each(['gemini-test', 'gemini-test-high'])('fits long inherited history measured on %s', async (sourceModelID) => {
+    const input = request({ smallModels: async () => { throw new Error('This side question needs no utility model'); } });
+    input.entries[3].record.info.modelID = sourceModelID;
+    input.catalog.models[0].aliases = [{ id: 'gemini-test-high' }];
+    const context = await prepareConversationContext(input);
+    expect(context).toContain('Original user request');
+    expect(context).toContain('notes.txt');
+    expect(context).toContain('Start of older output');
+    expect(context).not.toContain('Middle of older output');
+    expect(context).toContain('End of older output');
+    expect(context).toContain('Recent user request');
+    expect(context).toContain('Complete recent result');
+    expect(Buffer.byteLength(context)).toBeLessThan(177_000);
+    expect(input.entries[1].record.parts[0].state.output).toContain('Middle of older output');
+  });
+
+  it('keeps the latest whole turn when it fits in more than half of the window', async () => {
+    const input = request();
+    const older = input.entries[1].record.parts[0].state;
+    const lastReply = input.entries[3].record;
+    const recent = lastReply.parts[1].state;
+    older.output = `Earlier start${'x'.repeat(20_000)}Earlier middle${'x'.repeat(20_000)}Earlier end`;
+    recent.output = `Recent start${'y'.repeat(6_000)}Recent middle${'y'.repeat(6_000)}Recent end`;
+    lastReply.info.contextWindow = 10_000;
+
+    const context = await prepareConversationContext(input);
+    expect(context?.includes(recent.output)).toBe(true);
+    expect(context).toContain('Earlier start');
+    expect(context).not.toContain('Earlier middle');
+    expect(context).toContain('Earlier end');
+  });
+
+  it('fits the latest whole turn when multiple recent turns would force a summary', async () => {
+    const input = request();
+    input.entries[0].record.parts[0].text = `Earlier user request ${'x'.repeat(14_500)}`;
+    input.entries[3].record.info.contextWindow = 10_000;
+    input.entries.splice(2, 0,
+      { record: { info: { id: 'middle-user', role: 'user' }, parts: [{ type: 'text', text: 'Retain the middle request' }] } },
+      { record: { info: { id: 'middle-tool', role: 'assistant' }, parts: [{ type: 'tool', tool: 'read', state: {
+        status: 'completed', title: 'Read middle', input: {}, output: `Middle start${'m'.repeat(6_500)}Middle end`,
+      } }] } },
+    );
+    const context = await prepareConversationContext(input);
+    expect(context).toContain('Retain the middle request');
+    expect(context).toContain('Middle start');
+    expect(context).toContain('Middle end');
+    expect(context).toContain('Complete recent result');
+  });
+
+  it('uses the configured summary when the remaining space cannot keep both ends of a result', async () => {
+    const input = request({ smallModels: async () => ({
+      describeSmallModel: async ({ overrideModel }) => overrideModel ? null : {
+        hasLogin: true, source: 'settings', providerID: 'codex-native', modelID: 'configured', inputCharBudget: 8_000,
+      },
+      generateSmallModelText: async () => ({ text: 'Earlier result summary' }),
+    }) });
+    const user = input.entries[0].record.parts[0];
+    input.entries[1].record.parts[0].state.output = `😀${'x'.repeat(9_000)}🚀`;
+    input.entries[3].record.info.contextWindow = 2_000;
+    let excerpts = 0;
+    let summaries = 0;
+    for (let length = 3_720; length <= 3_940; length += 1) {
+      user.text = 'y'.repeat(length);
+      const context = await prepareConversationContext(input);
+      if (context?.includes('Earlier result summary')) summaries += 1;
+      else {
+        expect(context?.includes('😀')).toBe(true);
+        expect(context?.includes('🚀')).toBe(true);
+        expect(context?.isWellFormed()).toBe(true);
+        excerpts += 1;
+      }
+    }
+    expect(excerpts).toBeGreaterThan(0);
+    expect(summaries).toBeGreaterThan(0);
+  });
+
+  it('uses the conservative budget when the observed window belongs to another effort', async () => {
+    await expect(prepareConversationContext(request({ target: { model, variant: 'low' } })))
+      .rejects.toMatchObject({ code: 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' });
+  });
+});
+
 describe('handoff summary failure boundaries', () => {
   const request = (service, overrides = {}) => ({
     manifest: { directory: '/fixture', historyRevision: 0, segments: [{ id: 'source', sends: [{ selection: { model: { providerID: 'antigravity-native', modelID: 'gemini' } } }] }], active: 'source' },

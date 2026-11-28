@@ -181,6 +181,18 @@ summary is discarded before another model starts. Cancellation, enterprise
 policy and checkpoint write failures stop preparation. DeepSeek and
 Antigravity have no utility generator of their own.
 
+### Antigravity side-question context
+
+A first `/btw` prompt can use the provider window recorded on the last
+successful inherited reply when its model and effort match the destination.
+The history budget caps the transcript at 176,000 UTF-8 bytes to leave room
+for the question and instructions under Antigravity's 192 kB input limit.
+The handoff prioritizes recent whole turns. Earlier tools use compact labels
+and marked excerpts of large inputs and results. Each excerpt reserves a
+four-byte UTF-8 character at both ends. The usual summary path applies
+when retained message text and tool excerpts exceed the budget. The stored
+transcript keeps complete tool data.
+
 ### Why handoff reuses completed native summaries
 
 The source CLI already continues from its completed checkpoint. Passing the
